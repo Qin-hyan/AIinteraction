@@ -1,0 +1,145 @@
+// Reading and local map controls; no analytics, accounts or submitted messages.
+const article = document.querySelector('[data-document-title]');
+const toc = document.querySelector('.toc');
+if (toc && window.matchMedia('(max-width:1040px)').matches) toc.open = false;
+
+for (const link of document.querySelectorAll('.site-nav a')) {
+  if (new URL(link.href).pathname === location.pathname) link.setAttribute('aria-current', 'page');
+}
+
+function markLocation() {
+  for (const link of document.querySelectorAll('.toc a,.week-grid a')) {
+    if (link.hash === location.hash) link.setAttribute('aria-current', 'location');
+    else link.removeAttribute('aria-current');
+  }
+  const label = document.querySelector('[data-link-context]');
+  if (label && article) label.textContent = context().label;
+}
+window.addEventListener('hashchange', markLocation);
+markLocation();
+
+const curriculumMap = document.querySelector('.curriculum-map');
+const mapSearch = document.querySelector('[data-map-search]');
+const mapCategory = document.querySelector('[data-map-category]');
+function filterMap() {
+  if (!curriculumMap) return;
+  const query = mapSearch.value.trim().toLocaleLowerCase();
+  const category = mapCategory.value;
+  const visible=new Set();
+  for (const node of curriculumMap.querySelectorAll('[data-course-id]')) {
+    node.hidden = !node.dataset.search.includes(query) || Boolean(category && node.dataset.category !== category);
+    if (!node.hidden) visible.add(node.dataset.courseId);
+  }
+  for (const stage of curriculumMap.querySelectorAll('.map-stage')) stage.hidden = ![...stage.querySelectorAll('.map-node')].some(n=>!n.hidden);
+  document.querySelector('[data-map-count]').textContent=`当前显示 ${visible.size} 条具名记录；不是课程完成率。`;
+}
+mapSearch?.addEventListener('input',filterMap);
+mapCategory?.addEventListener('change',filterMap);
+document.querySelector('[data-map-reset]')?.addEventListener('click',()=>{mapSearch.value='';mapCategory.value='';filterMap();});
+document.querySelector('[data-map-mode]')?.addEventListener('click',event=>{
+  const list=curriculumMap.classList.toggle('list-view');
+  event.currentTarget.setAttribute('aria-pressed',String(list));
+  event.currentTarget.textContent=list?'切换地图视图':'切换清单视图';
+});
+for(const button of document.querySelectorAll('[data-relations]')) button.addEventListener('click',()=>{
+  for(const detail of document.querySelectorAll('[data-relations-for]')) detail.hidden=detail.dataset.relationsFor!==button.dataset.relations;
+  document.querySelector('[data-relation-hint]').hidden=true;
+  document.getElementById('relation-detail').focus();
+});
+// A relation link can reveal a node hidden by the current search/filter.
+document.querySelector('.relationship-panel')?.addEventListener('click',event=>{
+  const link=event.target.closest('a[href^="#course-"]');
+  if(link){mapSearch.value='';mapCategory.value='';filterMap();}
+});
+
+const workPanels=[...document.querySelectorAll('[data-work-project]')];
+const workLabels={pending:'待开始',in_progress:'进行中',in_review:'待审核',completed:'任务成果已确认',cancelled:'已取消',duplicate:'重复任务',closed_unverified:'已关闭 · 成果未确认',unknown:'状态待核对',conflict:'标签冲突 · 待核对'};
+async function loadWorkSnapshot() {
+  if(!workPanels.length) return;
+  try {
+    const response=await fetch('/progress/work-items.json',{cache:'no-store',credentials:'omit',redirect:'error'});
+    if(!response.ok) throw new Error('snapshot unavailable');
+    const snapshot=await response.json();
+    if(snapshot.scope!=='public'||snapshot.schema!==1||!Array.isArray(snapshot.projects)) throw new Error('invalid snapshot');
+    for(const panel of workPanels) {
+      const project=snapshot.projects.find(p=>p.key===panel.dataset.workProject);
+      if(!project||!Array.isArray(project.items)) throw new Error('project unavailable');
+      const stale=project.stale||!project.last_success||Date.now()-Date.parse(project.last_success)>15*60*1000;
+      panel.querySelector('.work-status').textContent=!project.last_success?'尚未完成真实API同步。暂无经批准公开的任务快照；不代表课程没有工作项。':`${stale?'状态更新延迟，保留上次成功结果':'工作项只读快照'} · 最后成功同步：${new Date(project.last_success).toLocaleString('zh-CN')}。仅显示获准公开的任务。`;
+      const list=document.createElement('ul');
+      for(const item of project.items) {
+        if(typeof item.title!=='string'||!Object.hasOwn(workLabels,item.status)) throw new Error('invalid public task');
+        const li=document.createElement('li');li.textContent=`${item.title} — ${workLabels[item.status]}${item.needs_support?' · 需要协作或支持':''}`;list.append(li);
+      }
+      if(!project.items.length && project.last_success){const li=document.createElement('li');li.textContent='当前公开允许集合中没有可展示任务；不据此计算完成率。';list.append(li);}
+      panel.querySelector('.work-items').replaceChildren(list);
+    }
+  } catch {
+    for(const panel of workPanels) panel.querySelector('.work-status').textContent='任务快照暂不可读；不将读取失败显示为零任务或全部完成。';
+  }
+}
+loadWorkSnapshot();
+if(workPanels.length) setInterval(loadWorkSnapshot,60*1000);
+toc?.addEventListener('click', event => {
+  if (event.target.closest('a') && window.matchMedia('(max-width:1040px)').matches) toc.open = false;
+});
+
+document.querySelector('[data-print]')?.addEventListener('click', () => window.print());
+const fullscreen = document.querySelector('[data-fullscreen]');
+fullscreen?.addEventListener('click', async () => {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await document.documentElement.requestFullscreen();
+  } catch { showStatus('未进入全屏，可使用浏览器的全屏命令。'); }
+});
+document.addEventListener('fullscreenchange', () => {
+  const active = Boolean(document.fullscreenElement);
+  fullscreen?.setAttribute('aria-pressed', String(active));
+  if (fullscreen) fullscreen.textContent = active ? '退出全屏' : '全屏阅读';
+});
+
+function showStatus(message) {
+  const status = document.querySelector('.copy-status');
+  if (status) status.textContent = message;
+}
+
+function context() {
+  let target = null;
+  try { target = document.getElementById(decodeURIComponent(location.hash.slice(1))); } catch { /* Invalid fragments are ignored. */ }
+  const heading = target?.matches('h1,h2,h3,h4,h5,h6') ? target : target?.querySelector('h1,h2,h3,h4,h5,h6');
+  const label = heading?.textContent.replace(/#$/, '').trim() || '本页起始处';
+  const section = target?.closest('[data-document-label]');
+  const url = new URL(location.pathname + location.hash, location.origin);
+  return { title:article.dataset.documentTitle, label, url:String(url), version:section?.dataset.sourceVersion || article.dataset.sourceVersion, commit:article.dataset.sourceCommit };
+}
+
+async function copy(text) {
+  const fallback = document.querySelector('.copy-fallback');
+  if (fallback) fallback.hidden = true;
+  try {
+    await navigator.clipboard.writeText(text);
+    showStatus('已复制，尚未发送。');
+  } catch {
+    if (fallback) {
+      fallback.hidden = false;
+      const field = fallback.querySelector('textarea');
+      field.value = text;
+      field.focus();
+      field.select();
+    }
+    showStatus('请手动复制；本站没有发送或保存提问。');
+  }
+}
+
+document.querySelector('[data-copy-link]')?.addEventListener('click', () => {
+  if (!article) return;
+  const c = context();
+  const previewNote = article.dataset.preview === 'true' ? '\n本机预览链接，其他设备不能直接访问。' : '';
+  copy(`${c.title}｜${c.label}\n${c.url}\n文档版本：${c.version}；源提交：${c.commit}${previewNote}`);
+});
+document.querySelector('[data-copy-question]')?.addEventListener('click', () => {
+  if (!article) return;
+  const c = context();
+  const previewNote = article.dataset.preview === 'true' ? '\n注意：这是本机预览，链接不能直接发给其他设备使用。' : '';
+  copy(`课程/资料：${c.title}\n周次/章节：${c.label}\n链接：${c.url}\n文档版本：${c.version}\n源提交：${c.commit}\n\n我的问题：\n预期结果与实际现象：\n我已尝试的方法：\n可复现的步骤或脱敏证据：\n\n发送前请删除密钥、个人信息及未经授权的图像、音频。${previewNote}`);
+});
