@@ -1,0 +1,16 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "qma6100p.c"
+        "adc_button.c"
+        "wifi_app.c"
+        "http_server.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        driver
+        esp_wifi
+        nvs_flash
+        esp_http_server
+        esp_timer
+)
