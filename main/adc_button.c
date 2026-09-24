@@ -8,13 +8,15 @@
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <stdlib.h>
 
 static const char *TAG = "ADC_BTN";
 
 /* ADC 参数 */
 #define ADC_UNIT          ADC_UNIT_1
-#define ADC_CHANNEL       ADC_CHAN_0       /* GPIO1 */
+#define ADC_CHANNEL       ADC_CHANNEL_0   /* GPIO1 */
 #define ADC_ATTEN         ADC_ATTEN_DB_12  /* 0–3.3V range */
 #define ADC_BITWIDTH      ADC_BITWIDTH_12  /* 0–4095 */
 
@@ -102,12 +104,12 @@ esp_err_t adc_button_init(adc_button_handle_t *handle)
     }
 
     /* 尝试 ADC 校准 (eFuse VREF) */
-    adc_cali_line_fitting_config_t cali_cfg = {
+    adc_cali_curve_fitting_config_t cali_cfg = {
         .unit_id  = ADC_UNIT,
         .atten    = ADC_ATTEN,
         .bitwidth = ADC_BITWIDTH,
     };
-    ret = adc_cali_create_scheme_line_fitting(&cali_cfg, &ctx->cali_handle);
+    ret = adc_cali_create_scheme_curve_fitting(&cali_cfg, &ctx->cali_handle);
     ctx->calibrated = (ret == ESP_OK);
     if (ctx->calibrated) {
         ESP_LOGI(TAG, "ADC calibration enabled");
@@ -155,7 +157,7 @@ void adc_button_deinit(adc_button_handle_t handle)
 {
     adc_button_ctx_t *ctx = (adc_button_ctx_t *)handle;
     if (!ctx) return;
-    if (ctx->calibrated) adc_cali_delete_scheme_line_fitting(ctx->cali_handle);
+    if (ctx->calibrated) adc_cali_delete_scheme_curve_fitting(ctx->cali_handle);
     adc_oneshot_del_unit(ctx->adc_handle);
     free(ctx);
 }

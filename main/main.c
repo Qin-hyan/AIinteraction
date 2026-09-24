@@ -15,11 +15,12 @@
 #include "freertos/task.h"
 #include "esp_system.h"
 #include "esp_log.h"
-#include "esp_spiram.h"
+#include "esp_psram.h"
 #include "nvs_flash.h"
 #include "driver/i2c_master.h"
 #include "driver/gpio.h"
 #include "esp_mac.h"
+#include <string.h>
 
 #include "qma6100p.h"
 #include "adc_button.h"
@@ -32,9 +33,10 @@ static const char *TAG = "MAIN";
 #define I2C_SDA_GPIO        GPIO_NUM_4
 #define I2C_SCL_GPIO        GPIO_NUM_5
 #define QMA6100P_I2C_ADDR   0x12
+#define CAM_PWDN_GPIO       GPIO_NUM_42  /* 摄像头/传感器电源使能 */
 
-#define LED_GPIO            GPIO_NUM_38  /* RGB LED (SUB V1.1) */
-#define MODULE_PWR_LED      GPIO_NUM_3   /* 模组电源指示灯 (开漏!) */
+#define LED_GPIO            GPIO_NUM_38
+#define MODULE_PWR_LED      GPIO_NUM_3
 
 #define DEVICE_ID           "esp32s3-eye-wk01"
 
@@ -43,7 +45,7 @@ static const char *TAG = "MAIN";
  * ================================================================ */
 static void psram_test(void)
 {
-    size_t psram_size = esp_spiram_get_size();
+    size_t psram_size = esp_psram_get_size();
     ESP_LOGI(TAG, "PSRAM size: %d bytes", (int)psram_size);
     if (psram_size > 0) {
         void *ptr = heap_caps_malloc(1024, MALLOC_CAP_SPIRAM);
@@ -62,15 +64,39 @@ static void psram_test(void)
  * ================================================================ */
 static void led_test(void)
 {
-    /* RGB LED - 低电平点亮 */
     gpio_config_t led_cfg = {
         .pin_bit_mask = BIT64(LED_GPIO),
         .mode         = GPIO_MODE_OUTPUT,
         .pull_up_en   = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&led_cfg);
+    gpio_set_level(LED_GPIO, 1);
+
+    gpio_config_t pwr_cfg = {
+        .pin_bit_mask = BIT64(MODULE_PWR_LED),
+        .mode         = GPIO_MODE_OUTPUT_OD,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&pwr_cfg);
+    gpio_set_level(MODULE_PWR_LED, 1);
+
+    for (int i = 0; i < 3; i++) {
+        gpio_set_level(LED_GPIO, 0);
+        gpio_set_level(MODULE_PWR_LED, 0);
+        vTaskDelay(pdMS_TO_TICKS(150));
+        gpio_set_level(LED_GPIO, 1);
+        gpio_set_level(MODULE_PWR_LED, 1);
+        vTaskDelay(pdMS_TO_TICKS(150));
+    }
+    ESP_LOGI(TAG, "LED test: PASS");
+}
+
 /* ================================================================
- * I2C 总线初始化 (共享: QMA6100P + 摄像头)
+ * I2C 总线初始化
  * ================================================================ */
 static esp_err_t i2c_bus_init(i2c_master_bus_handle_t *bus_handle)
 {
@@ -79,7 +105,6 @@ static esp_err_t i2c_bus_init(i2c_master_bus_handle_t *bus_handle)
         .i2c_port      = I2C_NUM_0,
         .scl_io_num    = I2C_SCL_GPIO,
         .sda_io_num    = I2C_SDA_GPIO,
-        .glitch_ignore_cnt = 7,
         .flags.enable_internal_pullup = true,
     };
     return i2c_new_master_bus(&bus_cfg, bus_handle);
@@ -105,19 +130,66 @@ void app_main(void)
     psram_test();
     led_test();
 
+    /* 使能摄像头电源域（QMA6100P 共享供电） */
+    gpio_set_direction(CAM_PWDN_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_level(CAM_PWDN_GPIO, 0);  /* 拉低使能 */
+    ESP_LOGI(TAG, "Camera power enabled (GPIO42=0)");
+
     /* I2C 总线 */
     i2c_master_bus_handle_t i2c_bus = NULL;
     ESP_ERROR_CHECK(i2c_bus_init(&i2c_bus));
 
-    /* QMA6100P (先试 0x12, 再试 0x13) */
-    qma6100p_handle_t *imu = NULL;
-    ret = qma6100p_init(i2c_bus, QMA6100P_I2C_ADDR, &imu);
+    /* QMA6100P */
+    qma6100p_handle_t imu = NULL;
+    ret = qma6100p_create(i2c_bus, QMA6100P_I2C_ADDR, &imu);
     if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Retry QMA6100P at 0x13...");
-        ret = qma6100p_init(i2c_bus, 0x13, &imu);
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "QMA6100P not found - continuing");
+        ESP_LOGW(TAG, "QMA6100P not found at 0x12, trying 0x13...");
+        ret = qma6100p_create(i2c_bus, 0x13, &imu);
+    }
+    if (ret == ESP_OK && imu) {
+        uint8_t devid;
+        ret = qma6100p_get_deviceid(imu, &devid);
+        ESP_LOGI(TAG, "QMA6100P CHIP_ID=0x%02X", devid);
+        if (ret != ESP_OK || devid != 0x90) {
+            ESP_LOGE(TAG, "QMA6100P wrong chip (ret=0x%X devid=0x%02X)", ret, devid);
+            imu = NULL;
         }
+        if (imu) {
+            uint8_t diag_pre[4];
+            qma6100p_read_reg(imu, 0x10, &diag_pre[0], 1);
+            qma6100p_read_reg(imu, 0x11, &diag_pre[1], 1);
+            qma6100p_read_reg(imu, 0x0F, &diag_pre[2], 1);
+            qma6100p_read_reg(imu, 0x00, &diag_pre[3], 1);
+            ESP_LOGI(TAG, "[DIAG] PRE-INIT: 00=%02X 0F=%02X 10=%02X 11=%02X(MODE=%s)",
+                     diag_pre[3], diag_pre[2], diag_pre[0], diag_pre[1],
+                     (diag_pre[1] & 0x80) ? "ACTIVE" : "STANDBY");
+
+            esp_err_t wake_ret = qma6100p_wake_up(imu);
+            if (wake_ret != ESP_OK) {
+                ESP_LOGE(TAG, "INIT failed: 0x%X", wake_ret);
+                imu = NULL;
+            } else {
+                vTaskDelay(pdMS_TO_TICKS(10));
+
+                uint8_t diag_post[4];
+                qma6100p_read_reg(imu, 0x00, &diag_post[0], 1);
+                qma6100p_read_reg(imu, 0x0F, &diag_post[1], 1);
+                qma6100p_read_reg(imu, 0x10, &diag_post[2], 1);
+                qma6100p_read_reg(imu, 0x11, &diag_post[3], 1);
+                ESP_LOGI(TAG, "[DIAG] POST-INIT: 00=%02X 0F=%02X 10=%02X 11=%02X(MODE=%s)",
+                         diag_post[0], diag_post[1], diag_post[2], diag_post[3],
+                         (diag_post[3] & 0x80) ? "ACTIVE" : "STANDBY");
+
+                if (!(diag_post[3] & 0x80)) {
+                    ESP_LOGE(TAG, "FATAL: MODE=STANDBY after init!");
+                    imu = NULL;
+                } else {
+                    ESP_LOGI(TAG, "QMA6100P ready — MODE = ACTIVE ✓");
+                }
+            }
+        }
+    } else {
+        ESP_LOGW(TAG, "QMA6100P not found");
     }
 
     /* ADC 按键 */
@@ -138,12 +210,37 @@ void app_main(void)
 
     ESP_LOGI(TAG, "READY! Open http://%s/ in browser", wifi_app_get_ip());
 
-    /* 主循环 - 串口打印传感器数据 */
-    qma6100p_data_t imu_data;
+    /* 主循环 */
+    qma6100p_acce_value_t accel;
+    int diag_cnt = 0;
     while (1) {
-        if (imu && qma6100p_read_accel(imu, &imu_data) == ESP_OK) {
+        /* ---- DIAG: read status registers every cycle ---- */
+        if (imu) {
+            uint8_t sts[6];
+            qma6100p_read_reg(imu, 0x09, &sts[0], 1);
+            qma6100p_read_reg(imu, 0x0A, &sts[1], 1);
+            qma6100p_read_reg(imu, 0x0E, &sts[2], 1);
+            qma6100p_read_reg(imu, 0x10, &sts[3], 1);
+            qma6100p_read_reg(imu, 0x11, &sts[4], 1);
+            qma6100p_read_reg(imu, 0x0F, &sts[5], 1);
+
+            uint8_t raw6[6];
+            qma6100p_read_reg(imu, 0x01, raw6, 6);
+
+            ESP_LOGI(TAG, "[DIAG #%d] RAW: %02X %02X %02X %02X %02X %02X  NEWDATA=%d/%d/%d",
+                     diag_cnt, raw6[0], raw6[1], raw6[2], raw6[3], raw6[4], raw6[5],
+                     raw6[0] & 1, raw6[2] & 1, raw6[4] & 1);
+            ESP_LOGI(TAG, "[DIAG #%d] STS: 09=%02X 0A=%02X 0E=%02X 10=%02X 11=%02X(bit7=%d) 0F=%02X",
+                     diag_cnt, sts[0], sts[1], sts[2], sts[3], sts[4],
+                     (sts[4] >> 7) & 1, sts[5]);
+            diag_cnt++;
+        }
+
+        if (imu && qma6100p_get_acce(imu, &accel) == ESP_OK) {
             ESP_LOGI(TAG, "IMU: X=%6d Y=%6d Z=%6d mg",
-                     imu_data.x, imu_data.y, imu_data.z);
+                     (int)(accel.acce_x * 1000),
+                     (int)(accel.acce_y * 1000),
+                     (int)(accel.acce_z * 1000));
         }
         if (btn_handle) {
             adc_button_t btn = adc_button_read(btn_handle);
@@ -152,30 +249,4 @@ void app_main(void)
         }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
-}
-    };
-    gpio_config(&led_cfg);
-    gpio_set_level(LED_GPIO, 1); /* 初始熄灭 */
-
-    /* 模组电源指示灯 - 必须开漏模式! */
-    gpio_config_t pwr_cfg = {
-        .pin_bit_mask = BIT64(MODULE_PWR_LED),
-        .mode         = GPIO_MODE_OUTPUT_OD,  /* OPEN-DRAIN */
-        .pull_up_en   = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&pwr_cfg);
-    gpio_set_level(MODULE_PWR_LED, 1); /* 开漏: 1=高阻(灭) */
-
-    /* 双 LED 闪烁 3 次 */
-    for (int i = 0; i < 3; i++) {
-        gpio_set_level(LED_GPIO, 0);
-        gpio_set_level(MODULE_PWR_LED, 0);
-        vTaskDelay(pdMS_TO_TICKS(150));
-        gpio_set_level(LED_GPIO, 1);
-        gpio_set_level(MODULE_PWR_LED, 1);
-        vTaskDelay(pdMS_TO_TICKS(150));
-    }
-    ESP_LOGI(TAG, "LED test: PASS");
 }

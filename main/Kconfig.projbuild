@@ -1,0 +1,15 @@
+menu "Week 01 Sensor Web Configuration"
+
+    config ESP_WIFI_SSID
+        string "WiFi SSID"
+        default "OPPO"
+        help
+            WiFi SSID (network name) to connect to.
+
+    config ESP_WIFI_PASSWORD
+        string "WiFi Password"
+        default "qhystxd1"
+        help
+            WiFi password (minimum 8 characters for WPA2).
+
+endmenu

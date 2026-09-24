@@ -13,4 +13,7 @@ idf_component_register(
         nvs_flash
         esp_http_server
         esp_timer
+        esp_adc
+        esp_psram
+        json
 )

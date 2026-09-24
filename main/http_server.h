@@ -18,9 +18,9 @@ extern "C" {
  * @brief 传感器上下文（传递给 HTTP 服务器）
  */
 typedef struct {
-    qma6100p_handle_t  *imu;       /**< QMA6100P 句柄 */
-    adc_button_handle_t  btn;      /**< ADC 按键句柄 */
-    const char          *device_id;/**< 设备标识 */
+    qma6100p_handle_t    imu;        /**< QMA6100P 句柄 */
+    adc_button_handle_t  btn;        /**< ADC 按键句柄 */
+    const char          *device_id;  /**< 设备标识 */
 } sensor_ctx_t;
 
 /**
