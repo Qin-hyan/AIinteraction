@@ -1,12 +1,13 @@
 /**
  * @file main.c
- * @brief 第1周：传感数据采集与 Web 展示系统
+ * @brief 第1-2周：传感数据采集与 Web 展示 + 远程采集指令
  *
  * ESP32-S3-EYE v2.2 + SUB v1.1
  * - QMA6100P 三轴加速度计 (I2C: SDA=GPIO4, SCL=GPIO5, addr=0x12)
  * - ADC 按键检测 (GPIO1 / ADC1_CH0)
  * - Wi-Fi STA 连接
  * - HTTP 服务器 + Web 仪表盘 (500ms 刷新)
+ * - Week 2: 手动采集指令 + request_id 追踪 + 任务状态反馈
  *
  * 初始化顺序: UART → PSRAM → I2C(QMA6100P) → ADC → LED → Wi-Fi → HTTP
  */
@@ -16,6 +17,7 @@
 #include "esp_system.h"
 #include "esp_log.h"
 #include "esp_psram.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 #include "driver/i2c_master.h"
 #include "driver/gpio.h"
@@ -115,7 +117,7 @@ static esp_err_t i2c_bus_init(i2c_master_bus_handle_t *bus_handle)
  * ================================================================ */
 void app_main(void)
 {
-    ESP_LOGI(TAG, "Week 1: Sensor Data + Web Dashboard");
+    ESP_LOGI(TAG, "Week 1-2: Sensor Data + Remote Collect");
     ESP_LOGI(TAG, "ESP32-S3-EYE v2.2 / SUB v1.1");
 
     /* NVS */
@@ -202,20 +204,65 @@ void app_main(void)
     ret = wifi_app_init();
     if (ret != ESP_OK) ESP_LOGE(TAG, "Wi-Fi FAILED! Check SSID/password.");
 
-    /* HTTP 服务器 */
+    /* HTTP 服务器 — Week 2: 加入采集任务上下文 */
+    collect_task_t collect_task = {0};
     sensor_ctx_t ctx = {
         .imu = imu, .btn = btn_handle, .device_id = DEVICE_ID,
+        .task = &collect_task,
     };
     http_server_start(&ctx);
 
-    ESP_LOGI(TAG, "READY! Open http://%s/ in browser", wifi_app_get_ip());
+    ESP_LOGI(TAG, "READY! Open http://%s/ in browser (Week 2: +collect)", wifi_app_get_ip());
 
-    /* 主循环 */
+    /* 主循环 — Week 2: 含手动采集任务处理 */
     qma6100p_acce_value_t accel;
     int diag_cnt = 0;
     while (1) {
-        /* ---- DIAG: read status registers every cycle ---- */
-        if (imu) {
+        /* ---- Week 2: 处理手动采集任务 ---- */
+        if (collect_task.status == COLLECT_SUBMITTED) {
+            /* 设备收到指令，标记为 RECEIVED */
+            ESP_LOGI(TAG, "[TASK] Received: %s", collect_task.request_id);
+            collect_task.status = COLLECT_RECEIVED;
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+
+        if (collect_task.status == COLLECT_RECEIVED) {
+            /* 执行一次新采集 */
+            if (imu && qma6100p_get_acce(imu, &accel) == ESP_OK) {
+                collect_task.accel_x = (int)(accel.acce_x * 1000);
+                collect_task.accel_y = (int)(accel.acce_y * 1000);
+                collect_task.accel_z = (int)(accel.acce_z * 1000);
+            } else {
+                collect_task.accel_x = 0;
+                collect_task.accel_y = 0;
+                collect_task.accel_z = 0;
+            }
+            if (btn_handle) {
+                adc_button_t btn = adc_button_read(btn_handle);
+                strncpy(collect_task.button, adc_button_name(btn),
+                        sizeof(collect_task.button) - 1);
+            } else {
+                strncpy(collect_task.button, "disabled",
+                        sizeof(collect_task.button) - 1);
+            }
+            collect_task.completed_at_us = esp_timer_get_time();
+
+            if (imu) {
+                collect_task.status = COLLECT_COMPLETED;
+                ESP_LOGI(TAG, "[TASK] Completed: %s X=%d Y=%d Z=%d",
+                         collect_task.request_id,
+                         collect_task.accel_x,
+                         collect_task.accel_y,
+                         collect_task.accel_z);
+            } else {
+                collect_task.status = COLLECT_FAILED;
+                ESP_LOGI(TAG, "[TASK] Failed: %s (no IMU)",
+                         collect_task.request_id);
+            }
+        }
+
+        /* ---- DIAG: read status registers (reduced frequency) ---- */
+        if (imu && diag_cnt % 10 == 0) {
             uint8_t sts[6];
             qma6100p_read_reg(imu, 0x09, &sts[0], 1);
             qma6100p_read_reg(imu, 0x0A, &sts[1], 1);
@@ -223,17 +270,8 @@ void app_main(void)
             qma6100p_read_reg(imu, 0x10, &sts[3], 1);
             qma6100p_read_reg(imu, 0x11, &sts[4], 1);
             qma6100p_read_reg(imu, 0x0F, &sts[5], 1);
-
-            uint8_t raw6[6];
-            qma6100p_read_reg(imu, 0x01, raw6, 6);
-
-            ESP_LOGI(TAG, "[DIAG #%d] RAW: %02X %02X %02X %02X %02X %02X  NEWDATA=%d/%d/%d",
-                     diag_cnt, raw6[0], raw6[1], raw6[2], raw6[3], raw6[4], raw6[5],
-                     raw6[0] & 1, raw6[2] & 1, raw6[4] & 1);
-            ESP_LOGI(TAG, "[DIAG #%d] STS: 09=%02X 0A=%02X 0E=%02X 10=%02X 11=%02X(bit7=%d) 0F=%02X",
-                     diag_cnt, sts[0], sts[1], sts[2], sts[3], sts[4],
-                     (sts[4] >> 7) & 1, sts[5]);
-            diag_cnt++;
+            ESP_LOGI(TAG, "[DIAG #%d] STS: 10=%02X 11=%02X(bit7=%d) 0F=%02X",
+                     diag_cnt, sts[3], sts[4], (sts[4] >> 7) & 1, sts[5]);
         }
 
         if (imu && qma6100p_get_acce(imu, &accel) == ESP_OK) {
@@ -247,6 +285,8 @@ void app_main(void)
             if (btn != BTN_NONE)
                 ESP_LOGI(TAG, "BTN: %s", adc_button_name(btn));
         }
+
+        diag_cnt++;
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }

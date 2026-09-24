@@ -1,18 +1,26 @@
-# Week 1: 传感数据采集与 Web 展示系统
+# Week 1-2: 传感数据采集 + 远程采集指令
 
 **ESP32-S3-EYE v2.2 + ESP32-S3-EYE-SUB V1.1**
 
-课程: AI交互原型与用户体验设计 · 第 1 周
-版本: v1.0 · 2026-09-23
+课程: AI交互原型与用户体验设计 · 第 1-2 周
+版本: v2.0 · 2026-09-24
 
 ---
 
 ## 📋 功能概述
 
+### Week 1 (已完成)
 1. **QMA6100P 三轴加速度驱动** — I2C 总线 (SDA=GPIO4, SCL=GPIO5, 地址 0x12)
 2. **ADC 按键检测** — GPIO1 / ADC1_CH0 (MENU/PLAY/DOWN/UP+)
 3. **Wi-Fi STA 连接** — 连接路由器获取 IP
 4. **HTTP 服务器** — Web 仪表盘 + REST API, 每 500ms 刷新
+
+### Week 2 (本次新增)
+5. **远程采集指令** — POST /api/collect 触发一次手动采集
+6. **request_id 追踪** — 每次采集生成唯一ID (req-{timestamp}-{counter})
+7. **任务状态反馈** — submitted → received → completed/failed/timeout
+8. **采集结果展示** — Web 页面显示本次新观测数据 + 耗时
+9. **暂停周期刷新** — 可暂停/恢复 500ms 自动刷新
 
 ---
 
@@ -67,22 +75,22 @@ idf.py -p COM端口 flash monitor
 
 ## 🌐 Web 仪表盘
 
-烧录成功后，串口会打印开发板的 IP 地址：
+### Week 2 新增功能
 
-```
-I (MAIN) READY! Open http://192.168.1.100/ in browser
-```
-
-在浏览器中访问该地址即可看到实时传感器数据仪表盘。
-
-### Web 页面功能
-
-- 📊 QMA6100P 三轴加速度值 (mg)
-- 🔘 按键状态显示 (MENU / PLAY / DOWN / UP+)
-- ⚡ 每 500ms 自动刷新
-- 🌙 GitHub 暗色主题风格 UI
+- 📡 **"采集一次最新数据" 按钮** — 点击触发一次新采集（非周期刷新）
+- 🔢 **request_id 显示** — 证明是新采集而非旧数据
+- 📊 **任务状态追踪** — 提交中 → 设备已接收 → 完成/失败
+- ⏱️ **耗时显示** — 从提交到完成的精确耗时
+- 🔄 **自动刷新开关** — 可暂停周期刷新验证手动采集
 
 ### API 端点
+
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| GET | `/` | Web 仪表盘 |
+| GET | `/api/sensor` | 实时传感器数据 |
+| POST | `/api/collect` | **Week 2: 触发手动采集** |
+| GET | `/api/collect/status?request_id=xxx` | **Week 2: 查询采集状态** |
 
 `GET /api/sensor` 返回 JSON:
 
@@ -93,7 +101,31 @@ I (MAIN) READY! Open http://192.168.1.100/ in browser
   "accel_y": -45,
   "accel_z": 1008,
   "button": "NONE",
-  "uptime_ms": 45230.5
+  "uptime_ms": 45230.5,
+  "auto_refresh": true
+}
+```
+
+`POST /api/collect` 返回 JSON:
+
+```json
+{
+  "request_id": "req-45230500-0001",
+  "status": "submitted"
+}
+```
+
+`GET /api/collect/status?request_id=xxx` 返回 JSON (完成时):
+
+```json
+{
+  "request_id": "req-45230500-0001",
+  "status": "completed",
+  "accel_x": 15,
+  "accel_y": -42,
+  "accel_z": 1010,
+  "button": "NONE",
+  "elapsed_ms": 105.2
 }
 ```
 
@@ -102,17 +134,17 @@ I (MAIN) READY! Open http://192.168.1.100/ in browser
 ## 📂 项目结构
 
 ```
-week01-sensor-web/
+week02-sensor-collect/
 ├── CMakeLists.txt          # 顶层 CMake
 ├── sdkconfig.defaults      # 默认配置
 ├── README.md               # 本文件
 └── main/
     ├── CMakeLists.txt
-    ├── main.c              # 主入口
+    ├── main.c              # 主入口 (Week 2: +采集任务处理)
     ├── qma6100p.h/c        # QMA6100P 三轴加速度驱动
     ├── adc_button.h/c      # ADC 按键检测驱动
     ├── wifi_app.h/c        # Wi-Fi STA 管理
-    └── http_server.h/c     # HTTP 服务器 + Web 仪表盘
+    └── http_server.h/c     # HTTP 服务器 + Web 仪表盘 (Week 2: +collect API)
 ```
 
 ---
@@ -127,16 +159,6 @@ week01-sensor-web/
 | RGB LED | GPIO38 | 子板 V1.1, 低电平亮 |
 | 模组电源 LED | GPIO3 | 必须开漏模式! |
 
-### 按键电压阈值
-
-| 按键 | 电压 |
-|------|------|
-| MENU | 2.41V |
-| PLAY | 1.98V |
-| UP+ | 0.82V |
-| DOWN | 0.38V |
-| 无按下 | ~3.3V |
-
 ---
 
 ## ⚠️ 硬件约束
@@ -150,34 +172,38 @@ week01-sensor-web/
 
 ## 🧪 验证步骤
 
+### Week 1 验证 (保留)
 1. 上电后双 LED 闪烁 3 次（启动指示）
 2. 串口日志输出 CHIP_ID = 0x90（确认 QMA6100P）
 3. 串口日志输出 Got IP: xxx（确认 Wi-Fi）
-4. 浏览器打开 IP 地址，看到三轴加速度数据和按键状态
-5. 倾斜开发板，观察 Web 页面数值变化
-6. 按下按键，观察 Web 页面显示对应按键名称
+4. 浏览器打开 IP 地址，看到实时传感器数据
+
+### Week 2 新增验证
+5. 点击"采集一次最新数据"按钮
+6. 观察 request_id 生成、状态变化 (submitted → received → completed)
+7. 核对本次新观测数据与 request_id —— 证明是新采集
+8. 暂停周期刷新，倾斜开发板后再次点击采集，对比数据变化
+9. 观察采集耗时显示
 
 ---
 
-## 📝 GitFlow 工作流
+## 📝 Week 2 关键设计
 
-```bash
-# 初始化 GitFlow
-git flow init -d
+### 采集任务状态机
 
-# 创建功能分支
-git flow feature start week01-sensor-web
+```
+IDLE → [用户点击] → SUBMITTED → [设备确认] → RECEIVED → [传感器读取]
+  ↑                                                   ↓
+  └──────────── [完成后自动回到 IDLE] ←── COMPLETED / FAILED
+```
 
-# 开发完成后推送
-git push -u origin feature/week01-sensor-web
+### request_id 格式
 
-# 完成功能分支
-git flow feature finish week01-sensor-web
-
-# 推送 develop 分支
-git push -u origin develop
+```
+req-{uptime_ms}-{counter:04d}
+例如: req-45230500-0001
 ```
 
 ---
 
-*ESP32-S3-EYE v2.2 · ESP-IDF v5.4.3 · QMA6100P*
+*ESP32-S3-EYE v2.2 · ESP-IDF v5.4.3 · QMA6100P · Week 1-2*
