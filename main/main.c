@@ -113,6 +113,87 @@ static esp_err_t i2c_bus_init(i2c_master_bus_handle_t *bus_handle)
 }
 
 /* ================================================================
+ * Week 2: 观测与记录工具
+ *   已存观测（板上缓存）＝第 1 周"已存数据"；请求记录＝请求→回执→新观测
+ * ================================================================ */
+
+/** @brief 传感源说明（随界面显示，避免用型号推测单位） */
+#define SENSOR_SRC  "QMA6100P 三轴加速度 (mg, I2C 0x12)"
+
+/** @brief 相对时间（ms since boot）——板端无可靠墙钟，统一相对时间轴 */
+static int64_t ms_since_boot(void)
+{
+    return esp_timer_get_time() / 1000;
+}
+
+/**
+ * @brief 保存一条"已存观测"（板上缓存）
+ *
+ * 只有真实传感器读取成功时才调用本函数，因此观测序号 seq +1 即代表
+ * "板端又完成了一次真实采集"，用于在页面上证明不是重显旧值。
+ *
+ * @param[in] t      任务上下文
+ * @param[in] src    来源：OBS_SOURCE_LIVE（手动指令）/ OBS_SOURCE_CADENCE（周期采样）
+ * @param[in] req_id 关联请求号（证明观测属于哪一次请求）
+ */
+static void save_observation(collect_task_t *t, const char *src,
+                             const char *req_id, int x, int y, int z,
+                             const char *btn)
+{
+    t->obs_seq++;
+    observation_t *o = &t->last;
+    o->valid = true;
+    snprintf(o->record_id, sizeof(o->record_id), "obs-%05d", t->obs_seq);
+    snprintf(o->request_id, sizeof(o->request_id), "%s", req_id);
+    snprintf(o->source, sizeof(o->source), "%s", src);
+    o->seq = t->obs_seq;
+    o->accel_x = x;
+    o->accel_y = y;
+    o->accel_z = z;
+    snprintf(o->button, sizeof(o->button), "%s", btn);
+    o->observed_ms = ms_since_boot();   /* 采集时间（相对） */
+    o->received_ms = o->observed_ms;    /* 板端"服务端"与设备同一时钟 */
+}
+
+/**
+ * @brief 写入一条请求记录：请求 → 设备回执 → 新观测
+ *
+ * 超时/失败也写记录，但 has_observation=false，绝不把旧观测改标为本次完成。
+ */
+static void push_record(collect_task_t *t)
+{
+    int i = t->record_head;
+    collect_record_t *r = &t->records[i];
+    memset(r, 0, sizeof(*r));
+    snprintf(r->request_id, sizeof(r->request_id), "%s", t->request_id);
+    snprintf(r->status, sizeof(r->status), "%s",
+             t->status == COLLECT_COMPLETED ? "completed" :
+             t->status == COLLECT_TIMEOUT   ? "timeout"   : "failed");
+    r->submitted_ms = (int)(t->submitted_at_us / 1000);
+    r->received_ms  = t->received_at_us ? (int)(t->received_at_us / 1000) : -1;
+    r->completed_ms = (int)(t->completed_at_us / 1000);
+    r->elapsed_ms   = r->completed_ms - r->submitted_ms;
+
+    /* 只有"新观测确实关联本次请求号"才认为带回结果 */
+    bool linked = (t->status == COLLECT_COMPLETED) && t->last.valid &&
+                  strcmp(t->last.request_id, t->request_id) == 0;
+    r->has_observation = linked;
+    if (linked) {
+        snprintf(r->source, sizeof(r->source), "%s", t->last.source);
+        r->seq = t->last.seq;
+        r->accel_x = t->last.accel_x;
+        r->accel_y = t->last.accel_y;
+        r->accel_z = t->last.accel_z;
+        snprintf(r->button, sizeof(r->button), "%s", t->last.button);
+    } else {
+        snprintf(r->source, sizeof(r->source), "%s", OBS_SOURCE_NONE);
+        r->seq = 0;
+    }
+    t->record_head = (i + 1) % COLLECT_RECORD_MAX;
+    if (t->record_count < COLLECT_RECORD_MAX) t->record_count++;
+}
+
+/* ================================================================
  * 主入口
  * ================================================================ */
 void app_main(void)
@@ -206,58 +287,113 @@ void app_main(void)
 
     /* HTTP 服务器 — Week 2: 加入采集任务上下文 */
     collect_task_t collect_task = {0};
+    collect_task.auto_refresh = true;              /* 默认开启周期上报 */
+    collect_task.status = COLLECT_IDLE;
+    snprintf(collect_task.last.source, sizeof(collect_task.last.source),
+             "%s", OBS_SOURCE_NONE);
     sensor_ctx_t ctx = {
-        .imu = imu, .btn = btn_handle, .device_id = DEVICE_ID,
+        .imu = imu, .btn = btn_handle,
+        .device_id = DEVICE_ID, .sensor_src = SENSOR_SRC,
         .task = &collect_task,
     };
     http_server_start(&ctx);
 
     ESP_LOGI(TAG, "READY! Open http://%s/ in browser (Week 2: +collect)", wifi_app_get_ip());
 
-    /* 主循环 — Week 2: 含手动采集任务处理 */
+    /* 主循环 — Week 1 周期上报 + Week 2 采集任务处理 */
     qma6100p_acce_value_t accel;
     int diag_cnt = 0;
+    bool cadence_was_on = collect_task.auto_refresh;
     while (1) {
+        int64_t now_us = esp_timer_get_time();
+
+        /* ---- 周期上报开关变化留证（串口可核对） ---- */
+        if (collect_task.auto_refresh != cadence_was_on) {
+            cadence_was_on = collect_task.auto_refresh;
+            ESP_LOGI(TAG, "[CADENCE] 周期上报 %s",
+                     cadence_was_on ? "已恢复：板端恢复每 1s 采样"
+                                    : "已暂停：板端停止周期采样，命令通道保持可用");
+        }
+
+        /* ---- 完成条件判定：受理后 COLLECT_TIMEOUT_MS 内未拿到设备结果 ----
+         * 超时只说明"暂未收到设备结果"，不代表硬件故障；
+         * 超时后本次请求关闭（不再接受迟到结果），旧观测不会被改标为本次完成。*/
+        if ((collect_task.status == COLLECT_SUBMITTED ||
+             collect_task.status == COLLECT_RECEIVED) &&
+            collect_task.deadline_us > 0 && now_us > collect_task.deadline_us) {
+            collect_task.status = COLLECT_TIMEOUT;
+            collect_task.completed_at_us = now_us;
+            ESP_LOGW(TAG, "[TASK] Timeout: %s — 未收到设备结果（不等于硬件故障）",
+                     collect_task.request_id);
+            push_record(&collect_task);
+        }
+
         /* ---- Week 2: 处理手动采集任务 ---- */
         if (collect_task.status == COLLECT_SUBMITTED) {
-            /* 设备收到指令，标记为 RECEIVED */
-            ESP_LOGI(TAG, "[TASK] Received: %s", collect_task.request_id);
+            /* 设备已接收指令：登记回执时间，状态进入 RECEIVED */
+            collect_task.received_at_us = esp_timer_get_time();
             collect_task.status = COLLECT_RECEIVED;
+            ESP_LOGI(TAG, "[TASK] Received: %s (设备已接收，开始执行)",
+                     collect_task.request_id);
             vTaskDelay(pdMS_TO_TICKS(50));
         }
 
         if (collect_task.status == COLLECT_RECEIVED) {
-            /* 执行一次新采集 */
+            /* 执行一次真实传感器读取（这就是"新采集"） */
+            char btn_name[16] = "NONE";
+            if (btn_handle)
+                snprintf(btn_name, sizeof(btn_name), "%s",
+                         adc_button_name(adc_button_read(btn_handle)));
+
+            int x = 0, y = 0, z = 0;
+            bool read_ok = false;
             if (imu && qma6100p_get_acce(imu, &accel) == ESP_OK) {
-                collect_task.accel_x = (int)(accel.acce_x * 1000);
-                collect_task.accel_y = (int)(accel.acce_y * 1000);
-                collect_task.accel_z = (int)(accel.acce_z * 1000);
-            } else {
-                collect_task.accel_x = 0;
-                collect_task.accel_y = 0;
-                collect_task.accel_z = 0;
+                x = (int)(accel.acce_x * 1000);
+                y = (int)(accel.acce_y * 1000);
+                z = (int)(accel.acce_z * 1000);
+                read_ok = true;
             }
-            if (btn_handle) {
-                adc_button_t btn = adc_button_read(btn_handle);
-                strncpy(collect_task.button, adc_button_name(btn),
-                        sizeof(collect_task.button) - 1);
-            } else {
-                strncpy(collect_task.button, "disabled",
-                        sizeof(collect_task.button) - 1);
-            }
+            collect_task.accel_x = x;
+            collect_task.accel_y = y;
+            collect_task.accel_z = z;
+            snprintf(collect_task.button, sizeof(collect_task.button), "%s", btn_name);
             collect_task.completed_at_us = esp_timer_get_time();
 
-            if (imu) {
+            if (read_ok) {
                 collect_task.status = COLLECT_COMPLETED;
-                ESP_LOGI(TAG, "[TASK] Completed: %s X=%d Y=%d Z=%d",
-                         collect_task.request_id,
-                         collect_task.accel_x,
-                         collect_task.accel_y,
-                         collect_task.accel_z);
+                /* 只有真实读取成功才写入"已存观测"，并与本次请求号关联 */
+                save_observation(&collect_task, OBS_SOURCE_LIVE,
+                                 collect_task.request_id, x, y, z, btn_name);
+                ESP_LOGI(TAG, "[TASK] Completed: %s X=%d Y=%d Z=%d → %s (seq=%d)",
+                         collect_task.request_id, x, y, z,
+                         collect_task.last.record_id, collect_task.last.seq);
             } else {
                 collect_task.status = COLLECT_FAILED;
-                ESP_LOGI(TAG, "[TASK] Failed: %s (no IMU)",
+                ESP_LOGW(TAG, "[TASK] Failed: %s（传感器读取失败，未产生新观测）",
                          collect_task.request_id);
+            }
+            push_record(&collect_task);
+        }
+
+        /* ---- Week 1 保留：周期上报（板端每 1s 采样一次并保存观测）----
+         * 暂停后不再更新已存观测，旧观测保留原采集时间（数据陈旧 ≠ 硬件故障）。*/
+        if (collect_task.auto_refresh &&
+            collect_task.status != COLLECT_SUBMITTED &&
+            collect_task.status != COLLECT_RECEIVED) {
+            if (imu && qma6100p_get_acce(imu, &accel) == ESP_OK) {
+                char btn_name[16] = "NONE";
+                if (btn_handle)
+                    snprintf(btn_name, sizeof(btn_name), "%s",
+                             adc_button_name(adc_button_read(btn_handle)));
+                int x = (int)(accel.acce_x * 1000);
+                int y = (int)(accel.acce_y * 1000);
+                int z = (int)(accel.acce_z * 1000);
+                save_observation(&collect_task, OBS_SOURCE_CADENCE,
+                                 OBS_REQ_CADENCE, x, y, z, btn_name);
+                collect_task.poll_count++;
+                ESP_LOGI(TAG, "IMU(cadence #%d %s): X=%6d Y=%6d Z=%6d mg",
+                         collect_task.poll_count, collect_task.last.record_id,
+                         x, y, z);
             }
         }
 
@@ -274,12 +410,8 @@ void app_main(void)
                      diag_cnt, sts[3], sts[4], (sts[4] >> 7) & 1, sts[5]);
         }
 
-        if (imu && qma6100p_get_acce(imu, &accel) == ESP_OK) {
-            ESP_LOGI(TAG, "IMU: X=%6d Y=%6d Z=%6d mg",
-                     (int)(accel.acce_x * 1000),
-                     (int)(accel.acce_y * 1000),
-                     (int)(accel.acce_z * 1000));
-        }
+        /* 说明：Week 1 的每秒 IMU 日志已并入上面的"周期上报"分支，
+         * 避免重复读取传感器；周期上报暂停时板端不再采样。 */
         if (btn_handle) {
             adc_button_t btn = adc_button_read(btn_handle);
             if (btn != BTN_NONE)
