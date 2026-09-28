@@ -118,14 +118,20 @@ def main():
     else:
         check('采集在等待窗口内完成', False, ' -> '.join(seq))
 
-    # 5) 重复点击
+    # 5) 重复点击（两种正确行为都要接受：进行中沿用请求号 / 已完成则逐次编号）
     print('\n[5] 重复点击')
     d1 = post_json('/api/collect')
     d2 = post_json('/api/collect')
-    show('dup', d2)
-    check('任务进行中沿用同一请求号',
-          d2.get('request_id') == d1.get('request_id') and
-          d2.get('message') == 'Task in progress')
+    show('dup-1', {k: d1.get(k) for k in ('request_id', 'task_seq', 'message')})
+    show('dup-2', {k: d2.get(k) for k in ('request_id', 'task_seq', 'message')})
+    if d2.get('message') == 'Task in progress':
+        check('重复点击沿用同一请求号（上一个任务仍在进行中）',
+              d2.get('request_id') == d1.get('request_id'))
+    else:
+        check('重复点击被逐次编号（上一个任务已完成，新任务可区分）',
+              (d2.get('task_seq') or 0) == (d1.get('task_seq') or 0) + 1 and
+              d2.get('request_id') != d1.get('request_id'),
+              'task_seq %s -> %s' % (d1.get('task_seq'), d2.get('task_seq')))
 
     # 6) 未知请求号
     print('\n[6] 未知请求号')
