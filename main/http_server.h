@@ -12,6 +12,7 @@
 #include "esp_err.h"
 #include "qma6100p.h"
 #include "adc_button.h"
+#include "camera_app.h"
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -87,6 +88,38 @@ typedef struct {
     bool has_observation;         /**< 是否带回与本次请求关联的新观测 */
 } collect_record_t;
 
+/* ================================================================
+ * Week 3: Camera capture types
+ * ================================================================ */
+
+/** @brief 照片槽位最大数量 */
+#define CAPTURE_SLOTS_MAX   9
+
+/** @brief 照片槽位 */
+typedef struct {
+    char     request_id[32];   /**< 关联请求号 */
+    bool     valid;            /**< 是否有效 */
+    int64_t  captured_us;      /**< 拍摄时间 (µs since boot) */
+    int      width;            /**< 图片宽度 */
+    int      height;           /**< 图片高度 */
+    size_t   size_bytes;       /**< JPEG 文件大小 */
+    char     file_name[48];    /**< 文件名 */
+    int      task_seq;         /**< 任务序号 */
+    char     source[16];       /**< 来源: manual / auto */
+    uint8_t *jpeg_buf;         /**< JPEG 数据 */
+    size_t   jpeg_len;         /**< JPEG 数据长度 */
+    bool     uploaded;         /**< 是否已上传 */
+} capture_slot_t;
+
+/** @brief 定时自动抓拍配置 */
+typedef struct {
+    bool     enabled;          /**< 是否启用 */
+    int      interval_s;       /**< 抓拍周期 (秒) */
+    int      batch_limit;      /**< 批次上限 (0=不限) */
+    int      batch_count;      /**< 当前批次计数 */
+    int64_t  last_capture_us;  /**< 上次抓拍时间 */
+} auto_capture_cfg_t;
+
 /** @brief 采集任务上下文（HTTP 任务与主循环共享） */
 typedef struct {
     char              request_id[32];    /**< 唯一请求 ID */
@@ -108,6 +141,13 @@ typedef struct {
     collect_record_t  records[COLLECT_RECORD_MAX]; /**< 请求记录环形缓冲区 */
     int               record_count;      /**< 有效记录条数 */
     int               record_head;       /**< 环形写指针 */
+    /* Week 3: Camera capture */
+    bool              capture_camera;    /**< 本次任务是否需要摄像头抓拍 */
+    capture_slot_t    cap_slots[CAPTURE_SLOTS_MAX]; /**< 照片槽位（环形） */
+    int               cap_head;          /**< 照片写指针 */
+    int               cap_count;         /**< 已拍照片总数 */
+    auto_capture_cfg_t auto_cap;         /**< 定时自动抓拍配置 */
+    char              last_cap_request_id[32]; /**< 最后一次抓拍的请求号 */
 } collect_task_t;
 
 /**
@@ -119,6 +159,7 @@ typedef struct {
     const char          *device_id;  /**< 设备标识（目标设备） */
     const char          *sensor_src; /**< Week 2: 传感源说明（单位留证） */
     collect_task_t      *task;       /**< Week 2: 采集任务状态（共享） */
+    camera_handle_t      cam;        /**< Week 3: 摄像头句柄 */
 } sensor_ctx_t;
 
 /**
