@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "main.c"
+        "camera_app.c"
         "qma6100p.c"
         "adc_button.c"
         "wifi_app.c"
@@ -15,5 +16,6 @@ idf_component_register(
         esp_timer
         esp_adc
         esp_psram
+        esp32-camera
         json
 )
