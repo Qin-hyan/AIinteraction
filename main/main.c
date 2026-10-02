@@ -28,6 +28,7 @@
 #include "adc_button.h"
 #include "wifi_app.h"
 #include "http_server.h"
+#include "camera_app.h"
 
 static const char *TAG = "MAIN";
 
@@ -194,6 +195,44 @@ static void push_record(collect_task_t *t)
 }
 
 /* ================================================================
+ * Week 3: 保存摄像头抓拍到照片槽位（环形缓冲）
+ * ================================================================ */
+static void save_capture_slot(collect_task_t *t, camera_frame_t *f,
+                               const char *source)
+{
+    if (!t || !f || !f->buf) return;
+    int idx = t->cap_head % CAPTURE_SLOTS_MAX;
+    capture_slot_t *s = &t->cap_slots[idx];
+
+    /* 释放旧缓冲区 */
+    if (s->jpeg_buf) { free(s->jpeg_buf); s->jpeg_buf = NULL; }
+
+    /* 拷贝 JPEG 数据 */
+    s->jpeg_buf = (uint8_t *)malloc(f->len);
+    if (!s->jpeg_buf) { ESP_LOGE(TAG, "OOM saving capture slot"); return; }
+    memcpy(s->jpeg_buf, f->buf, f->len);
+    s->jpeg_len = f->len;
+    s->width    = f->width;
+    s->height   = f->height;
+    s->size_bytes = f->len;
+    s->captured_us = f->timestamp_us;
+    s->valid    = true;
+    s->uploaded = false;
+    s->task_seq = t->task_seq;
+    snprintf(s->request_id, sizeof(s->request_id), "%s", t->request_id);
+    snprintf(s->source, sizeof(s->source), "%s", source);
+    snprintf(s->file_name, sizeof(s->file_name), "cap-%05d.jpg",
+             t->cap_count + 1);
+    snprintf(t->last_cap_request_id, sizeof(t->last_cap_request_id),
+             "%s", t->request_id);
+    t->cap_head++;
+    t->cap_count++;
+    ESP_LOGI(TAG, "[CAP] Saved photo #%d (%s) %dx%d, %d bytes",
+             t->cap_count, s->file_name, s->width, s->height,
+             (int)s->size_bytes);
+}
+
+/* ================================================================
  * 主入口
  * ================================================================ */
 void app_main(void)
@@ -275,6 +314,18 @@ void app_main(void)
         ESP_LOGW(TAG, "QMA6100P not found");
     }
 
+    /* Camera (OV2640) init — Week 3 */
+    camera_handle_t cam_handle = NULL;
+    {
+        esp_err_t cam_ret = camera_app_init(&cam_handle);
+        if (cam_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Camera init failed: 0x%X — camera features disabled", cam_ret);
+            cam_handle = NULL;
+        } else {
+            ESP_LOGI(TAG, "Camera (OV2640) ready ✓");
+        }
+    }
+
     /* ADC 按键 */
     adc_button_handle_t btn_handle = NULL;
     ret = adc_button_init(&btn_handle);
@@ -295,8 +346,14 @@ void app_main(void)
         .imu = imu, .btn = btn_handle,
         .device_id = DEVICE_ID, .sensor_src = SENSOR_SRC,
         .task = &collect_task,
+        .cam = cam_handle,
     };
     http_server_start(&ctx);
+
+    /* Camera auto-capture defaults */
+    collect_task.auto_cap.interval_s = 10;
+    collect_task.auto_cap.batch_limit = 100;
+    collect_task.capture_camera = false;
 
     ESP_LOGI(TAG, "READY! Open http://%s/ in browser (Week 2: +collect)", wifi_app_get_ip());
 
@@ -373,6 +430,21 @@ void app_main(void)
                          collect_task.request_id);
             }
             push_record(&collect_task);
+
+            /* ---- Week 3: Camera capture (if requested) ---- */
+            if (collect_task.capture_camera && cam_handle) {
+                camera_frame_t frame = {0};
+                if (camera_app_capture(cam_handle, &frame) == ESP_OK) {
+                    save_capture_slot(&collect_task, &frame, "manual");
+                    camera_app_release_frame(cam_handle, &frame);
+                    ESP_LOGI(TAG, "[TASK] Camera captured for %s",
+                             collect_task.request_id);
+                } else {
+                    ESP_LOGW(TAG, "[TASK] Camera capture FAILED for %s",
+                             collect_task.request_id);
+                }
+                collect_task.capture_camera = false;
+            }
         }
 
         /* ---- Week 1 保留：周期上报（板端每 1s 采样一次并保存观测）----
@@ -394,6 +466,41 @@ void app_main(void)
                 ESP_LOGI(TAG, "IMU(cadence #%d %s): X=%6d Y=%6d Z=%6d mg",
                          collect_task.poll_count, collect_task.last.record_id,
                          x, y, z);
+            }
+        }
+
+        /* ---- Week 3: 定时自动抓拍 ---- */
+        if (collect_task.auto_cap.enabled && cam_handle) {
+            int64_t now = esp_timer_get_time();
+            if (collect_task.auto_cap.last_capture_us == 0 ||
+                (now - collect_task.auto_cap.last_capture_us) >=
+                collect_task.auto_cap.interval_s * 1000000LL) {
+                bool limit_ok = (collect_task.auto_cap.batch_limit == 0 ||
+                    collect_task.auto_cap.batch_count <
+                    collect_task.auto_cap.batch_limit);
+                if (limit_ok) {
+                    camera_frame_t frame = {0};
+                    if (camera_app_capture(cam_handle, &frame) == ESP_OK) {
+                        char saved_req[32];
+                        strncpy(saved_req, collect_task.request_id,
+                                sizeof(saved_req) - 1);
+                        int saved_seq = collect_task.task_seq;
+                        snprintf(collect_task.request_id,
+                                 sizeof(collect_task.request_id),
+                                 "acap-%d", collect_task.auto_cap.batch_count + 1);
+                        collect_task.task_seq = collect_task.auto_cap.batch_count + 1;
+                        save_capture_slot(&collect_task, &frame, "auto");
+                        strncpy(collect_task.request_id, saved_req,
+                                sizeof(collect_task.request_id) - 1);
+                        collect_task.task_seq = saved_seq;
+                        camera_app_release_frame(cam_handle, &frame);
+                        collect_task.auto_cap.batch_count++;
+                        ESP_LOGI(TAG, "[AUTO-CAP] Captured #%d (%s)",
+                                 collect_task.auto_cap.batch_count,
+                                 collect_task.last_cap_request_id);
+                    }
+                }
+                collect_task.auto_cap.last_capture_us = now;
             }
         }
 
