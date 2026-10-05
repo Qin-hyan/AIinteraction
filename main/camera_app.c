@@ -19,6 +19,8 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <string.h>
 
 static const char *TAG = "CAM";
@@ -123,13 +125,23 @@ esp_err_t camera_app_capture(camera_handle_t handle, camera_frame_t *frame)
 {
     if (!frame) return ESP_ERR_INVALID_ARG;
 
+    /* 给摄像头传感器留出稳定时间 */
+    vTaskDelay(pdMS_TO_TICKS(60));
+
     int64_t t0 = esp_timer_get_time();
 
     /* 获取一帧 */
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) {
         ESP_LOGE(TAG, "Camera capture failed (fb_get returned NULL)");
-        return ESP_FAIL;
+        /* 尝试一次重试 */
+        vTaskDelay(pdMS_TO_TICKS(100));
+        fb = esp_camera_fb_get();
+        if (!fb) {
+            ESP_LOGE(TAG, "Camera retry also failed");
+            return ESP_FAIL;
+        }
+        ESP_LOGW(TAG, "Camera retry succeeded");
     }
 
     int64_t t1 = esp_timer_get_time();

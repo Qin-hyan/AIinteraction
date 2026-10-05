@@ -846,7 +846,7 @@ static esp_err_t camera_capture_handler(httpd_req_t *req)
     int64_t now_ms = now_us / 1000;
     t->task_seq++;
     snprintf(t->request_id, sizeof(t->request_id), "req-%lld-%04d",
-             (long long)now_ms, t->task_seq);
+             (long long)now_ms, t->task_seq % 10000);
     t->status = COLLECT_SUBMITTED;
     t->submitted_at_us = now_us;
     t->deadline_us = now_us + COLLECT_TIMEOUT_MS * 1000;
