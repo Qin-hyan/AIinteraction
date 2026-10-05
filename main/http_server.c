@@ -565,6 +565,13 @@ static esp_err_t root_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t favicon_handler(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
 static esp_err_t sensor_api_handler(httpd_req_t *req)
 {
     cJSON *root = cJSON_CreateObject();
@@ -998,6 +1005,10 @@ static const httpd_uri_t uri_root = {
     .uri = "/", .method = HTTP_GET,
     .handler = root_handler, .user_ctx = NULL,
 };
+static const httpd_uri_t uri_favicon = {
+    .uri = "/favicon.ico", .method = HTTP_GET,
+    .handler = favicon_handler, .user_ctx = NULL,
+};
 static const httpd_uri_t uri_sensor = {
     .uri = "/api/sensor", .method = HTTP_GET,
     .handler = sensor_api_handler, .user_ctx = NULL,
@@ -1065,6 +1076,7 @@ esp_err_t http_server_start(const sensor_ctx_t *ctx)
     esp_err_t ret = httpd_start(&s_server, &config);
     if (ret != ESP_OK) { ESP_LOGE(TAG, "HTTP start fail"); return ret; }
     httpd_register_uri_handler(s_server, &uri_root);
+    httpd_register_uri_handler(s_server, &uri_favicon);
     httpd_register_uri_handler(s_server, &uri_sensor);
     httpd_register_uri_handler(s_server, &uri_collect);
     httpd_register_uri_handler(s_server, &uri_collect_st);

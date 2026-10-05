@@ -433,12 +433,14 @@ void app_main(void)
 
             /* ---- Week 3: Camera capture (if requested) ---- */
             if (collect_task.capture_camera && cam_handle) {
+                /* give I2C bus time to recover from sensor read */
+                vTaskDelay(pdMS_TO_TICKS(150));
                 camera_frame_t frame = {0};
+                ESP_LOGI(TAG, "[TASK] Starting camera capture for %s", collect_task.request_id);
                 if (camera_app_capture(cam_handle, &frame) == ESP_OK) {
                     save_capture_slot(&collect_task, &frame, "manual");
                     camera_app_release_frame(cam_handle, &frame);
-                    ESP_LOGI(TAG, "[TASK] Camera captured for %s",
-                             collect_task.request_id);
+                    ESP_LOGI(TAG, "[TASK] Camera captured OK: %d bytes", (int)frame.len);
                 } else {
                     ESP_LOGW(TAG, "[TASK] Camera capture FAILED for %s",
                              collect_task.request_id);
