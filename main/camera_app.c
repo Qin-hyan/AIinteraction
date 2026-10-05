@@ -77,7 +77,7 @@ esp_err_t camera_app_init(camera_handle_t *handle)
         .frame_size     = CAM_FRAME_SIZE,
         .jpeg_quality   = CAM_JPEG_QUALITY,
         .fb_count       = CAM_FB_COUNT,
-        .grab_mode      = CAMERA_GRAB_WHEN_EMPTY,
+        .grab_mode      = CAMERA_GRAB_LATEST,  /* 总是返回最新帧 */
         .sccb_i2c_port  = 0,  /* 复用主程序已初始化的 I2C_NUM_0 */
     };
 
