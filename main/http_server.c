@@ -535,7 +535,7 @@ static const char INDEX_HTML[] =
 ".then(function(d){var g=$('galGrid'),b=$('galBadge');b.textContent=(d.total||0)+' 张';"
 "if(!d.photos||!d.photos.length){g.innerHTML='<div class=\"gal-empty\">暂无照片：先点击抓拍指令拍摄一张。</div>';return;}"
 "var h='';for(var i=0;i<d.photos.length;i++){var p=d.photos[i];"
-"h+='<div class=\"gal-card\"><img src=\"/api/camera/photo?index='+p.index+'\" alt=\"'+p.file_name+'\" onerror=\"this.hidden=true\">';"
+"h+='<div class=\"gal-card\"><img src=\"/api/camera/photo?index='+p.index+'&_t='+Date.now()+'\" alt=\"'+p.file_name+'\" onerror=\"this.hidden=true\">';"
 "h+='<div class=\"gal-meta\"><div class=\"fn\">'+p.file_name+'</div>';"
 "h+='<div class=\"kv\">请求号: '+orDash(p.request_id)+'</div>';"
 "h+='<div class=\"kv\">尺寸: '+p.width+'x'+p.height+' | '+(p.size_bytes/1024).toFixed(1)+' KB</div>';"
@@ -840,6 +840,11 @@ static esp_err_t camera_capture_handler(httpd_req_t *req)
         cJSON_AddStringToObject(root, "message",
             "相机抓拍任务进行中，沿用当前请求号");
         return send_json(req, root);
+    }
+    /* 确保清除上一轮残留的 capture_camera 标志 */
+    if (t->capture_camera) {
+        ESP_LOGW(TAG, "[CAM-CAP] stale capture_camera flag, clearing");
+        t->capture_camera = false;
     }
     int64_t now_us = esp_timer_get_time();
     int64_t now_ms = now_us / 1000;

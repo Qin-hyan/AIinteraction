@@ -445,6 +445,8 @@ void app_main(void)
                 }
                 collect_task.capture_camera = false;
             }
+            /* 任务完成，复位状态 */
+            collect_task.status = COLLECT_IDLE;
         }
 
         /* ---- Week 1 保留：周期上报（板端每 1s 采样一次并保存观测）----
