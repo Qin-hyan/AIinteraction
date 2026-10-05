@@ -55,8 +55,8 @@ esp_err_t camera_app_init(camera_handle_t *handle)
         .pin_pwdn       = CAM_PIN_PWDN,
         .pin_reset      = CAM_PIN_RESET,
         .pin_xclk       = CAM_PIN_XCLK,
-        .pin_sccb_sda   = CAM_PIN_SIOD,
-        .pin_sccb_scl   = CAM_PIN_SIOC,
+        .pin_sccb_sda   = -1,  /* 不创建新 I2C 总线，复用主程序已初始化的 I2C_NUM_0 */
+        .pin_sccb_scl   = -1,  /* 与 QMA6100P 共享 GPIO4/GPIO5 I2C 总线 */
         .pin_d7         = CAM_PIN_D7,
         .pin_d6         = CAM_PIN_D6,
         .pin_d5         = CAM_PIN_D5,
@@ -76,7 +76,7 @@ esp_err_t camera_app_init(camera_handle_t *handle)
         .jpeg_quality   = CAM_JPEG_QUALITY,
         .fb_count       = CAM_FB_COUNT,
         .grab_mode      = CAMERA_GRAB_WHEN_EMPTY,
-        .sccb_i2c_port  = 0,  /* I2C_NUM_0, shared with QMA6100P */
+        .sccb_i2c_port  = 0,  /* 复用主程序已初始化的 I2C_NUM_0 */
     };
 
     esp_err_t ret = esp_camera_init(&cfg);
