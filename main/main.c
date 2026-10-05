@@ -337,7 +337,7 @@ void app_main(void)
     if (ret != ESP_OK) ESP_LOGE(TAG, "Wi-Fi FAILED! Check SSID/password.");
 
     /* HTTP 服务器 — Week 2: 加入采集任务上下文 */
-    collect_task_t collect_task = {0};
+    static collect_task_t collect_task = {0};
     collect_task.auto_refresh = true;              /* 默认开启周期上报 */
     collect_task.status = COLLECT_IDLE;
     snprintf(collect_task.last.source, sizeof(collect_task.last.source),
