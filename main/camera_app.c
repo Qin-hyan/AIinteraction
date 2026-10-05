@@ -47,7 +47,7 @@ static const char *TAG = "CAM";
 #define CAM_XCLK_FREQ_MHZ  20
 #define CAM_FRAME_SIZE     FRAMESIZE_SVGA  /* 800x600 - 平衡质量与内存 */
 #define CAM_JPEG_QUALITY   10  /* 0-63, lower = better */
-#define CAM_FB_COUNT       2   /* 帧缓冲数量 */
+#define CAM_FB_COUNT       3   /* 帧缓冲数量，增加到3提高稳定性 */
 
 esp_err_t camera_app_init(camera_handle_t *handle)
 {
