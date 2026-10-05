@@ -628,8 +628,14 @@ static esp_err_t collect_api_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No task");
         return ESP_FAIL;
     }
+    ESP_LOGI(TAG, "[DIAG-COLLECT] >>> ENTER status=%s req=%s capture_camera=%d",
+             collect_status_name(s_ctx.task->status),
+             s_ctx.task->request_id[0] ? s_ctx.task->request_id : "(empty)",
+             (int)s_ctx.task->capture_camera);
     if (s_ctx.task->status == COLLECT_SUBMITTED ||
         s_ctx.task->status == COLLECT_RECEIVED) {
+        ESP_LOGW(TAG, "[DIAG-COLLECT] REJECTED: task in progress (%s)",
+                 collect_status_name(s_ctx.task->status));
         cJSON *root = cJSON_CreateObject();
         cJSON_AddStringToObject(root, "request_id", s_ctx.task->request_id);
         cJSON_AddStringToObject(root, "status",
@@ -840,13 +846,26 @@ static esp_err_t camera_capture_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
     collect_task_t *t = s_ctx.task;
+
+    /* ── DIAG: 请求入口 ── */
+    ESP_LOGI(TAG, "[DIAG-CAP] >>> ENTER status=%s req_id=%s task_seq=%d capture_camera=%d deadline=%lld",
+             collect_status_name(t->status),
+             t->request_id[0] ? t->request_id : "(empty)",
+             t->task_seq, (int)t->capture_camera,
+             (long long)t->deadline_us);
+
     if (t->status == COLLECT_SUBMITTED || t->status == COLLECT_RECEIVED) {
+        ESP_LOGW(TAG, "[DIAG-CAP] REJECTED: status=%s (task in progress)",
+                 collect_status_name(t->status));
         cJSON *root = cJSON_CreateObject();
         cJSON_AddStringToObject(root, "request_id", t->request_id);
         cJSON_AddStringToObject(root, "status", "in_progress");
         cJSON_AddStringToObject(root, "message",
             "相机抓拍任务进行中，沿用当前请求号");
         return send_json(req, root);
+    }
+    if (t->status == COLLECT_TIMEOUT || t->status == COLLECT_FAILED) {
+        ESP_LOGW(TAG, "[DIAG-CAP] RECOVERING: status=%s → auto-reset to IDLE", collect_status_name(t->status));
     }
     /* 确保清除上一轮残留的 capture_camera 标志 */
     if (t->capture_camera) {
@@ -865,12 +884,16 @@ static esp_err_t camera_capture_handler(httpd_req_t *req)
     t->completed_at_us = 0;
     t->capture_camera = true;
 
+    ESP_LOGI(TAG, "[DIAG-CAP] ACCEPTED: new req_id=%s task_seq=%d status=SUBMITTED deadline=%lld",
+             t->request_id, t->task_seq, (long long)t->deadline_us);
+
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "request_id", t->request_id);
     cJSON_AddStringToObject(root, "status", collect_status_name(t->status));
     cJSON_AddNumberToObject(root, "task_seq", t->task_seq);
     cJSON_AddNumberToObject(root, "timeout_ms", COLLECT_TIMEOUT_MS);
     cJSON_AddStringToObject(root, "message", "相机抓拍指令已下发");
+    ESP_LOGI(TAG, "[DIAG-CAP] <<< EXIT OK: %s", t->request_id);
     return send_json(req, root);
 }
 

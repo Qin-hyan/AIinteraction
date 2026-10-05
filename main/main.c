@@ -200,16 +200,31 @@ static void push_record(collect_task_t *t)
 static void save_capture_slot(collect_task_t *t, camera_frame_t *f,
                                const char *source)
 {
-    if (!t || !f || !f->buf) return;
+    if (!t || !f || !f->buf) {
+        ESP_LOGE(TAG, "[DIAG-CAP] save_capture_slot: invalid args t=%p f=%p f->buf=%p",
+                 (void*)t, (void*)f, f ? (void*)f->buf : NULL);
+        return;
+    }
     int idx = t->cap_head % CAPTURE_SLOTS_MAX;
     capture_slot_t *s = &t->cap_slots[idx];
+    ESP_LOGI(TAG, "[DIAG-CAP] save begin: slot=%d req=%s source=%s size=%zu",
+             idx, t->request_id, source, f->len);
 
     /* 释放旧缓冲区 */
-    if (s->jpeg_buf) { free(s->jpeg_buf); s->jpeg_buf = NULL; }
+    if (s->jpeg_buf) {
+        ESP_LOGI(TAG, "[DIAG-CAP] freeing old jpeg_buf at %p (%zu bytes)",
+                 (void*)s->jpeg_buf, s->jpeg_len);
+        free(s->jpeg_buf);
+        s->jpeg_buf = NULL;
+    }
 
     /* 拷贝 JPEG 数据 */
     s->jpeg_buf = (uint8_t *)malloc(f->len);
-    if (!s->jpeg_buf) { ESP_LOGE(TAG, "OOM saving capture slot"); return; }
+    if (!s->jpeg_buf) {
+        ESP_LOGE(TAG, "[DIAG-CAP] OOM saving capture slot (needed %zu bytes)", f->len);
+        return;
+    }
+    ESP_LOGI(TAG, "[DIAG-CAP] malloc OK: new jpeg_buf at %p", (void*)s->jpeg_buf);
     memcpy(s->jpeg_buf, f->buf, f->len);
     s->jpeg_len = f->len;
     s->width    = f->width;
@@ -227,9 +242,11 @@ static void save_capture_slot(collect_task_t *t, camera_frame_t *f,
              "%s", t->request_id);
     t->cap_head++;
     t->cap_count++;
-    ESP_LOGI(TAG, "[CAP] Saved photo #%d (%s) %dx%d, %d bytes",
-             t->cap_count, s->file_name, s->width, s->height,
-             (int)s->size_bytes);
+    ESP_LOGI(TAG, "[DIAG-CAP] save done: #%d file=%s req=%s %dx%d %d bytes "
+             "cap_head=%d cap_count=%d",
+             t->cap_count, s->file_name, s->request_id,
+             s->width, s->height, (int)s->size_bytes,
+             t->cap_head, t->cap_count);
 }
 
 /* ================================================================
@@ -379,9 +396,11 @@ void app_main(void)
         if ((collect_task.status == COLLECT_SUBMITTED ||
              collect_task.status == COLLECT_RECEIVED) &&
             collect_task.deadline_us > 0 && now_us > collect_task.deadline_us) {
+            ESP_LOGW(TAG, "[DIAG-TASK] TIMEOUT req=%s status=%d", collect_task.request_id, (int)collect_task.status);
+            ESP_LOGW(TAG, "[DIAG-TASK] TIMEOUT deadline=%lld now=%lld", (long long)collect_task.deadline_us, (long long)now_us);
             collect_task.status = COLLECT_TIMEOUT;
             collect_task.completed_at_us = now_us;
-            ESP_LOGW(TAG, "[TASK] Timeout: %s — 未收到设备结果（不等于硬件故障）",
+            ESP_LOGW(TAG, "[DIAG-TASK] TIMEOUT: %s — 未收到设备结果（不等于硬件故障）",
                      collect_task.request_id);
             push_record(&collect_task);
         }
@@ -389,14 +408,16 @@ void app_main(void)
         /* ---- Week 2: 处理手动采集任务 ---- */
         if (collect_task.status == COLLECT_SUBMITTED) {
             /* 设备已接收指令：登记回执时间，状态进入 RECEIVED */
+            ESP_LOGI(TAG, "[DIAG-TASK] SUBMITTED→RECEIVED: req=%s task_seq=%d", collect_task.request_id, collect_task.task_seq);
             collect_task.received_at_us = esp_timer_get_time();
             collect_task.status = COLLECT_RECEIVED;
-            ESP_LOGI(TAG, "[TASK] Received: %s (设备已接收，开始执行)",
+            ESP_LOGI(TAG, "[DIAG-TASK] Received: %s (设备已接收，开始执行)",
                      collect_task.request_id);
             vTaskDelay(pdMS_TO_TICKS(50));
         }
 
         if (collect_task.status == COLLECT_RECEIVED) {
+            ESP_LOGI(TAG, "[DIAG-TASK] RECEIVED→EXECUTE: req=%s capture_camera=%d", collect_task.request_id, (int)collect_task.capture_camera);
             /* 执行一次真实传感器读取（这就是"新采集"） */
             char btn_name[16] = "NONE";
             if (btn_handle)
@@ -419,37 +440,47 @@ void app_main(void)
 
             if (read_ok) {
                 collect_task.status = COLLECT_COMPLETED;
+                ESP_LOGI(TAG, "[DIAG-TASK] RECEIVED→COMPLETED: req=%s sensor OK", collect_task.request_id);
                 /* 只有真实读取成功才写入"已存观测"，并与本次请求号关联 */
                 save_observation(&collect_task, OBS_SOURCE_LIVE,
                                  collect_task.request_id, x, y, z, btn_name);
-                ESP_LOGI(TAG, "[TASK] Completed: %s X=%d Y=%d Z=%d → %s (seq=%d)",
+                ESP_LOGI(TAG, "[DIAG-TASK] Completed: %s X=%d Y=%d Z=%d → %s (seq=%d)",
                          collect_task.request_id, x, y, z,
                          collect_task.last.record_id, collect_task.last.seq);
             } else {
                 collect_task.status = COLLECT_FAILED;
-                ESP_LOGW(TAG, "[TASK] Failed: %s（传感器读取失败，未产生新观测）",
-                         collect_task.request_id);
+                ESP_LOGW(TAG, "[DIAG-TASK] RECEIVED→FAILED: %s", collect_task.request_id);
             }
             push_record(&collect_task);
 
             /* ---- Week 3: Camera capture (if requested) ---- */
             if (collect_task.capture_camera && cam_handle) {
+                ESP_LOGI(TAG, "[DIAG-CAM] >>> START capture_camera=true req=%s", collect_task.request_id);
                 /* give I2C bus time to recover from sensor read */
                 vTaskDelay(pdMS_TO_TICKS(150));
                 camera_frame_t frame = {0};
-                ESP_LOGI(TAG, "[TASK] Starting camera capture for %s", collect_task.request_id);
-                if (camera_app_capture(cam_handle, &frame) == ESP_OK) {
+                ESP_LOGI(TAG, "[DIAG-CAM] calling camera_app_capture for %s", collect_task.request_id);
+                esp_err_t cap_ret = camera_app_capture(cam_handle, &frame);
+                if (cap_ret == ESP_OK) {
+                    ESP_LOGI(TAG, "[DIAG-CAM] camera_app_capture OK: %d bytes, calling save_capture_slot", (int)frame.len);
                     save_capture_slot(&collect_task, &frame, "manual");
+                    ESP_LOGI(TAG, "[DIAG-CAM] save_capture_slot returned, releasing frame");
                     camera_app_release_frame(cam_handle, &frame);
-                    ESP_LOGI(TAG, "[TASK] Camera captured OK: %d bytes", (int)frame.len);
+                    ESP_LOGI(TAG, "[DIAG-CAM] Camera captured OK: %d bytes", (int)frame.len);
                 } else {
-                    ESP_LOGW(TAG, "[TASK] Camera capture FAILED for %s",
-                             collect_task.request_id);
+                    ESP_LOGW(TAG, "[DIAG-CAM] camera_app_capture FAILED ret=0x%X for %s", cap_ret, collect_task.request_id);
                 }
+                ESP_LOGI(TAG, "[DIAG-CAM] clearing capture_camera flag");
+                collect_task.capture_camera = false;
+                ESP_LOGI(TAG, "[DIAG-CAM] <<< DONE capture_camera now=%d", (int)collect_task.capture_camera);
+            } else if (collect_task.capture_camera && !cam_handle) {
+                ESP_LOGW(TAG, "[DIAG-CAM] SKIP: capture_camera=true but cam_handle=NULL");
                 collect_task.capture_camera = false;
             }
             /* 任务完成，复位状态 */
+            ESP_LOGI(TAG, "[DIAG-TASK] COMPLETED/FAILED→IDLE: req=%s", collect_task.request_id);
             collect_task.status = COLLECT_IDLE;
+            ESP_LOGI(TAG, "[DIAG-TASK] status now IDLE, deadline=%lld", (long long)collect_task.deadline_us);
         }
 
         /* ---- Week 1 保留：周期上报（板端每 1s 采样一次并保存观测）----

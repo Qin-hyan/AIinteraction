@@ -126,32 +126,40 @@ esp_err_t camera_app_capture(camera_handle_t handle, camera_frame_t *frame)
     if (!frame) return ESP_ERR_INVALID_ARG;
 
     /* 给摄像头传感器留出稳定时间 */
+    ESP_LOGI(TAG, "[DIAG] capture begin: delay 60ms before fb_get");
     vTaskDelay(pdMS_TO_TICKS(60));
 
     int64_t t0 = esp_timer_get_time();
 
-    /* 获取一帧 */
+    /* 获取一帧 — 第一次尝试 */
+    ESP_LOGI(TAG, "[DIAG] fb_get attempt #1 at %lld", (long long)t0);
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) {
-        ESP_LOGE(TAG, "Camera capture failed (fb_get returned NULL)");
+        ESP_LOGE(TAG, "[DIAG] fb_get #1 returned NULL, retrying after 100ms");
         /* 尝试一次重试 */
         vTaskDelay(pdMS_TO_TICKS(100));
+        ESP_LOGI(TAG, "[DIAG] fb_get attempt #2 (retry)");
         fb = esp_camera_fb_get();
         if (!fb) {
-            ESP_LOGE(TAG, "Camera retry also failed");
+            ESP_LOGE(TAG, "[DIAG] fb_get #2 also NULL — capture FAILED");
             return ESP_FAIL;
         }
-        ESP_LOGW(TAG, "Camera retry succeeded");
+        ESP_LOGW(TAG, "[DIAG] fb_get #2 OK (retry succeeded): %zu bytes", fb->len);
+    } else {
+        ESP_LOGI(TAG, "[DIAG] fb_get #1 OK: %zu bytes fmt=%d %dx%d",
+                 fb->len, fb->format, fb->width, fb->height);
     }
 
     int64_t t1 = esp_timer_get_time();
-    ESP_LOGI(TAG, "Capture OK: %zu bytes, fmt=%d, %dx%d, latency=%lld us",
+    ESP_LOGI(TAG, "[DIAG] Capture OK: %zu bytes, fmt=%d, %dx%d, latency=%lld us",
              fb->len, fb->format, fb->width, fb->height,
              (long long)(t1 - t0));
 
     /* 拷贝帧数据 (fb会在fb_return后失效) */
+    ESP_LOGI(TAG, "[DIAG] allocating %zu bytes for JPEG copy", fb->len);
     frame->buf = (uint8_t *)malloc(fb->len);
     if (!frame->buf) {
+        ESP_LOGE(TAG, "[DIAG] malloc FAILED for JPEG buffer — returning fb");
         esp_camera_fb_return(fb);
         return ESP_ERR_NO_MEM;
     }
@@ -161,7 +169,9 @@ esp_err_t camera_app_capture(camera_handle_t handle, camera_frame_t *frame)
     frame->height = fb->height;
     frame->timestamp_us = t1;
 
+    ESP_LOGI(TAG, "[DIAG] calling fb_return, releasing frame buffer");
     esp_camera_fb_return(fb);
+    ESP_LOGI(TAG, "[DIAG] capture complete: %zu bytes in frame->buf", frame->len);
     return ESP_OK;
 }
 
