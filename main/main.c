@@ -351,6 +351,7 @@ void app_main(void)
     http_server_start(&ctx);
 
     /* Camera auto-capture defaults */
+    collect_task.auto_cap.enabled = false;
     collect_task.auto_cap.interval_s = 10;
     collect_task.auto_cap.batch_limit = 100;
     collect_task.capture_camera = false;
@@ -474,7 +475,9 @@ void app_main(void)
         }
 
         /* ---- Week 3: 定时自动抓拍 ---- */
-        if (collect_task.auto_cap.enabled && cam_handle) {
+        if (collect_task.auto_cap.enabled && cam_handle &&
+            !collect_task.capture_camera &&
+            collect_task.status == COLLECT_IDLE) {
             int64_t now = esp_timer_get_time();
             if (collect_task.auto_cap.last_capture_us == 0 ||
                 (now - collect_task.auto_cap.last_capture_us) >=
