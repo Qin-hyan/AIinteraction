@@ -1,12 +1,13 @@
 /**
  * @file main.c
- * @brief 第1周：传感数据采集与 Web 展示系统
+ * @brief 第1-2周：传感数据采集与 Web 展示 + 远程采集指令
  *
  * ESP32-S3-EYE v2.2 + SUB v1.1
  * - QMA6100P 三轴加速度计 (I2C: SDA=GPIO4, SCL=GPIO5, addr=0x12)
  * - ADC 按键检测 (GPIO1 / ADC1_CH0)
  * - Wi-Fi STA 连接
  * - HTTP 服务器 + Web 仪表盘 (500ms 刷新)
+ * - Week 2: 手动采集指令 + request_id 追踪 + 任务状态反馈
  *
  * 初始化顺序: UART → PSRAM → I2C(QMA6100P) → ADC → LED → Wi-Fi → HTTP
  */
@@ -16,6 +17,7 @@
 #include "esp_system.h"
 #include "esp_log.h"
 #include "esp_psram.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 #include "driver/i2c_master.h"
 #include "driver/gpio.h"
@@ -26,6 +28,8 @@
 #include "adc_button.h"
 #include "wifi_app.h"
 #include "http_server.h"
+#include "camera_app.h"
+#include "esp_heap_caps.h"
 
 static const char *TAG = "MAIN";
 
@@ -111,11 +115,148 @@ static esp_err_t i2c_bus_init(i2c_master_bus_handle_t *bus_handle)
 }
 
 /* ================================================================
+ * Week 2: 观测与记录工具
+ *   已存观测（板上缓存）＝第 1 周"已存数据"；请求记录＝请求→回执→新观测
+ * ================================================================ */
+
+/** @brief 传感源说明（随界面显示，避免用型号推测单位） */
+#define SENSOR_SRC  "QMA6100P 三轴加速度 (mg, I2C 0x12)"
+
+/** @brief 相对时间（ms since boot）——板端无可靠墙钟，统一相对时间轴 */
+static int64_t ms_since_boot(void)
+{
+    return esp_timer_get_time() / 1000;
+}
+
+/**
+ * @brief 保存一条"已存观测"（板上缓存）
+ *
+ * 只有真实传感器读取成功时才调用本函数，因此观测序号 seq +1 即代表
+ * "板端又完成了一次真实采集"，用于在页面上证明不是重显旧值。
+ *
+ * @param[in] t      任务上下文
+ * @param[in] src    来源：OBS_SOURCE_LIVE（手动指令）/ OBS_SOURCE_CADENCE（周期采样）
+ * @param[in] req_id 关联请求号（证明观测属于哪一次请求）
+ */
+static void save_observation(collect_task_t *t, const char *src,
+                             const char *req_id, int x, int y, int z,
+                             const char *btn)
+{
+    t->obs_seq++;
+    observation_t *o = &t->last;
+    o->valid = true;
+    snprintf(o->record_id, sizeof(o->record_id), "obs-%05d", t->obs_seq);
+    snprintf(o->request_id, sizeof(o->request_id), "%s", req_id);
+    snprintf(o->source, sizeof(o->source), "%s", src);
+    o->seq = t->obs_seq;
+    o->accel_x = x;
+    o->accel_y = y;
+    o->accel_z = z;
+    snprintf(o->button, sizeof(o->button), "%s", btn);
+    o->observed_ms = ms_since_boot();   /* 采集时间（相对） */
+    o->received_ms = o->observed_ms;    /* 板端"服务端"与设备同一时钟 */
+}
+
+/**
+ * @brief 写入一条请求记录：请求 → 设备回执 → 新观测
+ *
+ * 超时/失败也写记录，但 has_observation=false，绝不把旧观测改标为本次完成。
+ */
+static void push_record(collect_task_t *t)
+{
+    int i = t->record_head;
+    collect_record_t *r = &t->records[i];
+    memset(r, 0, sizeof(*r));
+    snprintf(r->request_id, sizeof(r->request_id), "%s", t->request_id);
+    snprintf(r->status, sizeof(r->status), "%s",
+             t->status == COLLECT_COMPLETED ? "completed" :
+             t->status == COLLECT_TIMEOUT   ? "timeout"   : "failed");
+    r->submitted_ms = (int)(t->submitted_at_us / 1000);
+    r->received_ms  = t->received_at_us ? (int)(t->received_at_us / 1000) : -1;
+    r->completed_ms = (int)(t->completed_at_us / 1000);
+    r->elapsed_ms   = r->completed_ms - r->submitted_ms;
+
+    /* 只有"新观测确实关联本次请求号"才认为带回结果 */
+    bool linked = (t->status == COLLECT_COMPLETED) && t->last.valid &&
+                  strcmp(t->last.request_id, t->request_id) == 0;
+    r->has_observation = linked;
+    if (linked) {
+        snprintf(r->source, sizeof(r->source), "%s", t->last.source);
+        r->seq = t->last.seq;
+        r->accel_x = t->last.accel_x;
+        r->accel_y = t->last.accel_y;
+        r->accel_z = t->last.accel_z;
+        snprintf(r->button, sizeof(r->button), "%s", t->last.button);
+    } else {
+        snprintf(r->source, sizeof(r->source), "%s", OBS_SOURCE_NONE);
+        r->seq = 0;
+    }
+    t->record_head = (i + 1) % COLLECT_RECORD_MAX;
+    if (t->record_count < COLLECT_RECORD_MAX) t->record_count++;
+}
+
+/* ================================================================
+ * Week 3: 保存摄像头抓拍到照片槽位（环形缓冲）
+ * ================================================================ */
+static void save_capture_slot(collect_task_t *t, camera_frame_t *f,
+                               const char *source)
+{
+    if (!t || !f || !f->buf) {
+        ESP_LOGE(TAG, "[DIAG-CAP] save_capture_slot: invalid args t=%p f=%p f->buf=%p",
+                 (void*)t, (void*)f, f ? (void*)f->buf : NULL);
+        return;
+    }
+    int idx = t->cap_head % CAPTURE_SLOTS_MAX;
+    capture_slot_t *s = &t->cap_slots[idx];
+    ESP_LOGI(TAG, "[DIAG-CAP] save begin: slot=%d req=%s source=%s size=%zu",
+             idx, t->request_id, source, f->len);
+
+    /* 释放旧缓冲区 */
+    if (s->jpeg_buf) {
+        ESP_LOGI(TAG, "[DIAG-CAP] freeing old jpeg_buf at %p (%zu bytes)",
+                 (void*)s->jpeg_buf, s->jpeg_len);
+        heap_caps_free(s->jpeg_buf);
+        s->jpeg_buf = NULL;
+    }
+
+    /* 拷贝 JPEG 数据 (PSRAM) */
+    s->jpeg_buf = (uint8_t *)heap_caps_malloc(f->len,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s->jpeg_buf) {
+        ESP_LOGE(TAG, "[DIAG-CAP] OOM saving capture slot (needed %zu bytes)", f->len);
+        return;
+    }
+    ESP_LOGI(TAG, "[DIAG-CAP] heap_caps_malloc OK: new jpeg_buf at %p", (void*)s->jpeg_buf);
+    memcpy(s->jpeg_buf, f->buf, f->len);
+    s->jpeg_len = f->len;
+    s->width    = f->width;
+    s->height   = f->height;
+    s->size_bytes = f->len;
+    s->captured_us = f->timestamp_us;
+    s->valid    = true;
+    s->uploaded = false;
+    s->task_seq = t->task_seq;
+    snprintf(s->request_id, sizeof(s->request_id), "%s", t->request_id);
+    snprintf(s->source, sizeof(s->source), "%s", source);
+    snprintf(s->file_name, sizeof(s->file_name), "cap-%05d.jpg",
+             t->cap_count + 1);
+    snprintf(t->last_cap_request_id, sizeof(t->last_cap_request_id),
+             "%s", t->request_id);
+    t->cap_head++;
+    t->cap_count++;
+    ESP_LOGI(TAG, "[DIAG-CAP] save done: #%d file=%s req=%s %dx%d %d bytes "
+             "cap_head=%d cap_count=%d",
+             t->cap_count, s->file_name, s->request_id,
+             s->width, s->height, (int)s->size_bytes,
+             t->cap_head, t->cap_count);
+}
+
+/* ================================================================
  * 主入口
  * ================================================================ */
 void app_main(void)
 {
-    ESP_LOGI(TAG, "Week 1: Sensor Data + Web Dashboard");
+    ESP_LOGI(TAG, "Week 1-2: Sensor Data + Remote Collect");
     ESP_LOGI(TAG, "ESP32-S3-EYE v2.2 / SUB v1.1");
 
     /* NVS */
@@ -192,6 +333,18 @@ void app_main(void)
         ESP_LOGW(TAG, "QMA6100P not found");
     }
 
+    /* Camera (OV2640) init — Week 3 */
+    camera_handle_t cam_handle = NULL;
+    {
+        esp_err_t cam_ret = camera_app_init(&cam_handle);
+        if (cam_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Camera init failed: 0x%X — camera features disabled", cam_ret);
+            cam_handle = NULL;
+        } else {
+            ESP_LOGI(TAG, "Camera (OV2640) ready ✓");
+        }
+    }
+
     /* ADC 按键 */
     adc_button_handle_t btn_handle = NULL;
     ret = adc_button_init(&btn_handle);
@@ -202,20 +355,205 @@ void app_main(void)
     ret = wifi_app_init();
     if (ret != ESP_OK) ESP_LOGE(TAG, "Wi-Fi FAILED! Check SSID/password.");
 
-    /* HTTP 服务器 */
+    /* HTTP 服务器 — Week 2: 加入采集任务上下文 */
+    static collect_task_t collect_task = {0};
+    collect_task.auto_refresh = true;              /* 默认开启周期上报 */
+    collect_task.status = COLLECT_IDLE;
+    snprintf(collect_task.last.source, sizeof(collect_task.last.source),
+             "%s", OBS_SOURCE_NONE);
     sensor_ctx_t ctx = {
-        .imu = imu, .btn = btn_handle, .device_id = DEVICE_ID,
+        .imu = imu, .btn = btn_handle,
+        .device_id = DEVICE_ID, .sensor_src = SENSOR_SRC,
+        .task = &collect_task,
+        .cam = cam_handle,
     };
     http_server_start(&ctx);
 
-    ESP_LOGI(TAG, "READY! Open http://%s/ in browser", wifi_app_get_ip());
+    /* Camera auto-capture defaults */
+    collect_task.auto_cap.enabled = false;
+    collect_task.auto_cap.interval_s = 10;
+    collect_task.auto_cap.batch_limit = 100;
+    collect_task.capture_camera = false;
 
-    /* 主循环 */
+    ESP_LOGI(TAG, "READY! Open http://%s/ in browser (Week 2: +collect)", wifi_app_get_ip());
+
+    /* 主循环 — Week 1 周期上报 + Week 2 采集任务处理 */
     qma6100p_acce_value_t accel;
     int diag_cnt = 0;
+    bool cadence_was_on = collect_task.auto_refresh;
     while (1) {
-        /* ---- DIAG: read status registers every cycle ---- */
-        if (imu) {
+        int64_t now_us = esp_timer_get_time();
+
+        /* ---- 周期上报开关变化留证（串口可核对） ---- */
+        if (collect_task.auto_refresh != cadence_was_on) {
+            cadence_was_on = collect_task.auto_refresh;
+            ESP_LOGI(TAG, "[CADENCE] 周期上报 %s",
+                     cadence_was_on ? "已恢复：板端恢复每 1s 采样"
+                                    : "已暂停：板端停止周期采样，命令通道保持可用");
+        }
+
+        /* ---- 完成条件判定：受理后 COLLECT_TIMEOUT_MS 内未拿到设备结果 ----
+         * 超时只说明"暂未收到设备结果"，不代表硬件故障；
+         * 超时后本次请求关闭（不再接受迟到结果），旧观测不会被改标为本次完成。*/
+        if ((collect_task.status == COLLECT_SUBMITTED ||
+             collect_task.status == COLLECT_RECEIVED) &&
+            collect_task.deadline_us > 0 && now_us > collect_task.deadline_us) {
+            ESP_LOGW(TAG, "[DIAG-TASK] TIMEOUT req=%s status=%d", collect_task.request_id, (int)collect_task.status);
+            ESP_LOGW(TAG, "[DIAG-TASK] TIMEOUT deadline=%lld now=%lld", (long long)collect_task.deadline_us, (long long)now_us);
+            collect_task.status = COLLECT_TIMEOUT;
+            collect_task.completed_at_us = now_us;
+            ESP_LOGW(TAG, "[DIAG-TASK] TIMEOUT: %s — 未收到设备结果（不等于硬件故障）",
+                     collect_task.request_id);
+            push_record(&collect_task);
+        }
+
+        /* ---- Week 2: 处理手动采集任务 ---- */
+        if (collect_task.status == COLLECT_SUBMITTED) {
+            /* 设备已接收指令：登记回执时间，状态进入 RECEIVED */
+            ESP_LOGI(TAG, "[DIAG-TASK] SUBMITTED→RECEIVED: req=%s task_seq=%d", collect_task.request_id, collect_task.task_seq);
+            collect_task.received_at_us = esp_timer_get_time();
+            collect_task.status = COLLECT_RECEIVED;
+            ESP_LOGI(TAG, "[DIAG-TASK] Received: %s (设备已接收，开始执行)",
+                     collect_task.request_id);
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+
+        if (collect_task.status == COLLECT_RECEIVED) {
+            ESP_LOGI(TAG, "[DIAG-TASK] RECEIVED→EXECUTE: req=%s capture_camera=%d", collect_task.request_id, (int)collect_task.capture_camera);
+            /* 执行一次真实传感器读取（这就是"新采集"） */
+            char btn_name[16] = "NONE";
+            if (btn_handle)
+                snprintf(btn_name, sizeof(btn_name), "%s",
+                         adc_button_name(adc_button_read(btn_handle)));
+
+            int x = 0, y = 0, z = 0;
+            bool read_ok = false;
+            if (imu && qma6100p_get_acce(imu, &accel) == ESP_OK) {
+                x = (int)(accel.acce_x * 1000);
+                y = (int)(accel.acce_y * 1000);
+                z = (int)(accel.acce_z * 1000);
+                read_ok = true;
+            }
+            collect_task.accel_x = x;
+            collect_task.accel_y = y;
+            collect_task.accel_z = z;
+            snprintf(collect_task.button, sizeof(collect_task.button), "%s", btn_name);
+            collect_task.completed_at_us = esp_timer_get_time();
+
+            if (read_ok) {
+                collect_task.status = COLLECT_COMPLETED;
+                ESP_LOGI(TAG, "[DIAG-TASK] RECEIVED→COMPLETED: req=%s sensor OK", collect_task.request_id);
+                /* 只有真实读取成功才写入"已存观测"，并与本次请求号关联 */
+                save_observation(&collect_task, OBS_SOURCE_LIVE,
+                                 collect_task.request_id, x, y, z, btn_name);
+                ESP_LOGI(TAG, "[DIAG-TASK] Completed: %s X=%d Y=%d Z=%d → %s (seq=%d)",
+                         collect_task.request_id, x, y, z,
+                         collect_task.last.record_id, collect_task.last.seq);
+            } else {
+                collect_task.status = COLLECT_FAILED;
+                ESP_LOGW(TAG, "[DIAG-TASK] RECEIVED→FAILED: %s", collect_task.request_id);
+            }
+            push_record(&collect_task);
+
+            /* ---- Week 3: Camera capture (if requested) ---- */
+            if (collect_task.capture_camera && cam_handle) {
+                ESP_LOGI(TAG, "[DIAG-CAM] >>> START capture_camera=true req=%s", collect_task.request_id);
+                /* ---- heap before capture ---- */
+                ESP_LOGI(TAG, "[DIAG-HEAP] before cap: free_8bit=%u free_spiram=%u",
+                         heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                         heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+                /* give I2C bus time to recover from sensor read */
+                vTaskDelay(pdMS_TO_TICKS(150));
+                camera_frame_t frame = {0};
+                ESP_LOGI(TAG, "[DIAG-CAM] calling camera_app_capture for %s", collect_task.request_id);
+                esp_err_t cap_ret = camera_app_capture(cam_handle, &frame);
+                if (cap_ret == ESP_OK) {
+                    ESP_LOGI(TAG, "[DIAG-CAM] camera_app_capture OK: %d bytes, calling save_capture_slot", (int)frame.len);
+                    save_capture_slot(&collect_task, &frame, "manual");
+                    ESP_LOGI(TAG, "[DIAG-CAM] save_capture_slot returned, releasing frame");
+                    camera_app_release_frame(cam_handle, &frame);
+                    ESP_LOGI(TAG, "[DIAG-CAM] Camera captured OK: %d bytes", (int)frame.len);
+                } else {
+                    ESP_LOGW(TAG, "[DIAG-CAM] camera_app_capture FAILED ret=0x%X for %s", cap_ret, collect_task.request_id);
+                }
+                ESP_LOGI(TAG, "[DIAG-CAM] clearing capture_camera flag");
+                collect_task.capture_camera = false;
+                ESP_LOGI(TAG, "[DIAG-CAM] <<< DONE capture_camera now=%d", (int)collect_task.capture_camera);
+                /* ---- heap after capture ---- */
+                ESP_LOGI(TAG, "[DIAG-HEAP] after cap: free_8bit=%u free_spiram=%u",
+                         heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                         heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+            } else if (collect_task.capture_camera && !cam_handle) {
+                ESP_LOGW(TAG, "[DIAG-CAM] SKIP: capture_camera=true but cam_handle=NULL");
+                collect_task.capture_camera = false;
+            }
+            /* 任务完成，复位状态 */
+            ESP_LOGI(TAG, "[DIAG-TASK] COMPLETED/FAILED→IDLE: req=%s", collect_task.request_id);
+            collect_task.status = COLLECT_IDLE;
+            ESP_LOGI(TAG, "[DIAG-TASK] status now IDLE, deadline=%lld", (long long)collect_task.deadline_us);
+        }
+
+        /* ---- Week 1 保留：周期上报（板端每 1s 采样一次并保存观测）----
+         * 暂停后不再更新已存观测，旧观测保留原采集时间（数据陈旧 ≠ 硬件故障）。*/
+        if (collect_task.auto_refresh &&
+            collect_task.status != COLLECT_SUBMITTED &&
+            collect_task.status != COLLECT_RECEIVED) {
+            if (imu && qma6100p_get_acce(imu, &accel) == ESP_OK) {
+                char btn_name[16] = "NONE";
+                if (btn_handle)
+                    snprintf(btn_name, sizeof(btn_name), "%s",
+                             adc_button_name(adc_button_read(btn_handle)));
+                int x = (int)(accel.acce_x * 1000);
+                int y = (int)(accel.acce_y * 1000);
+                int z = (int)(accel.acce_z * 1000);
+                save_observation(&collect_task, OBS_SOURCE_CADENCE,
+                                 OBS_REQ_CADENCE, x, y, z, btn_name);
+                collect_task.poll_count++;
+                ESP_LOGI(TAG, "IMU(cadence #%d %s): X=%6d Y=%6d Z=%6d mg",
+                         collect_task.poll_count, collect_task.last.record_id,
+                         x, y, z);
+            }
+        }
+
+        /* ---- Week 3: 定时自动抓拍 ---- */
+        if (collect_task.auto_cap.enabled && cam_handle &&
+            !collect_task.capture_camera &&
+            collect_task.status == COLLECT_IDLE) {
+            int64_t now = esp_timer_get_time();
+            if (collect_task.auto_cap.last_capture_us == 0 ||
+                (now - collect_task.auto_cap.last_capture_us) >=
+                collect_task.auto_cap.interval_s * 1000000LL) {
+                bool limit_ok = (collect_task.auto_cap.batch_limit == 0 ||
+                    collect_task.auto_cap.batch_count <
+                    collect_task.auto_cap.batch_limit);
+                if (limit_ok) {
+                    camera_frame_t frame = {0};
+                    if (camera_app_capture(cam_handle, &frame) == ESP_OK) {
+                        char saved_req[32];
+                        strncpy(saved_req, collect_task.request_id,
+                                sizeof(saved_req) - 1);
+                        int saved_seq = collect_task.task_seq;
+                        snprintf(collect_task.request_id,
+                                 sizeof(collect_task.request_id),
+                                 "acap-%d", collect_task.auto_cap.batch_count + 1);
+                        collect_task.task_seq = collect_task.auto_cap.batch_count + 1;
+                        save_capture_slot(&collect_task, &frame, "auto");
+                        strncpy(collect_task.request_id, saved_req,
+                                sizeof(collect_task.request_id) - 1);
+                        collect_task.task_seq = saved_seq;
+                        camera_app_release_frame(cam_handle, &frame);
+                        collect_task.auto_cap.batch_count++;
+                        ESP_LOGI(TAG, "[AUTO-CAP] Captured #%d (%s)",
+                                 collect_task.auto_cap.batch_count,
+                                 collect_task.last_cap_request_id);
+                    }
+                }
+                collect_task.auto_cap.last_capture_us = now;
+            }
+        }
+
+        /* ---- DIAG: read status registers (reduced frequency) ---- */
+        if (imu && diag_cnt % 10 == 0) {
             uint8_t sts[6];
             qma6100p_read_reg(imu, 0x09, &sts[0], 1);
             qma6100p_read_reg(imu, 0x0A, &sts[1], 1);
@@ -223,30 +561,19 @@ void app_main(void)
             qma6100p_read_reg(imu, 0x10, &sts[3], 1);
             qma6100p_read_reg(imu, 0x11, &sts[4], 1);
             qma6100p_read_reg(imu, 0x0F, &sts[5], 1);
-
-            uint8_t raw6[6];
-            qma6100p_read_reg(imu, 0x01, raw6, 6);
-
-            ESP_LOGI(TAG, "[DIAG #%d] RAW: %02X %02X %02X %02X %02X %02X  NEWDATA=%d/%d/%d",
-                     diag_cnt, raw6[0], raw6[1], raw6[2], raw6[3], raw6[4], raw6[5],
-                     raw6[0] & 1, raw6[2] & 1, raw6[4] & 1);
-            ESP_LOGI(TAG, "[DIAG #%d] STS: 09=%02X 0A=%02X 0E=%02X 10=%02X 11=%02X(bit7=%d) 0F=%02X",
-                     diag_cnt, sts[0], sts[1], sts[2], sts[3], sts[4],
-                     (sts[4] >> 7) & 1, sts[5]);
-            diag_cnt++;
+            ESP_LOGI(TAG, "[DIAG #%d] STS: 10=%02X 11=%02X(bit7=%d) 0F=%02X",
+                     diag_cnt, sts[3], sts[4], (sts[4] >> 7) & 1, sts[5]);
         }
 
-        if (imu && qma6100p_get_acce(imu, &accel) == ESP_OK) {
-            ESP_LOGI(TAG, "IMU: X=%6d Y=%6d Z=%6d mg",
-                     (int)(accel.acce_x * 1000),
-                     (int)(accel.acce_y * 1000),
-                     (int)(accel.acce_z * 1000));
-        }
+        /* 说明：Week 1 的每秒 IMU 日志已并入上面的"周期上报"分支，
+         * 避免重复读取传感器；周期上报暂停时板端不再采样。 */
         if (btn_handle) {
             adc_button_t btn = adc_button_read(btn_handle);
             if (btn != BTN_NONE)
                 ESP_LOGI(TAG, "BTN: %s", adc_button_name(btn));
         }
+
+        diag_cnt++;
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
