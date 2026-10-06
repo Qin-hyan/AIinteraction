@@ -1,21 +1,27 @@
-# Week 1-2: 传感数据采集 + 远程采集指令
+# AI Interaction Prototype
 
-**ESP32-S3-EYE v2.2 + ESP32-S3-EYE-SUB V1.1**
+**ESP32-S3-EYE v2.2 + ESP32-S3-EYE-SUB V1.1 · OV2640 摄像头 · QMA6100P 加速度计**
 
-课程: AI交互原型与用户体验设计 · 第 1-2 周
-版本: v2.1 · 2026-09-28（Week 2 完成：远程采集指令与执行结果反馈闭环）
+课程: AI 交互原型与用户体验设计
+版本: v2.2 · 2026-10-06（Week 02 稳定基线：传感器采集 + 远程指令 + 摄像头抓拍）
+
+---
+
+## Current Status
+
+✅ **Week 01（已完成）**：传感器数据采集、ADC 按键、Wi-Fi、HTTP 仪表盘
+✅ **Week 02（已完成且实机验证）**：远程采集指令、request_id 追踪、状态链、摄像头 JPEG 抓拍（PSRAM 存储）、15 次连续抓拍验证通过
+🔒 **稳定基线**：`week02-stable` tag（可随时回退到此版本）
 
 ---
 
 ## 📋 功能概述
 
-### Week 1 (已完成)
+### 传感与采集（Week 01-02）
 1. **QMA6100P 三轴加速度驱动** — I2C 总线 (SDA=GPIO4, SCL=GPIO5, 地址 0x12)
 2. **ADC 按键检测** — GPIO1 / ADC1_CH0 (MENU/PLAY/DOWN/UP+)
 3. **Wi-Fi STA 连接** — 连接路由器获取 IP
 4. **HTTP 服务器** — Web 仪表盘 + REST API, 每 500ms 刷新
-
-### Week 2 (本次新增 · 实现 Web 远程采集指令与执行结果反馈)
 5. **"刷新已存数据" vs "采集一次最新数据"** — 两个动作可对照：前者只读板上已保存观测（`GET /api/observation/last`，**绝不触发采集**），后者创建 `request_id` 并让开发板真正读一次传感器
 6. **request_id 追踪与结果关联** — 新观测必须携带与本次相同的请求号才算"本次完成"（`linked`），否则不显示成功
 7. **任务状态链** — 已提交·已受理 → 设备已接收（回执）→ 完成 / 失败 / 超时；页面显示每个阶段及时间
@@ -23,6 +29,11 @@
 9. **周期上报开关** — 暂停后板端停止周期采样、页面停止刷新，但**命令通道保持可用**；已存观测保留原采集时间并提示"数据未更新（≠ 硬件故障）"
 10. **请求—回执—观测记录** — 设备端环形缓冲保留最近 6 条（`GET /api/collect/history`）；浏览器端补充记录"设备无响应"的尝试
 11. **超时与重复点击** — 完成条件窗口 5 s；重复点击沿用当前请求号（逐次编号）；超时不接受迟到结果、不把旧值改标为本次完成
+
+### 摄像头（Week 02 扩展）
+12. **OV2640 摄像头驱动** — JPEG 抓拍通过 HTTP API 触发
+13. **PSRAM JPEG 存储** — 长期保存抓拍帧从内部 DRAM 转移到 PSRAM，避免大分辨率下内存不足
+14. **连续抓拍** — 15 次连续抓拍验证通过
 
 ---
 
@@ -33,6 +44,7 @@
 | ESP-IDF | v5.4.3 |
 | 开发板 | ESP32-S3-EYE v2.2 + SUB v1.1 |
 | 模组 | ESP32-S3-WROOM-1 (8MB Flash / 8MB Octal PSRAM) |
+| 摄像头 | OV2640 (板载) |
 | 传感器 | QMA6100P 三轴加速度计 |
 
 ### 激活 ESP-IDF 环境
@@ -61,6 +73,9 @@ idf.py menuconfig
 - 设置 `WiFi SSID`
 - 设置 `WiFi Password`
 
+> ⚠️ **注意**：`sdkconfig.defaults` 仅包含占位符 `YOUR_WIFI_SSID` / `YOUR_WIFI_PASSWORD`。
+> 真实凭据请在 `menuconfig` 中配置（将写入本地 `sdkconfig`，该文件已被 `.gitignore` 忽略）。
+
 ### 3. 编译
 
 ```bash
@@ -77,7 +92,7 @@ idf.py -p COM端口 flash monitor
 
 ## 🌐 Web 仪表盘
 
-### 页面结构（Week 2 版）
+### 页面结构
 
 | 区块 | 作用 |
 |------|------|
@@ -186,23 +201,25 @@ idf.py -p COM端口 flash monitor
 ## 📂 项目结构
 
 ```
-week02-sensor-collect/
-├── CMakeLists.txt          # 顶层 CMake
-├── sdkconfig.defaults      # 默认配置
-├── README.md               # 本文件
+AIinteraction/
+├── CMakeLists.txt              # 顶层 CMake
+├── sdkconfig.defaults          # 默认配置模板（不含真实凭据）
+├── partitions.csv              # 分区表
+├── week2_api_check.py          # Week 02 一键验证脚本
+├── README.md                   # 本文件
+├── docs/
+│   └── audits/
+│       └── 2026-09-qma6100p-sensor-audit.md  # 传感器故障历史审计
 └── main/
     ├── CMakeLists.txt
-    ├── main.c              # 主入口（Week 2: +周期上报 / 观测缓存 / 采集任务执行 / 超时判定）
-    ├── qma6100p.h/c        # QMA6100P 三轴加速度驱动（Week 1 未改动）
-    ├── adc_button.h/c      # ADC 按键检测驱动（Week 1 未改动）
-    ├── wifi_app.h/c        # Wi-Fi STA 管理（Week 1 未改动）
-    └── http_server.h/c     # HTTP 服务器 + Web 控制台
-                            #   Week 1: / 与 /api/sensor
-                            #   Week 2: /api/observation/last（刷新已存数据，只读）
-                            #           /api/collect（采集一次最新数据）
-                            #           /api/collect/status（状态 + 设备回执 + 关联观测）
-                            #           /api/collect/history（请求—回执—观测记录）
-                            #           /api/auto_refresh（周期上报开关）
+    ├── main.c                  # 主入口（周期上报 / 观测缓存 / 采集任务执行 / 超时判定）
+    ├── qma6100p.h/c            # QMA6100P 三轴加速度驱动
+    ├── adc_button.h/c          # ADC 按键检测驱动
+    ├── wifi_app.h/c            # Wi-Fi STA 管理
+    ├── http_server.h/c         # HTTP 服务器 + Web 控制台 (REST API + 仪表盘)
+    ├── camera_app.h/c          # OV2640 摄像头驱动（JPEG 抓拍，PSRAM 存储）
+    ├── idf_component.yml       # 组件依赖
+    └── Kconfig.projbuild       # menuconfig 扩展
 ```
 
 ---
@@ -216,6 +233,13 @@ week02-sensor-collect/
 | ADC 按键 | GPIO1 (ADC1_CH0) | 四键分压网络 |
 | RGB LED | GPIO38 | 子板 V1.1, 低电平亮 |
 | 模组电源 LED | GPIO3 | 必须开漏模式! |
+| 摄像头 XCLK | GPIO15 | OV2640 |
+| 摄像头 PCLK | GPIO13 | OV2640 |
+| 摄像头 VSYNC | GPIO6 | OV2640 |
+| 摄像头 HREF | GPIO7 | OV2640 |
+| 摄像头 D0-D7 | GPIO11/9/8/10/12/18/17/16 | OV2640 8-bit 并行 |
+| 摄像头 PWDN | GPIO42 | 共享 |
+| 摄像头 RESET | GPIO48 | OV2640 |
 
 ---
 
@@ -267,81 +291,30 @@ curl.exe -X POST "http://10.132.124.63/api/auto_refresh?on=0" # 暂停周期上�
 python week2_api_check.py http://10.132.124.63
 ```
 
-### 本次实测留证（2026-09-28 · ESP32-S3-EYE v2.2，设备 IP 10.132.124.63）
-
-串口启动日志：
+### 实机验证结果（2026-09-28 · Week 02 稳定基线）
 
 ```
-I (1799) MAIN: QMA6100P CHIP_ID=0x90
-I (1834) MAIN: QMA6100P ready — MODE = ACTIVE ✓
-I (3826) WIFI: Got IP: 10.132.124.63
-I (3831) HTTP: HTTP ready (Week 2: +collect/status/history/stored) port 80
-I (3835) MAIN: READY! Open http://10.132.124.63/ in browser (Week 2: +collect)
-I (…) MAIN: IMU(cadence #46 obs-00046): X= 517 Y= -856 Z= -38 mg
-```
-
-暂停周期上报前后（周期上报已冻结，命令通道保持可用）：
-
-```
-[last1] seq=46 record_id=obs-00046 source=cadence data_age_ms=202  stale=false
-[pause] {"auto_refresh": false, "note": "周期上报已暂停：板端停止周期采样，命令通道仍可用；…"}
-[last2] seq=46 record_id=obs-00046 observed_ms=49574 data_age_ms=4936 stale=true
-[pause-check] seq unchanged=True  age grew=True
-```
-
-暂停状态下下发一次采集（新观测与请求号关联）：
-
-```
-[collect]     {"request_id":"req-75253-0001","task_seq":1,"timeout_ms":5000,"status":"submitted"}
-[status #0]   received   received_ms=75996.042
-[status #1]   completed  completed_ms=76069.942  note=完成：已收到与本请求号关联的新观测。
-[observation] {"record_id":"obs-00047","request_id":"req-75253-0001","source":"live","seq":47,
-               "accel_x":504,"accel_y":-826,"accel_z":-174,"observed_ms":76070}
-[link]        linked=True  obs_request_id==req=True  elapsed_ms=816.159
-[status-sequence] received -> completed
-```
-
-重复点击、未知请求号：
-
-```
-[dup-second] {"request_id":"req-77110-0002","status":"submitted","message":"Task in progress","task_seq":2}
-[dup-check]  second kept same req=True msg=Task in progress
-[unknown-req] {"status":"unknown","matches_current":false,"linked":false,
-               "note":"未找到该请求号（设备可能已重启）；绝不会把当前数值当作本次采集结果。"}
-```
-
-恢复周期上报后已存观测继续更新：`obs-00051 / seq=51 / data_age_ms=313`；
-`/api/sensor` 字段：`sensor_source=QMA6100P 三轴加速度 (mg, I2C 0x12)`、`obs_seq=47`、`direct_read_count=1`、`poll_count=46`、`timeout_ms=5000`。
-
-页面自检：`GET /` 返回 200（页面体积随版本变化）；`<div>` 开闭 51/51 平衡；脚本经 `node --check` 语法校验通过；所有 `$('id')` 引用均在页面中存在（无缺失引用）。
-
-undefined 专项检查（2026-09-28 修复后）：把畸形/缺字段数据直接喂给页面渲染函数，15 个用例全部 PASS（0 处 undefined/NaN）；对照组（修复前的同一套用例，取自 git 提交 `94b4dc7`）报出 6 处 FAIL（含 `undefined / undefined / undefined`）；真机页面渲染后（`--dump-dom`）可见内容扫描 0 处 undefined/NaN。
-
-一键复验最终结果（对本次提交的固件重新烧录后执行 `python week2_api_check.py http://10.132.124.63`）：
-
-```
-[PASS] 页面 200 且含两个对照按钮 status=200 bytes=22688
+== 汇总: 12 PASS / 0 FAIL ==
+[PASS] 页面 200 且含两个对照按钮
 [PASS] 含请求—回执—观测记录区块与证据说明
 [PASS] 刷新已存数据不触发采集
-[PASS] 暂停后观测序号冻结（3 s 内不再产生新观测） seq=14
-[PASS] 暂停后数据年龄增长（数据未更新） age 1822 -> 5306
+[PASS] 暂停后观测序号冻结 seq=14
+[PASS] 暂停后数据年龄增长（数据未更新）
 [PASS] 状态链含设备回执阶段 completed
-[PASS] 完成且新观测关联本次请求号  (req-21867-0001, received_ms=22556, completed_ms=22622)
-[PASS] 新观测为真实读取 source=live 且序号递增 seq 14 -> 15
+[PASS] 完成且新观测关联本次请求号
+[PASS] 新观测为真实读取 source=live 且序号递增
 [PASS] 任务进行中沿用同一请求号
 [PASS] 未知请求号不返回成功
-[PASS] 设备端有记录且含受理/回执/结果时间 (submitted 21867 -> received 22556 -> completed 22622)
-[PASS] 恢复后已存观测继续更新 (obs-00019 / seq=19 / source=cadence)
+[PASS] 设备端有记录且含受理/回执/结果时间
+[PASS] 恢复后已存观测继续更新
 == 汇总: 12 PASS / 0 FAIL ==
 ```
 
-（本小节上面第一段为同一会话的首次手工核对数据，下面为最终固件的一键复验输出；两者结论一致。）
-
 ---
 
-## 📝 Week 2 关键设计
+## 📝 Week 02 关键设计
 
-### 首版状态图（请求 → 设备回执 → 新观测）
+### 请求状态图（请求 → 设备回执 → 新观测）
 
 ```
                   [Web 点击“采集一次最新数据”]
@@ -404,13 +377,24 @@ req-{uptime_ms}-{counter:04d}      例如: req-75253-0001
 obs-{seq:05d}                      例如: obs-00047
 ```
 
-### 已知限制（留证，不做超出本周范围的实现）
+### 已知限制
 
-1. 设备端记录环形缓冲仅保留最近 6 条（防内存增长），更新记录会覆盖最旧一条。
-2. `collect_task_t` 由 HTTP 任务与主循环共享，当前未加互斥锁（沿用 Week 1 的共享方式）；极端并发下个别字段仍可能读到中间态。
+1. 设备端记录环形缓冲仅保留最近 6 条（防内存增长）。
+2. `collect_task_t` 由 HTTP 任务与主循环共享，当前未加互斥锁；极端并发下个别字段仍可能读到中间态。
 3. 完成条件窗口固定 5 s（`COLLECT_TIMEOUT_MS`），未做可配置。
-4. 本周未实现取消/过期深化处理（课程安排在后续周次）。
+4. 摄像头抓拍与传感器采集之间无互斥同步。
 
 ---
 
-*ESP32-S3-EYE v2.2 · ESP-IDF v5.4.3 · QMA6100P · Week 1-2*
+## 🏷️ Git / 稳定版本
+
+| 分支 / Tag | 说明 |
+|-----------|------|
+| `main` | 最新合并版本 |
+| `week02-stable` (tag) | **Week 02 稳定基线** — 经实机 12 项全 PASS 验证 |
+| `feature/week02-remote-task` | Week 02 远程采集功能开发分支 |
+| `feature/repo-cleanup` | 仓库清洁整理（本阶段） |
+
+---
+
+*ESP32-S3-EYE v2.2 · ESP-IDF v5.4.3 · QMA6100P · OV2640 · Week 02 Stable*

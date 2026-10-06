@@ -31,3 +31,17 @@ partition_table/
 # Dependencies
 esp-idf/
 tools/
+
+# PlatformIO MCP workspace (agent-generated)
+.pio-mcp-workspace/
+
+# Agent temporary scripts and debug artifacts
+_*.py
+_*.ps1
+_*.bat
+_*.txt
+_*.html
+_*.c
+
+# Serial / diagnostic logs
+*.log
