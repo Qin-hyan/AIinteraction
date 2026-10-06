@@ -29,6 +29,7 @@
 #include "wifi_app.h"
 #include "http_server.h"
 #include "camera_app.h"
+#include "esp_heap_caps.h"
 
 static const char *TAG = "MAIN";
 
@@ -214,17 +215,18 @@ static void save_capture_slot(collect_task_t *t, camera_frame_t *f,
     if (s->jpeg_buf) {
         ESP_LOGI(TAG, "[DIAG-CAP] freeing old jpeg_buf at %p (%zu bytes)",
                  (void*)s->jpeg_buf, s->jpeg_len);
-        free(s->jpeg_buf);
+        heap_caps_free(s->jpeg_buf);
         s->jpeg_buf = NULL;
     }
 
-    /* 拷贝 JPEG 数据 */
-    s->jpeg_buf = (uint8_t *)malloc(f->len);
+    /* 拷贝 JPEG 数据 (PSRAM) */
+    s->jpeg_buf = (uint8_t *)heap_caps_malloc(f->len,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s->jpeg_buf) {
         ESP_LOGE(TAG, "[DIAG-CAP] OOM saving capture slot (needed %zu bytes)", f->len);
         return;
     }
-    ESP_LOGI(TAG, "[DIAG-CAP] malloc OK: new jpeg_buf at %p", (void*)s->jpeg_buf);
+    ESP_LOGI(TAG, "[DIAG-CAP] heap_caps_malloc OK: new jpeg_buf at %p", (void*)s->jpeg_buf);
     memcpy(s->jpeg_buf, f->buf, f->len);
     s->jpeg_len = f->len;
     s->width    = f->width;
@@ -456,6 +458,10 @@ void app_main(void)
             /* ---- Week 3: Camera capture (if requested) ---- */
             if (collect_task.capture_camera && cam_handle) {
                 ESP_LOGI(TAG, "[DIAG-CAM] >>> START capture_camera=true req=%s", collect_task.request_id);
+                /* ---- heap before capture ---- */
+                ESP_LOGI(TAG, "[DIAG-HEAP] before cap: free_8bit=%u free_spiram=%u",
+                         heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                         heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
                 /* give I2C bus time to recover from sensor read */
                 vTaskDelay(pdMS_TO_TICKS(150));
                 camera_frame_t frame = {0};
@@ -473,6 +479,10 @@ void app_main(void)
                 ESP_LOGI(TAG, "[DIAG-CAM] clearing capture_camera flag");
                 collect_task.capture_camera = false;
                 ESP_LOGI(TAG, "[DIAG-CAM] <<< DONE capture_camera now=%d", (int)collect_task.capture_camera);
+                /* ---- heap after capture ---- */
+                ESP_LOGI(TAG, "[DIAG-HEAP] after cap: free_8bit=%u free_spiram=%u",
+                         heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                         heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
             } else if (collect_task.capture_camera && !cam_handle) {
                 ESP_LOGW(TAG, "[DIAG-CAM] SKIP: capture_camera=true but cam_handle=NULL");
                 collect_task.capture_camera = false;
