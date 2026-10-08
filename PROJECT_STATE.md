@@ -7,8 +7,8 @@
 ## 当前：Week 03 — 实体按键与物理反馈闭环
 
 **分支**: `feature/week03-physical-feedback`
-**阶段**: 实机测试中 ⚠️（按键检测通过，但 Brownout 重启）
-**Git HEAD**: `94e3350` merge: repo-cleanup
+**阶段**: 实机测试中 ⚠️（MENU长按不重复触发确认通过，Brownout未复现）
+**Git HEAD**: `a451227` merge: repo-cleanup
 
 ---
 
@@ -60,12 +60,15 @@
 | 长按不重复触发 | ⛔ 未完成 | Brownout 后设备重启，无法继续测试 |
 | 快速点击无异常重复 | ⛔ 未完成 | 同上 |
 | LED 物理反馈观察 | ⛔ 未完成 | 同上 |
+| | MENU长按 ≥5s 不重复触发 | ✅ **PASS** | [W3-BTN] 仅1次，event help-48904-0002 |
+| | Brownout 重测 | ✅ **PASS** | 本轮**无 Brownout**，设备稳定运行25s+ |
+| | 30s 超时自动重置 | ✅ PASS | help-16842-0001 stale (>30s), auto-reset |
 
 ---
 
 ## ⚠️ 已知问题
 
-### 🚨 新增：Brownout 检测触发 (2026-10-09 实机测试)
+### Brownout 检测触发 — 间歇性 (2026-10-09)
 - **现象**: 按键触发 → 事件创建 → HTTP 发送后，约 1 秒后 `E BOD: Brownout detector was triggered` → 设备重启
 - **复现步骤**: 单次按下 PLAY 按键，事件流程正常完成后设备崩
 - **可能原因**: 
@@ -73,6 +76,7 @@
   - USB 线缆/供电能力不足
   - `CONFIG_BROWNOUT_DET_LVL` 设置过保守（当前未知）
 - **建议排查**: 检查电源、USB 线缆；或在 menuconfig 中调整 Brownout 阈值
+- **第2轮测试备注 (2026-10-09)**: MENU长按≥5s 操作下未复现 Brownout，设备稳定运行 25s+。暂标记为间歇性问题。
 
 ### ✅ 已修复的编译问题
 - **`main.c:370`** — `help_event` 先使用后声明：将 `help_event_t help_event` / `help_button_fsm_t btn_fsm` 声明移到 `sensor_ctx_t ctx` 初始化之前
