@@ -14,6 +14,7 @@
 - `help_event.c` — 事件生命周期、按键去抖 FSM、LED 反馈
 - `main.c` 主循环集成：按键去抖 + 事件触发 + 网络检测 + 超时保护 + LED 更新
 - `http_server.h` sensor_ctx_t 扩展 help 字段
+- `http_server.c` — 三个 HTTP API 端点（`GET /api/help/status`、`POST /api/help/confirm`、`POST /api/help/cancel`）
 - `main/CMakeLists.txt` 注册 help_event.c
 
 ## ✅ 已解决
@@ -26,6 +27,5 @@
 
 ## 待完成
 
-- HTTP API 端点（Web 接收/确认/取消教学测试消息）
-- 完整闭环链路测试
-- 实机验证
+- 完整闭环链路测试（按键 → 去抖 → event_id → LED 反馈 → HTTP 发送 → 远端确认/取消 → 物理反馈更新）
+- 实机验证（按键去抖、LED 反馈、HTTP 远端确认/取消）
