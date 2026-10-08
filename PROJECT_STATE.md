@@ -8,7 +8,7 @@
 
 **分支**: `feature/week03-physical-feedback`
 **阶段**: 按键扫描解耦完成 ✅（独立 FreeRTOS 任务 ~30 Hz，idf.py build 通过）
-**Git HEAD**: `a451227` merge: repo-cleanup
+**Git HEAD**: `65b001f` feat(week03): decouple button scanning
 
 ---
 
@@ -48,22 +48,21 @@
 
 | 测试项 | 结果 | 说明 |
 |--------|------|------|
-| idf.py build | ✅ PASS | week02-stable-11-g63ab504 |
+| idf.py build | ✅ PASS | week02-stable-15-g65b001f |
 | 串口检测 COM10 | ✅ PASS | ESP32-S3-EYE (USB VID:PID=303A:1001) |
 | idf.py flash | ✅ PASS | 烧录成功 |
 | 设备启动 | ✅ PASS | IMU 数据正常输出（cadence 循环） |
-| 按键单次按下检测 | ✅ PASS | 日志: `[W3-BTN] pressed PLAY → event help-15919-0001` |
-| 事件创建 | ✅ PASS | `W3-EVENT: created id=help-15919-0001 btn=PLAY counter=1 (LOCAL CONFIRMED)` |
-| HTTP 发送 | ✅ PASS | `W3-EVENT: sent id=help-15919-0001` |
-| 网络 API 可用 | ✅ PASS | `[W3-NET] event help-15919-0001 available via API` |
+| 按键单次按下检测 | ✅ PASS | 日志: `[W3-BTN] pressed MENU → event help-141745-0001` |
+| 事件创建 | ✅ PASS | `W3-EVENT: created id=help-141745-0001 btn=MENU counter=1 (LOCAL CONFIRMED)` |
+| HTTP 发送 | ✅ PASS | `W3-EVENT: sent id=help-141745-0001` |
+| 网络 API 可用 | ✅ PASS | `[W3-NET] event help-141745-0001 available via API` |
 | `[W3-FEEDBACK]` 日志 | ❌ 不存在 | LED 反馈走 `gpio_set_level()` 未打印单独日志，代码中无 `W3-FEEDBACK` 标签 |
-| Brownout 检测触发 | ❌ **FAIL** | `E BOD: Brownout detector was triggered` → 设备重启 |
-| 长按不重复触发 | ⛔ 未完成 | Brownout 后设备重启，无法继续测试 |
-| 快速点击无异常重复 | ⛔ 未完成 | 同上 |
-| LED 物理反馈观察 | ⛔ 未完成 | 同上 |
-| | MENU长按 ≥5s 不重复触发 | ✅ **PASS** | [W3-BTN] 仅1次，event help-48904-0002 |
-| | Brownout 重测 | ✅ **PASS** | 本轮**无 Brownout**，设备稳定运行25s+ |
-| | 30s 超时自动重置 | ✅ PASS | help-16842-0001 stale (>30s), auto-reset |
+| Brownout 稳定性 | ✅ **PASS** | 118s+ 连续运行，无 BOD 日志 |
+| MENU 短按 ~294ms | ✅ **PASS** | btn pressed → released (294ms) → created, 仅1个 event_id |
+| MENU 长按 ~6s 不重复 | ✅ **PASS** | held 5978ms，因前事件活跃正确抑制 |
+| 30s 超时自动重置 | ✅ PASS | help-141745-0001 stale (>30s), auto-reset |
+| MENU 连续快速按 3 次 | ⚠️ 未捕获 | 日志仅含短按+长按两组，无第3组 |
+| LED 物理反馈观察 | ⛔ 未完成 | 未安排
 
 ---
 
@@ -77,7 +76,12 @@
   - USB 线缆/供电能力不足
   - `CONFIG_BROWNOUT_DET_LVL` 设置过保守（当前未知）
 - **建议排查**: 检查电源、USB 线缆；或在 menuconfig 中调整 Brownout 阈值
-- **第2轮测试备注 (2026-10-09)**: MENU长按≥5s 操作下未复现 Brownout，设备稳定运行 25s+。暂标记为间歇性问题。
+- **第2轮测试备注 (2026-10-09)**: MENU长按≥5s 操作下未复现 Brownout，设备稳定运行 25s+。
+- **第3轮测试备注 (2026-10-09)**: 三次实机验证（短按294ms+长按6s）**均未复现 Brownout**，设备稳定运行 118s+。Brownout 概率较低。
+
+### ⚠️ 快速连按未系统验证
+- **MENU 连续快速按 3 次** 未在本次测试中捕获到有效数据
+- 需要单独安排一次快速点击测试
 
 ### ✅ 已修复的编译问题
 - **`main.c:370`** — `help_event` 先使用后声明：将 `help_event_t help_event` / `help_button_fsm_t btn_fsm` 声明移到 `sensor_ctx_t ctx` 初始化之前

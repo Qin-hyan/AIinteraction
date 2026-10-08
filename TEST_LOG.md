@@ -95,3 +95,50 @@ I (50786..71469) IMU cadence #46~#66 连续正常输出                    ← �
 - [ ] LED 物理闪烁观察
 - [ ] 快速点击无异常重复测试
 - [ ] Week 01-02 API 回归
+
+### 按键扫描解耦验证（2026-10-09 第3轮 — `65b001f` 独立任务 30Hz）
+
+**分支**: `feature/week03-physical-feedback`  
+**版本**: `65b001f` feat(week03): decouple button scanning  
+**验证方式**: 实机（COM10），Python 串口捕获 120s  
+**结果**: 7 PASS / 1 ⚠️ 未验证 / 0 FAIL  
+
+| # | 测试项 | 结果 | 证据 |
+|---|--------|------|------|
+| 1 | **MENU 短按 (~200-500ms)** | ✅ **PASS** | `btn pressed: MENU` @142228 → `btn released: was MENU` @142522，持续 **294ms** ✅ |
+| 2 | 短按只产生一个 event_id | ✅ **PASS** | 仅 1 条 `[W3-BTN] pressed MENU → event help-141745-0001` |
+| 3 | 事件创建 + HTTP 发送 | ✅ **PASS** | `created id=help-141745-0001 btn=MENU counter=1 (LOCAL CONFIRMED)` → `sent` → `available via API` |
+| 4 | **MENU 长按 ~6s** | ✅ **PASS** | `btn pressed: MENU` @147177 → `btn released: was MENU` @153155，持续 **5978ms** ✅ |
+| 5 | 长按不重复触发 | ✅ **PASS** | 长按期间**未创建新事件**（主循环检查 `help_event.status == HELP_IDLE` 正确抑制） |
+| 6 | 30s 超时自动重置 | ✅ **PASS** | `[W3-REMOTE] event help-141745-0001 stale (>30s), auto-reset` @173132 |
+| 7 | **Brownout 稳定性** | ✅ **PASS** | 118s+ 连续运行 (T=75466~T=193479)，**无 BOD 日志**，IMU cadence #71~#187 正常 |
+| 8 | **MENU 连续快速按 3 次** | ⚠️ **未捕获** | 日志中仅有短按(294ms)和长按(5978ms)两组事件，无第3组快速连按。可能未执行该测试 |
+| — | [W3-BTN] 日志标签 | ✅ **PASS** | 每条按键事件均通过 `[W3-BTN]` 记录 |
+| — | [W3-EVENT] 日志标签 | ✅ **PASS** | `btn pressed`、`btn released`、`created`、`sending`、`sent` 均含 `[W3-EVENT]` 前缀 |
+
+**关键证据**:
+```
+I (142228) W3-EVENT: btn pressed: MENU
+I (142522) W3-EVENT: btn released: was MENU
+I (142592) W3-EVENT: created id=help-141745-0001 btn=MENU counter=1 (LOCAL CONFIRMED)
+I (142595) MAIN: [W3-BTN] pressed MENU → event help-141745-0001
+I (142601) W3-EVENT: sending id=help-141745-0001
+I (142605) W3-EVENT: sent id=help-141745-0001
+I (142609) MAIN: [W3-NET] event help-141745-0001 available via API
+                                            ← 短按 294ms 完成，仅 1 个 event_id
+
+I (147177) W3-EVENT: btn pressed: MENU      ← 长按开始
+I (153155) W3-EVENT: btn released: was MENU ← 长按 5978ms，无新事件
+
+W (173132) MAIN: [W3-REMOTE] event help-141745-0001 stale (>30s), auto-reset
+I (173134) W3-EVENT: reset to IDLE (was help-141745-0001)
+
+I (75466..193479) IMU cadence #71~#187       ← 118s+ 稳定输出，无 Brownout
+```
+
+**结论**: 
+- 独立 30Hz 按键扫描任务工作正常
+- 短按去抖正确，一次按下仅产生一个 event_id
+- 长按（>=5s）仍只触发一次，主循环状态检查正确抑制重复触发
+- Brownout 未复现，设备 118s+ 稳定运行
+- 快速连按未在本次捕获到，有待后续验证

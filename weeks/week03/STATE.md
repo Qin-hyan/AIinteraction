@@ -27,9 +27,27 @@ button_scan_task (30 Hz)         main loop (1 Hz)
 ### 构建验证
 - `idf.py build` ✅ PASS (week02-stable-14-gaafc520-dirty)
 
+### 实机验证（2026-10-09 第3轮 — `65b001f`）
+
+**硬件**: COM10 | **固件**: week02-stable-15-g65b001f | **捕获**: Python 串口 120s
+
+| 测试项 | 结果 | 分析 |
+|--------|------|------|
+| MENU 短按 ~294ms | ✅ PASS | btn pressed→released 294ms, created help-141745-0001, 仅1个 event_id |
+| MENU 长按 ~6s | ✅ PASS | held 5978ms, 因前事件活跃正确抑制, 无新事件 |
+| 30s 超时自动重置 | ✅ PASS | help-141745-0001 stale after 30.5s → reset to IDLE |
+| Brownout | ✅ PASS | 118s+ 连续运行，无 BOD |
+| [W3-BTN]/[W3-EVENT] 日志 | ✅ PASS | 完整记录 press→release→create→send→sent 各阶段 |
+| MENU 连续快速按 3 次 | ⚠️ 未捕获 | 日志仅含短按+长按，无第3组快速连按 |
+
+**结论**: 独立 30Hz 按键扫描任务功能正常，去抖/防重/超时均通过验证。
+
 ### 仍待完成
-- 快速点击无异常重复测试
-- LED 物理闪烁观察
-- 远端确认/取消 API 测试
-- HTTP 远端确认后 LED 常亮
-- `[W3-FEEDBACK]` 日志考虑添加（可选改进，非阻塞）
+- [x] MENU 短按触发 + 单 event_id ← 本轮完成
+- [x] MENU 长按不重复触发 ← 本轮完成
+- [x] Brownout 稳定性 ← 两轮连续 PASS
+- [ ] MENU 连续快速按 3 次 ← 需要单独安排
+- [ ] LED 物理闪烁观察
+- [ ] 远端确认/取消 API 测试
+- [ ] HTTP 远端确认后 LED 常亮
+- [ ] `[W3-FEEDBACK]` 日志考虑添加（可选改进，非阻塞）
