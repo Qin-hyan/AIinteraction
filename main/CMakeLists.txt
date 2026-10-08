@@ -6,6 +6,7 @@ idf_component_register(
         "adc_button.c"
         "wifi_app.c"
         "http_server.c"
+        "help_event.c"
     INCLUDE_DIRS
         "."
     REQUIRES
