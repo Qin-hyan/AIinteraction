@@ -7,7 +7,7 @@
 ## 当前：Week 03 — 实体按键与物理反馈闭环
 
 **分支**: `feature/week03-physical-feedback`
-**阶段**: 实机测试中 ⚠️（MENU长按不重复触发确认通过，Brownout未复现）
+**阶段**: 按键扫描解耦完成 ✅（独立 FreeRTOS 任务 ~30 Hz，idf.py build 通过）
 **Git HEAD**: `a451227` merge: repo-cleanup
 
 ---
@@ -38,6 +38,7 @@
 - `http_server.h` — `sensor_ctx_t` 中增加 `help_event_t *help` 字段
 - `http_server.c` — 三个 HTTP API 端点：`GET /api/help/status`、`POST /api/help/confirm`、`POST /api/help/cancel`
 - `main/CMakeLists.txt` — 添加 `help_event.c`
+- 👉 **Week 03 按键扫描解耦**：独立 FreeRTOS 任务 (30 Hz) + FreeRTOS Queue 通信，主循环不再负责按键采样
 
 **待完成**:
 - 完整闭环链路测试（按键 → 去抖 → event_id → LED 反馈 → HTTP 发送 → 远端确认/取消 → 物理反馈更新）
@@ -89,3 +90,9 @@ modified:   main/main.c             (变量声明顺序修复)
 modified:   main/help_event.c       (函数体结构修复)
 modified:   main/http_server.c      (编译错误修复 + URI 路由注册)
 ```
+### ✅ 按键扫描解耦 (2026-10-09)
+- **方案**: 独立 FreeRTOS 任务 `button_scan_task` (~30 Hz) 运行去抖 FSM，通过 `xQueueSend` 通知主循环
+- **接口变更**: `help_event.h` 移除 `help_button_fsm_t` 类型/`help_button_fsm_init`/`help_button_fsm_update`，新增 `help_button_service_start`/`help_button_get_pending`
+- **`main.c`**: 移除 `btn_fsm` 变量和主循环 ADC 读/FSM 更新，改为 `help_button_get_pending()` 非阻塞收队列
+- **`help_event.c`**: FSM 改为 `static` 内部类型，新增 `button_scan_task`、Queue、两个公开 API
+- **`idf.py build`**: ✅ PASS

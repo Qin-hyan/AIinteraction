@@ -58,24 +58,29 @@ typedef struct {
 } help_event_t;
 
 /* ================================================================
- * Week 03: 按键去抖状态机（独立于 help_event）
+ * Week 03: 按键扫描服务（独立 FreeRTOS 任务 ~30 Hz）
  * ================================================================ */
 
 /**
- * @brief 按键去抖上下文
+ * @brief 启动后台按键扫描 FreeRTOS 任务（~30 Hz）
  *
- * 实现边沿检测（press/release），防止按住时重复触发。
- * 在主循环中定期调用 help_button_fsm_update() 推进。
+ * 创建独立任务，以约 30 Hz 采样 ADC 按键，执行去抖 FSM，
+ * 检测到有效按下后通过内部队列通知主循环。
+ *
+ * @param btn_handle  已初始化的 ADC 按键句柄
+ * @return ESP_OK 成功
  */
-typedef struct {
-    adc_button_t    last_stable;        /**< 上一次稳定状态 */
-    adc_button_t    current_raw;        /**< 当前原始读数 */
-    int             stable_count;       /**< 同一读数的连续采样计数 */
-    int             debounce_threshold; /**< 去抖阈值（连续相同次数） */
-    bool            event_pending;      /**< 是否有新按下事件待处理 */
-    adc_button_t    pending_button;     /**< 待处理的按键类型 */
-    int64_t         pending_at_us;      /**< 事件发生时间 */
-} help_button_fsm_t;
+esp_err_t help_button_service_start(adc_button_handle_t btn_handle);
+
+/**
+ * @brief 非阻塞获取待处理的按键按下事件
+ *
+ * 主循环（1 Hz）调用此函数消费后台扫描任务产生的事件。
+ *
+ * @param[out] btn  输出按下的按键类型
+ * @return true 有新按下事件，false 无
+ */
+bool help_button_get_pending(adc_button_t *btn);
 
 /* ================================================================
  * Week 03: LED 反馈模式
@@ -101,24 +106,6 @@ typedef enum {
  * @param[out] event 事件结构体（调用方分配）
  */
 void help_event_init(help_event_t *event);
-
-/**
- * @brief 初始化按键去抖状态机
- * @param[out] fsm 状态机上下文
- * @param[in]  debounce_threshold 去抖阈值（连续相同采样次数）
- */
-void help_button_fsm_init(help_button_fsm_t *fsm, int debounce_threshold);
-
-/**
- * @brief 按键去抖更新
- *
- * 每轮主循环调用一次，传入当前 ADC 读数。
- * 检测到有效按下时设置 event_pending = true。
- *
- * @param[in,out] fsm   状态机上下文
- * @param[in]     btn   当前 ADC 按键读数
- */
-void help_button_fsm_update(help_button_fsm_t *fsm, adc_button_t btn);
 
 /**
  * @brief 创建新的教学测试消息事件

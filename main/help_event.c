@@ -7,6 +7,9 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -24,6 +27,160 @@ static int g_event_counter = 0;
 #define LED_BLINK_SLOW_MS   500
 #define LED_PULSE_ON_MS     200
 #define LED_PULSE_OFF_MS    800
+
+/* ================================================================
+ * 内部按键去抖状态机（不再对外暴露）
+ * ================================================================ */
+
+/** @brief 按键去抖上下文（内部） */
+typedef struct {
+    adc_button_t    last_stable;        /**< 上一次稳定状态 */
+    adc_button_t    current_raw;        /**< 当前原始读数 */
+    int             stable_count;       /**< 同一读数的连续采样计数 */
+    int             debounce_threshold; /**< 去抖阈值（连续相同次数） */
+    bool            event_pending;      /**< 是否有新按下事件待处理 */
+    adc_button_t    pending_button;     /**< 待处理的按键类型 */
+    int64_t         pending_at_us;      /**< 事件发生时间 */
+} help_button_fsm_t;
+
+/**
+ * @brief 内部初始化按键去抖状态机
+ */
+static void help_button_fsm_init(help_button_fsm_t *fsm, int debounce_threshold)
+{
+    if (!fsm) return;
+    memset(fsm, 0, sizeof(*fsm));
+    fsm->last_stable = BTN_NONE;
+    fsm->current_raw = BTN_NONE;
+    fsm->stable_count = 0;
+    fsm->debounce_threshold = debounce_threshold > 0 ? debounce_threshold : 4;
+    fsm->event_pending = false;
+    fsm->pending_button = BTN_NONE;
+}
+
+/**
+ * @brief 内部按键去抖更新（边沿检测）
+ */
+static void help_button_fsm_update(help_button_fsm_t *fsm, adc_button_t btn)
+{
+    if (!fsm) return;
+
+    if (btn != fsm->current_raw) {
+        fsm->current_raw = btn;
+        fsm->stable_count = 1;
+        return;
+    }
+
+    fsm->stable_count++;
+
+    if (fsm->stable_count >= fsm->debounce_threshold) {
+        adc_button_t old_stable = fsm->last_stable;
+        fsm->last_stable = btn;
+
+        /* 边沿检测：从 NONE → 有效按键（按下） */
+        if (old_stable == BTN_NONE && btn != BTN_NONE && btn != BTN_UNKNOWN) {
+            ESP_LOGI(TAG, "btn pressed: %s", adc_button_name(btn));
+            fsm->event_pending = true;
+            fsm->pending_button = btn;
+            fsm->pending_at_us = esp_timer_get_time();
+        }
+        /* 从有效按键 → NONE（释放） */
+        else if (old_stable != BTN_NONE && btn == BTN_NONE) {
+            ESP_LOGI(TAG, "btn released: was %s", adc_button_name(old_stable));
+        }
+    }
+}
+
+/* ================================================================
+ * 按键扫描 FreeRTOS 任务（~30 Hz）
+ * ================================================================ */
+
+#define BTN_TASK_STACK_SIZE   2048
+#define BTN_TASK_PRIORITY     5
+#define BTN_SCAN_MS           33       /* ~30 Hz */
+
+static QueueHandle_t        s_btn_queue    = NULL;
+static adc_button_handle_t  s_btn_handle   = NULL;
+
+/**
+ * @brief FreeRTOS 任务：独立按键扫描
+ *
+ * 以约 30 Hz 周期采样 ADC，运行去抖 FSM，
+ * 检测到有效按下后通过队列通知主循环。
+ */
+static void button_scan_task(void *arg)
+{
+    (void)arg;
+    help_button_fsm_t fsm;
+
+    help_button_fsm_init(&fsm, 3);  /* 阈值 3：保留原值 */
+
+    ESP_LOGI(TAG, "button scan task started (~30 Hz, debounce threshold=%d)",
+             fsm.debounce_threshold);
+
+    while (1) {
+        adc_button_t btn = adc_button_read(s_btn_handle);
+        help_button_fsm_update(&fsm, btn);
+
+        if (fsm.event_pending) {
+            fsm.event_pending = false;
+            /* 非阻塞发队列；若主循环未消费则丢弃旧事件（一次按下只产生一次事件） */
+            if (xQueueSend(s_btn_queue, &fsm.pending_button, 0) != pdTRUE) {
+                ESP_LOGW(TAG, "btn queue full, dropping event (main loop busy?)");
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(BTN_SCAN_MS));
+    }
+}
+
+/* ================================================================
+ * 公开 API
+ * ================================================================ */
+
+esp_err_t help_button_service_start(adc_button_handle_t btn_handle)
+{
+    if (!btn_handle) {
+        ESP_LOGE(TAG, "help_button_service_start: btn_handle is NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_btn_queue != NULL) {
+        ESP_LOGW(TAG, "button service already started");
+        return ESP_OK;
+    }
+
+    s_btn_handle = btn_handle;
+
+    /* 队列长度 = 1：一次只容纳一个待处理事件 */
+    s_btn_queue = xQueueCreate(1, sizeof(adc_button_t));
+    if (!s_btn_queue) {
+        ESP_LOGE(TAG, "failed to create button event queue");
+        return ESP_ERR_NO_MEM;
+    }
+
+    BaseType_t ret = xTaskCreate(button_scan_task,
+                                  "btn_scan",
+                                  BTN_TASK_STACK_SIZE,
+                                  NULL,
+                                  BTN_TASK_PRIORITY,
+                                  NULL);
+    if (ret != pdPASS) {
+        vQueueDelete(s_btn_queue);
+        s_btn_queue = NULL;
+        ESP_LOGE(TAG, "failed to create button scan task");
+        return ESP_ERR_NO_MEM;
+    }
+
+    ESP_LOGI(TAG, "button scanning service started (~30 Hz)");
+    return ESP_OK;
+}
+
+bool help_button_get_pending(adc_button_t *btn)
+{
+    if (!s_btn_queue || !btn) return false;
+    return xQueueReceive(s_btn_queue, btn, 0) == pdTRUE;
+}
 
 /* ================================================================
  * 事件生命周期
@@ -122,48 +279,6 @@ const char *help_status_name(help_status_t status)
         case HELP_CANCELLED:       return "cancelled";
         case HELP_FAILED:          return "failed";
         default:                   return "unknown";
-    }
-}
-
-void help_button_fsm_init(help_button_fsm_t *fsm, int debounce_threshold)
-{
-    if (!fsm) return;
-    memset(fsm, 0, sizeof(*fsm));
-    fsm->last_stable = BTN_NONE;
-    fsm->current_raw = BTN_NONE;
-    fsm->stable_count = 0;
-    fsm->debounce_threshold = debounce_threshold > 0 ? debounce_threshold : 4;
-    fsm->event_pending = false;
-    fsm->pending_button = BTN_NONE;
-}
-
-void help_button_fsm_update(help_button_fsm_t *fsm, adc_button_t btn)
-{
-    if (!fsm) return;
-
-    if (btn != fsm->current_raw) {
-        fsm->current_raw = btn;
-        fsm->stable_count = 1;
-        return;
-    }
-
-    fsm->stable_count++;
-
-    if (fsm->stable_count >= fsm->debounce_threshold) {
-        adc_button_t old_stable = fsm->last_stable;
-        fsm->last_stable = btn;
-
-        /* 边沿检测：从 NONE → 有效按键（按下） */
-        if (old_stable == BTN_NONE && btn != BTN_NONE && btn != BTN_UNKNOWN) {
-            ESP_LOGI(TAG, "btn pressed: %s", adc_button_name(btn));
-            fsm->event_pending = true;
-            fsm->pending_button = btn;
-            fsm->pending_at_us = esp_timer_get_time();
-        }
-        /* 从有效按键 → NONE（释放） */
-        else if (old_stable != BTN_NONE && btn == BTN_NONE) {
-            ESP_LOGI(TAG, "btn released: was %s", adc_button_name(old_stable));
-        }
     }
 }
 

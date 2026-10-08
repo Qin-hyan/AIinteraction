@@ -358,9 +358,8 @@ void app_main(void)
 
     /* Week 03: 教学测试消息 — 按键触发与物理反馈 */
     static help_event_t help_event;
-    static help_button_fsm_t btn_fsm;
     help_event_init(&help_event);
-    help_button_fsm_init(&btn_fsm, 3); /* 3 次相同读数确认 */
+    help_button_service_start(btn_handle); /* 启动独立 30Hz 按键扫描任务 */
 
     /* HTTP 服务器 — Week 2: 加入采集任务上下文 */
     static collect_task_t collect_task = {0};
@@ -574,17 +573,13 @@ void app_main(void)
                      diag_cnt, sts[3], sts[4], (sts[4] >> 7) & 1, sts[5]);
         }
 
-        /* ---- Week 03: 按键去抖 + 事件触发 + 物理反馈 ---- */
-        if (btn_handle) {
-            adc_button_t btn = adc_button_read(btn_handle);
-            help_button_fsm_update(&btn_fsm, btn);
-
-            /* 处理按键按下事件 */
-            if (btn_fsm.event_pending && help_event.status == HELP_IDLE) {
-                btn_fsm.event_pending = false;
-                help_event_trigger(&help_event, btn_fsm.pending_button);
+        /* ---- Week 03: 按键事件 + 物理反馈 (扫描由独立 30Hz 任务完成) ---- */
+        {
+            adc_button_t btn;
+            if (help_button_get_pending(&btn) && help_event.status == HELP_IDLE) {
+                help_event_trigger(&help_event, btn);
                 ESP_LOGI(TAG, "[W3-BTN] pressed %s → event %s",
-                         adc_button_name(btn_fsm.pending_button),
+                         adc_button_name(btn),
                          help_event.help_id);
             }
 
