@@ -30,6 +30,7 @@
 #include "http_server.h"
 #include "camera_app.h"
 #include "esp_heap_caps.h"
+#include "help_event.h"
 
 static const char *TAG = "MAIN";
 
@@ -355,6 +356,12 @@ void app_main(void)
     ret = wifi_app_init();
     if (ret != ESP_OK) ESP_LOGE(TAG, "Wi-Fi FAILED! Check SSID/password.");
 
+    /* Week 03: 教学测试消息 — 按键触发与物理反馈 */
+    static help_event_t help_event;
+    static help_button_fsm_t btn_fsm;
+    help_event_init(&help_event);
+    help_button_fsm_init(&btn_fsm, 3); /* 3 次相同读数确认 */
+
     /* HTTP 服务器 — Week 2: 加入采集任务上下文 */
     static collect_task_t collect_task = {0};
     collect_task.auto_refresh = true;              /* 默认开启周期上报 */
@@ -366,7 +373,9 @@ void app_main(void)
         .device_id = DEVICE_ID, .sensor_src = SENSOR_SRC,
         .task = &collect_task,
         .cam = cam_handle,
+        .help = &help_event,
     };
+
     http_server_start(&ctx);
 
     /* Camera auto-capture defaults */
@@ -565,12 +574,51 @@ void app_main(void)
                      diag_cnt, sts[3], sts[4], (sts[4] >> 7) & 1, sts[5]);
         }
 
-        /* 说明：Week 1 的每秒 IMU 日志已并入上面的"周期上报"分支，
-         * 避免重复读取传感器；周期上报暂停时板端不再采样。 */
+        /* ---- Week 03: 按键去抖 + 事件触发 + 物理反馈 ---- */
         if (btn_handle) {
             adc_button_t btn = adc_button_read(btn_handle);
-            if (btn != BTN_NONE)
-                ESP_LOGI(TAG, "BTN: %s", adc_button_name(btn));
+            help_button_fsm_update(&btn_fsm, btn);
+
+            /* 处理按键按下事件 */
+            if (btn_fsm.event_pending && help_event.status == HELP_IDLE) {
+                btn_fsm.event_pending = false;
+                help_event_trigger(&help_event, btn_fsm.pending_button);
+                ESP_LOGI(TAG, "[W3-BTN] pressed %s → event %s",
+                         adc_button_name(btn_fsm.pending_button),
+                         help_event.help_id);
+            }
+
+            /* 事件状态机：本地确认 → 尝试发送 */
+            if (help_event.status == HELP_TRIGGERED) {
+                const char *ip = wifi_app_get_ip();
+                if (ip && strcmp(ip, "0.0.0.0") != 0) {
+                    help_event_start_sending(&help_event);
+                    /* 设备即服务器，数据立即可用 */
+                    help_event_mark_sent(&help_event);
+                    ESP_LOGI(TAG, "[W3-NET] event %s available via API",
+                             help_event.help_id);
+                } else {
+                    help_event_fail(&help_event);
+                    ESP_LOGW(TAG, "[W3-NET] event %s FAILED: Wi-Fi not connected",
+                             help_event.help_id);
+                }
+            }
+
+            /* SENT 超时保护：若 30s 未被确认，自动重置 */
+            if (help_event.status == HELP_SENT) {
+                int64_t elapsed_us = now_us - help_event.sent_at_us;
+                if (elapsed_us > 30000000LL) { /* 30s */
+                    ESP_LOGW(TAG, "[W3-REMOTE] event %s stale (>30s), auto-reset",
+                             help_event.help_id);
+                    help_event_reset(&help_event);
+                }
+            }
+        }
+
+        /* LED 物理反馈更新 */
+        {
+            led_pattern_t pattern = help_event_led_pattern(&help_event);
+            help_led_update(pattern, esp_timer_get_time());
         }
 
         diag_cnt++;
