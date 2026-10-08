@@ -142,3 +142,77 @@ I (75466..193479) IMU cadence #71~#187       ← 118s+ 稳定输出，无 Browno
 - 长按（>=5s）仍只触发一次，主循环状态检查正确抑制重复触发
 - Brownout 未复现，设备 118s+ 稳定运行
 - 快速连按未在本次捕获到，有待后续验证
+
+---
+
+## Week 03 — 快速连续按键验证 (2026-10-09 第4轮)
+
+**分支**: `feature/week03-physical-feedback`
+**版本**: `week02-stable-16-g7ae61d4` test(week03): verify decoupled button scanning
+**验证方式**: 实机（COM10），idf.py monitor 串口捕获 70s
+**结果**: **5 PASS / 0 FAIL / 0 ⚠️**
+
+| # | 测试项 | 结果 | 证据 |
+|---|--------|------|------|
+| 1 | **等待 help_event 回到 IDLE** | ✅ **PASS** | 设备启动后初始状态 IDLE，无残留事件 |
+| 2 | **物理按键检测**（MENU 共 4 次按下检测） | ✅ **PASS** | 4 次 `[W3-EVENT] btn pressed: MENU` 均被 30Hz 扫描任务检测到 |
+| 3 | **event_id 数量** | ✅ **PASS** | **仅 1 个 event_id** (`help-32868-0001`)，来自第 1 次按下 |
+| 4 | **非 IDLE 时按键被正确抑制** | ✅ **PASS** | 第 2/3/4 次按下均 **未创建新事件**（主循环状态检查正确抑制） |
+| 5 | **30s 观察无异常重复事件** | ✅ **PASS** | 从末次按键到 `stale (>30s)` 间 **无异常事件**，仅 1 个 event 超时重置 |
+
+### 详细时间线（ms since boot）
+
+```
+T=33312  btn pressed: MENU           ← 1st press (rapid start)
+T=33459  btn released: was MENU      ← 147ms
+T=33715  created id=help-32868-0001
+T=33717  [W3-BTN] → event help-32868-0001
+T=33723  sending
+T=33727  sent
+T=33731  [W3-NET] available via API
+T=33802  btn pressed: MENU           ← 2nd press (~343ms after 1st release) ✅ RAPID
+T=33949  btn released: was MENU      ← 147ms → 被抑制（事件活跃）
+    ...  IMU cadence #31~#38  (设备从手持姿态恢复)
+T=42769  btn pressed: MENU           ← 3rd press (~8820ms after 2nd)
+T=42916  btn released: was MENU      ← 147ms → 被抑制（事件仍活跃）
+T=43259  btn pressed: MENU           ← 4th press (~343ms after 3rd release) ✅ RAPID
+T=43406  btn released: was MENU      ← 147ms → 被抑制（事件仍活跃）
+    ...  IMU cadence #39~#60  (稳定输出，无异常)
+W(64247) stale (>30s), auto-reset    ← 30.5s 超时
+I(64249) reset to IDLE
+    ...  IMU cadence #61~#65  (稳定继续)
+```
+
+### 关键指标
+
+| 指标 | 值 | 分析 |
+|------|-----|------|
+| 物理按键检测次数 | 4 次 | 30Hz 扫描任务均正确检测到 press/release（持续 ~147ms） |
+| 2 次 rapid 间隔 | ~490ms (press-to-press) / ~343ms (release-to-press) | 在 300-500ms 范围内 ✅ |
+| 生成 event_id 数 | **1** | 仅 `help-32868-0001` |
+| 抑制正确性 | **100%** | 第 2/3/4 次按下均被正确抑制 |
+| 超时恢复 | **30.5s** → IDLE | 正常 |
+| Brownout | **无** | 全程无 BOD，IMU cadence #30~#65 连续稳定输出 |
+
+### 设计语义验证
+
+**当前设计**：主循环 `main.c` 中，仅当 `help_event.status == HELP_IDLE` 时调用 `help_event_trigger()`。
+
+```
+if (help_button_get_pending(&btn)) {
+    if (help_event.status == HELP_IDLE) {
+        help_event_trigger(&help_event, btn);
+    }
+}
+```
+
+**验证结果**：✅ **非 IDLE 时后续按键被正确忽略，无重复/错误事件产生。**
+
+即使 30Hz 扫描任务检测到 4 次独立物理按键（均在去抖阈值内稳定采样），主循环 1Hz 状态检查精确抑制了后 3 次——因为事件状态依次经历了 `TRIGGERED → SENDING → SENT`，始终 ≠ `IDLE`。
+
+### 结论
+
+- **EVENT_COUNT**: 1
+- **ACTIVE_EVENT_BEHAVIOR**: 正确抑制（非 IDLE 时忽略后续按键）
+- **RESULT**: **PASS** — 快速连续按键无异常重复事件
+- **Brownout**: 未复现，设备 ≥65s 稳定运行
