@@ -29,12 +29,46 @@
 
 ---
 
-## Week 03 — 待测试
+## Week 03 — 2026-10-09 (部分验证)
 
-- [ ] 编译通过（help_event.c 缺陷修复后）
-- [ ] 按键去抖正确检测 MENU/PLAY/DOWN/UP+
-- [ ] 按键触发 → LED 反馈 → Web 接收完整链路
-- [ ] 远端确认后 LED 切换为常亮
-- [ ] 取消/失败场景
+**分支**: `feature/week03-physical-feedback`  
+**版本**: `week02-stable-11-g63ab504`  
+**验证方式**: 实机（COM10）  
+**结果**: 4 PASS / 1 FAIL / 4 ⛔ 未完成  
+
+### 基础流程验证
+
+| # | 测试项 | 结果 | 备注 |
+|---|--------|------|------|
+| 1 | build 编译通过 | ✅ PASS | `idf.py build` 无错误 |
+| 2 | flash 烧录成功 | ✅ PASS | COM10 460800 baud |
+| 3 | 按键检测（PLAY）单次触发 | ✅ PASS | `W3-EVENT: btn pressed: PLAY`，仅 1 次 |
+| 4 | 事件创建 + ID 生成 | ✅ PASS | `id=help-15919-0001` |
+| 5 | HTTP 发送 + API 可用 | ✅ PASS | `W3-EVENT: sent` + `[W3-NET] available via API` |
+| 6 | LED 物理闪烁（实机观察） | ⛔ 未完成 | Brownout 中断 |
+| 7 | 长按不重复触发 | ⛔ 未完成 | Brownout 中断 |
+| 8 | 快速点击无异常重复 | ⛔ 未完成 | Brownout 中断 |
+| 9 | Brownout 稳定性 | ❌ **FAIL** | `E BOD: Brownout detector was triggered` → 重启 |
+
+### 关键证据
+
+```
+I (16763) W3-EVENT: btn pressed: PLAY
+I (16763) W3-EVENT: created id=help-15919-0001 btn=PLAY counter=1 (LOCAL CONFIRMED)
+I (16763) MAIN: [W3-BTN] pressed PLAY → event help-15919-0001
+I (16768) W3-EVENT: sending id=help-15919-0001
+I (16772) W3-EVENT: sent id=help-15919-0001
+I (16776) MAIN: [W3-NET] event help-15919-0001 available via API
+E BOD: Brownout detector was triggered                ← ⚠️
+```
+
+### 已知问题
+
+- **Brownout 检测触发**: 按键事件流程完成后约 1s 设备掉电重启。需排查供电 / USB 线缆 / `CONFIG_BROWNOUT_DET_LVL` 配置。
+
+### 待完成
+
+- [ ] 解决 Brownout 问题后重新验证完整链路
+- [ ] 远端确认/取消 API 测试
 - [ ] 超时自动重置（30s）
 - [ ] Week 01-02 API 回归

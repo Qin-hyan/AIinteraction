@@ -25,7 +25,37 @@
   - `help_event.c` — `help_status_name()` 函数体修复
   - `http_server.c` — `HTTPD_500` 枚举、注释语法、添加 help URI 路由注册
 
+## 🧪 实机验证结果 (2026-10-09)
+
+**环境**: ESP32-S3-EYE v2.2 | COM10 | ESP-IDF v5.4.3
+
+### 基础流程
+| 步骤 | 结果 | 关键日志 |
+|------|------|----------|
+| 启动初始化 | ✅ | IMU cadence 循环正常 |
+| 按键检测（PLAY） | ✅ | `I (16763) W3-EVENT: btn pressed: PLAY` |
+| 事件创建 | ✅ | `I (16763) W3-EVENT: created id=help-15919-0001 btn=PLAY counter=1 (LOCAL CONFIRMED)` |
+| [W3-BTN] 日志 | ✅ | `I (16763) MAIN: [W3-BTN] pressed PLAY → event help-15919-0001` |
+| HTTP 发送 | ✅ | `I (16772) W3-EVENT: sent id=help-15919-0001` |
+| Web API 可用 | ✅ | `I (16776) MAIN: [W3-NET] event help-15919-0001 available via API` |
+| LED 反馈日志 [W3-FEEDBACK] | ❌ 不存在 | `help_event.c` 中 LED 走 `gpio_set_level()` 无独立日志打印 |
+
+### 异常
+| 问题 | 严重性 | 详情 |
+|------|--------|------|
+| **Brownout 触发重启** | 🚨 严重 | 事件发送约 1s 后 `E BOD: Brownout detector was triggered`，设备 `rst:0x3 (RTC_SW_SYS_RST)` |
+
+### 未完成项
+- 长按不重复触发测试 — Brownout 中断
+- 快速点击无异常重复测试 — Brownout 中断
+- LED 物理闪烁观察 — Brownout 中断
+- 远端确认/取消 API 测试 — Brownout 中断
+- HTTP 远端确认后 LED 常亮 — Brownout 中断
+
 ## 待完成
 
-- 完整闭环链路测试（按键 → 去抖 → event_id → LED 反馈 → HTTP 发送 → 远端确认/取消 → 物理反馈更新）
-- 实机验证（按键去抖、LED 反馈、HTTP 远端确认/取消）
+- 🚨 **解决 Brownout 问题**（检查供电、USB 线缆、调整 `CONFIG_BROWNOUT_DET_LVL`）
+- 修复后重新实机验证完整闭环链路
+- 远端确认/取消场景测试
+- 超时自动重置测试（30s）
+- `[W3-FEEDBACK]` 日志考虑添加（可选改进，非阻塞）
