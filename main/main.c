@@ -639,6 +639,16 @@ void app_main(void)
                     help_event_reset(&help_event);
                 }
             }
+
+            /* HELP_FAILED 自动复位：进入失败状态后 30s 自动重置回 IDLE */
+            if (help_event.status == HELP_FAILED) {
+                int64_t elapsed_us = now_us - help_event.failed_at_us;
+                if (elapsed_us > 30000000LL) { /* 30s */
+                    ESP_LOGW(TAG, "[W3-REMOTE] event %s failed (>30s), auto-reset",
+                             help_event.help_id);
+                    help_event_reset(&help_event);
+                }
+            }
         }
 
         /* LED 物理反馈更新 */

@@ -254,6 +254,7 @@ void help_event_cancel(help_event_t *event)
 void help_event_fail(help_event_t *event)
 {
     if (!event) return;
+    event->failed_at_us = esp_timer_get_time();
     event->status = HELP_FAILED;
     event->remote_confirmed = false;
     ESP_LOGW(TAG, "failed id=%s", event->help_id);
@@ -264,6 +265,7 @@ void help_event_reset(help_event_t *event)
     if (!event) return;
     event->status = HELP_IDLE;
     event->remote_confirmed = false;
+    event->failed_at_us = 0;
     ESP_LOGI(TAG, "reset to IDLE (was %s)",
              event->help_id[0] ? event->help_id : "empty");
 }

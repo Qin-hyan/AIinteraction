@@ -52,6 +52,7 @@ typedef struct {
     int64_t         sent_at_us;         /**< 设备端 HTTP 发送完成时间（非 VPS 上传时间） */
     int64_t         remote_received_at_us; /**< 远端确认接收时间 */
     int64_t         cancelled_at_us;    /**< 取消时间 */
+    int64_t         failed_at_us;       /**< 失败时间 */
     /* 远端证据 */
     bool            remote_confirmed;   /**< 远端是否已确认接收 */
     char            remote_note[64];    /**< 远端返回的备注 */
