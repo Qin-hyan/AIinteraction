@@ -30,6 +30,8 @@
 #include "http_server.h"
 #include "camera_app.h"
 #include "esp_heap_caps.h"
+#include "help_event.h"
+#include "help_uplink.h"
 
 static const char *TAG = "MAIN";
 
@@ -355,6 +357,12 @@ void app_main(void)
     ret = wifi_app_init();
     if (ret != ESP_OK) ESP_LOGE(TAG, "Wi-Fi FAILED! Check SSID/password.");
 
+    /* Week 03: 教学测试消息 — 按键触发与物理反馈 */
+    static help_event_t help_event;
+    help_event_init(&help_event);
+    help_button_service_start(btn_handle); /* 启动独立 30Hz 按键扫描任务 */
+    help_uplink_start();                    /* 启动异步 VPS 上行推送任务 */
+
     /* HTTP 服务器 — Week 2: 加入采集任务上下文 */
     static collect_task_t collect_task = {0};
     collect_task.auto_refresh = true;              /* 默认开启周期上报 */
@@ -366,7 +374,9 @@ void app_main(void)
         .device_id = DEVICE_ID, .sensor_src = SENSOR_SRC,
         .task = &collect_task,
         .cam = cam_handle,
+        .help = &help_event,
     };
+
     http_server_start(&ctx);
 
     /* Camera auto-capture defaults */
@@ -565,12 +575,86 @@ void app_main(void)
                      diag_cnt, sts[3], sts[4], (sts[4] >> 7) & 1, sts[5]);
         }
 
-        /* 说明：Week 1 的每秒 IMU 日志已并入上面的"周期上报"分支，
-         * 避免重复读取传感器；周期上报暂停时板端不再采样。 */
-        if (btn_handle) {
-            adc_button_t btn = adc_button_read(btn_handle);
-            if (btn != BTN_NONE)
-                ESP_LOGI(TAG, "BTN: %s", adc_button_name(btn));
+        /* ---- Week 03: 按键事件 + 物理反馈 (扫描由独立 30Hz 任务完成) ---- */
+        {
+            adc_button_t btn;
+            if (help_button_get_pending(&btn) && help_event.status == HELP_IDLE) {
+                help_event_trigger(&help_event, btn);
+                ESP_LOGI(TAG, "[W3-BTN] pressed %s → event %s",
+                         adc_button_name(btn),
+                         help_event.help_id);
+            }
+
+            /* 事件状态机：TRIGGERED → SENDING → SENT/FAILED */
+            if (help_event.status == HELP_TRIGGERED) {
+                const char *ip = wifi_app_get_ip();
+                if (!ip || strcmp(ip, "0.0.0.0") == 0) {
+                    help_event_fail(&help_event);
+                    ESP_LOGW(TAG, "[W3-NET] event %s FAILED: Wi-Fi not connected",
+                             help_event.help_id);
+                } else if (!help_uplink_is_configured()) {
+                    help_event_fail(&help_event);
+                    ESP_LOGW(TAG, "[W3-NET] event %s FAILED: VPS URL not configured",
+                             help_event.help_id);
+                } else {
+                    help_event_start_sending(&help_event);
+                    if (!help_uplink_request_send(&help_event)) {
+                        help_event_fail(&help_event);
+                        ESP_LOGW(TAG, "[W3-NET] event %s FAILED: uplink unavailable",
+                                 help_event.help_id);
+                    }
+                }
+            }
+
+            /* SENDING：轮询异步上行结果 */
+            if (help_event.status == HELP_SENDING) {
+                esp_err_t uplink_res;
+                if (help_uplink_poll(&uplink_res)) {
+                    if (uplink_res == ESP_OK) {
+                        help_event_mark_sent(&help_event);
+                        ESP_LOGI(TAG, "[W3-NET] event %s sent to VPS (HTTP 2xx)",
+                                 help_event.help_id);
+                    } else {
+                        help_event_fail(&help_event);
+                        ESP_LOGW(TAG, "[W3-NET] event %s FAILED: VPS uplink err=0x%X",
+                                 help_event.help_id, uplink_res);
+                    }
+                } else {
+                    /* 超时保护：从触发起 >15s 仍未完成 */
+                    int64_t elapsed = now_us - help_event.triggered_at_us;
+                    if (elapsed > 15000000LL) { /* 15s */
+                        help_event_fail(&help_event);
+                        ESP_LOGW(TAG, "[W3-NET] event %s FAILED: SENDING timeout",
+                                 help_event.help_id);
+                    }
+                }
+            }
+
+            /* SENT 超时保护：若 30s 未被远端确认，自动重置 */
+            if (help_event.status == HELP_SENT) {
+                int64_t elapsed_us = now_us - help_event.sent_at_us;
+                if (elapsed_us > 30000000LL) { /* 30s */
+                    ESP_LOGW(TAG, "[W3-REMOTE] event %s stale (>30s), auto-reset",
+                             help_event.help_id);
+                    help_event_reset(&help_event);
+                }
+            }
+
+            /* HELP_FAILED 自动复位：进入失败状态后 30s 自动重置回 IDLE */
+            if (help_event.status == HELP_FAILED) {
+                int64_t elapsed_us = now_us - help_event.failed_at_us;
+                if (elapsed_us > 30000000LL) { /* 30s */
+                    ESP_LOGW(TAG, "[W3-REMOTE] event %s failed (>30s), auto-reset",
+                             help_event.help_id);
+                    help_event_reset(&help_event);
+                }
+            }
+        }
+
+        /* LED 物理反馈更新 */
+        {
+            led_pattern_t pattern = help_event_led_pattern(&help_event);
+            help_led_update(pattern, esp_timer_get_time());
         }
 
         diag_cnt++;

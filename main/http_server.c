@@ -1022,6 +1022,105 @@ static esp_err_t auto_capture_post_handler(httpd_req_t *req)
 }
 
 /* ================================================================
+ * Week 03: GET /api/help/status —— 查询教学测试消息状态
+ * ================================================================ */
+static esp_err_t help_status_handler(httpd_req_t *req)
+{
+    if (!s_ctx.help) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No help event");
+        return ESP_FAIL;
+    }
+    help_event_t *h = s_ctx.help;
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "help_id",
+        h->help_id[0] ? h->help_id : "");
+    cJSON_AddStringToObject(root, "status", help_status_name(h->status));
+    cJSON_AddNumberToObject(root, "event_counter", h->event_counter);
+    cJSON_AddStringToObject(root, "trigger_button",
+        adc_button_name(h->trigger_button));
+    cJSON_AddNumberToObject(root, "triggered_at_ms",
+        h->triggered_at_us ? (double)h->triggered_at_us / 1000.0 : 0);
+    cJSON_AddNumberToObject(root, "sent_at_ms",
+        h->sent_at_us ? (double)h->sent_at_us / 1000.0 : 0);
+    cJSON_AddBoolToObject(root, "remote_confirmed", h->remote_confirmed);
+    cJSON_AddStringToObject(root, "remote_note", h->remote_note);
+    cJSON_AddStringToObject(root, "note",
+        h->status == HELP_IDLE ? "等待按键触发" :
+        h->status == HELP_TRIGGERED ? "按键已触发（本地确认）" :
+        h->status == HELP_SENDING ? "正在发送…" :
+        h->status == HELP_SENT ? "已发送，等待远端确认" :
+        h->status == HELP_REMOTE_RECEIVED ? "远端已确认接收 ✓" :
+        h->status == HELP_CANCELLED ? "已取消" :
+        h->status == HELP_FAILED ? "发送失败" : "");
+    return send_json(req, root);
+}
+
+/* ================================================================
+ * Week 03: POST /api/help/confirm —— Web 页面确认远端接收
+ * ================================================================ */
+static esp_err_t help_confirm_handler(httpd_req_t *req)
+{
+    if (!s_ctx.help) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No help event");
+        return ESP_FAIL;
+    }
+    help_event_t *h = s_ctx.help;
+
+    char body[128] = {0};
+    int recv = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (recv > 0) body[recv] = 0;
+    char note[64] = "web-confirmed";
+    if (recv > 0 && body[0] == '{') {
+        cJSON *in = cJSON_Parse(body);
+        if (in) {
+            cJSON *jn = cJSON_GetObjectItem(in, "note");
+            if (jn && jn->valuestring)
+                snprintf(note, sizeof(note), "%s", jn->valuestring);
+            cJSON_Delete(in);
+        }
+    }
+
+    if (h->status == HELP_SENT || h->status == HELP_SENDING ||
+        h->status == HELP_TRIGGERED) {
+        help_event_mark_remote_received(h, note);
+        ESP_LOGI(TAG, "[W3-REMOTE] received id=%s note=%s",
+                 h->help_id, note);
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "help_id", h->help_id);
+    cJSON_AddStringToObject(root, "status", help_status_name(h->status));
+    cJSON_AddBoolToObject(root, "remote_confirmed", h->remote_confirmed);
+    cJSON_AddStringToObject(root, "result",
+        h->remote_confirmed ? "confirmed" : "not_confirmed");
+    return send_json(req, root);
+}
+
+/* ================================================================
+ * Week 03: POST /api/help/cancel —— 取消教学测试消息
+ * ================================================================ */
+static esp_err_t help_cancel_handler(httpd_req_t *req)
+{
+    if (!s_ctx.help) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No help event");
+        return ESP_FAIL;
+    }
+    help_event_t *h = s_ctx.help;
+
+    if (h->status != HELP_IDLE && h->status != HELP_CANCELLED) {
+        help_event_cancel(h);
+        ESP_LOGI(TAG, "[W3-REMOTE] cancelled id=%s", h->help_id);
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "help_id", h->help_id);
+    cJSON_AddStringToObject(root, "status", help_status_name(h->status));
+    cJSON_AddStringToObject(root, "result", "cancelled");
+    return send_json(req, root);
+}
+
+/* ================================================================
  * URI Routing
  * ================================================================ */
 static const httpd_uri_t uri_root = {
@@ -1079,6 +1178,20 @@ static const httpd_uri_t uri_auto_cap_post = {
     .handler = auto_capture_post_handler, .user_ctx = NULL,
 };
 
+/* Week 3: Help event URI routes */
+static const httpd_uri_t uri_help_status = {
+    .uri = "/api/help/status", .method = HTTP_GET,
+    .handler = help_status_handler, .user_ctx = NULL,
+};
+static const httpd_uri_t uri_help_confirm = {
+    .uri = "/api/help/confirm", .method = HTTP_POST,
+    .handler = help_confirm_handler, .user_ctx = NULL,
+};
+static const httpd_uri_t uri_help_cancel = {
+    .uri = "/api/help/cancel", .method = HTTP_POST,
+    .handler = help_cancel_handler, .user_ctx = NULL,
+};
+
 /* ================================================================
  * Public API
  * ================================================================ */
@@ -1111,6 +1224,11 @@ esp_err_t http_server_start(const sensor_ctx_t *ctx)
     httpd_register_uri_handler(s_server, &uri_cam_photo);
     httpd_register_uri_handler(s_server, &uri_auto_cap_get);
     httpd_register_uri_handler(s_server, &uri_auto_cap_post);
+    if (s_ctx.help) {
+        httpd_register_uri_handler(s_server, &uri_help_status);
+        httpd_register_uri_handler(s_server, &uri_help_confirm);
+        httpd_register_uri_handler(s_server, &uri_help_cancel);
+    }
     if (s_ctx.task) {
         s_ctx.task->capture_camera = false;
         s_ctx.task->cap_count = 0;

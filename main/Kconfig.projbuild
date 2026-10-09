@@ -13,3 +13,24 @@ menu "Week 01 Sensor Web Configuration"
             WiFi password (minimum 8 characters for WPA2).
 
 endmenu
+
+menu "Week 03 Help Uplink Configuration"
+
+    config HELP_VPS_URL
+        string "VPS endpoint URL for help event uplink"
+        default ""
+        help
+            Full URL of the VPS endpoint that accepts help event POST requests.
+            Example: http://192.168.1.100:8080/api/help/event
+            Leave empty to disable uplink (help_uplink_send_event() will return
+            ESP_ERR_INVALID_STATE without sending).
+
+    config HELP_UPLINK_TIMEOUT_MS
+        int "HTTP POST timeout (ms)"
+        default 10000
+        range 1000 60000
+        help
+            Timeout for the HTTP POST request to VPS in milliseconds.
+            Default: 10000 (10 seconds).
+
+endmenu

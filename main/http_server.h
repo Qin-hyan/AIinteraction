@@ -13,6 +13,7 @@
 #include "qma6100p.h"
 #include "adc_button.h"
 #include "camera_app.h"
+#include "help_event.h"
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -160,6 +161,7 @@ typedef struct {
     const char          *sensor_src; /**< Week 2: 传感源说明（单位留证） */
     collect_task_t      *task;       /**< Week 2: 采集任务状态（共享） */
     camera_handle_t      cam;        /**< Week 3: 摄像头句柄 */
+    help_event_t        *help;       /**< Week 3: 教学测试消息事件（共享） */
 } sensor_ctx_t;
 
 /**
