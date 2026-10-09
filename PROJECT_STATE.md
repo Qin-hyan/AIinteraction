@@ -7,8 +7,8 @@
 ## 当前：Week 03 — 实体按键与物理反馈闭环
 
 **分支**: `feature/week03-physical-feedback`
-**阶段**: 按键扫描解耦完成 ✅（独立 FreeRTOS 任务 ~30 Hz，idf.py build 通过）
-**Git HEAD**: `65b001f` feat(week03): decouple button scanning
+**阶段**: 按键扫描解耦 + help_uplink HTTP POST 模块已完成 ✅（idf.py build 通过）
+**Git HEAD**: `5fe738a` fix(help_uplink): correct protocol semantics for JSON timestamps and config
 
 ---
 
@@ -39,10 +39,13 @@
 - `http_server.c` — 三个 HTTP API 端点：`GET /api/help/status`、`POST /api/help/confirm`、`POST /api/help/cancel`
 - `main/CMakeLists.txt` — 添加 `help_event.c`
 - 👉 **Week 03 按键扫描解耦**：独立 FreeRTOS 任务 (30 Hz) + FreeRTOS Queue 通信，主循环不再负责按键采样
+- 👉 **help_uplink 模块**：独立 HTTP POST 模块 (`help_uplink.c/.h`)，将 `help_event_t` 构造为 JSON 推送到外部 VPS 端点（`ae89be8`）
+- 👉 **JSON 时间戳语义修正**：`sent_at_us` 标注为设备端 HTTP POST 完成时刻，0 值序列化为 `null`（`5fe738a`）
 
 **待完成**:
-- 完整闭环链路测试（按键 → 去抖 → event_id → LED 反馈 → HTTP 发送 → 远端确认/取消 → 物理反馈更新）
-- 实机验证（按键去抖、LED 反馈、HTTP 远端确认/取消）
+- **`help_uplink` 接入 `main.c`**：目前模块已存在但未被调用，需要将 `help_uplink_send_event()` 接入事件发送路径
+- **完整闭环链路测试**（按键 → 去抖 → event_id → LED 反馈 → HTTP 发送 → 远端确认/取消 → 物理反馈更新）
+- **实机网络验证**（需配置真实 VPS URL，验证 HTTP POST 成功/失败路径，检查远端接收状态及响应）
 
 ### ⚠️ 实机测试记录 (2026-10-09)
 
@@ -79,9 +82,10 @@
 - **第2轮测试备注 (2026-10-09)**: MENU长按≥5s 操作下未复现 Brownout，设备稳定运行 25s+。
 - **第3轮测试备注 (2026-10-09)**: 三次实机验证（短按294ms+长按6s）**均未复现 Brownout**，设备稳定运行 118s+。Brownout 概率较低。
 
-### ⚠️ 快速连按未系统验证
-- **MENU 连续快速按 3 次** 未在本次测试中捕获到有效数据
-- 需要单独安排一次快速点击测试
+### ✅ 快速连按验证通过
+- **MENU 连续快速按 4 次**（含 2 次快速点击间隔 ~343ms release-to-press）→ 第4轮实机验证 (**8f8c511**) 已通过
+- 结果：仅生成 **1 个 event_id**，非 IDLE 状态时后续 3 次按下**正确抑制**
+- 参见 TEST_LOG.md "快速连续按键验证" 详细记录
 
 ### ✅ 已修复的编译问题
 - **`main.c:370`** — `help_event` 先使用后声明：将 `help_event_t help_event` / `help_button_fsm_t btn_fsm` 声明移到 `sensor_ctx_t ctx` 初始化之前

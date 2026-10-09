@@ -216,3 +216,37 @@ if (help_button_get_pending(&btn)) {
 - **ACTIVE_EVENT_BEHAVIOR**: 正确抑制（非 IDLE 时忽略后续按键）
 - **RESULT**: **PASS** — 快速连续按键无异常重复事件
 - **Brownout**: 未复现，设备 ≥65s 稳定运行
+
+---
+
+## Week 03 — help_uplink 模块构建验证 (2026-10-09)
+
+**分支**: `feature/week03-physical-feedback`
+
+### 提交 `ae89be8` — feat(week03): add help_uplink module for VPS HTTP POST
+
+| 验证项 | 结果 | 证据 |
+|--------|------|------|
+| `idf.py build` 编译通过 | ✅ **PASS** | `idf.py build` 实际运行通过（版本 `week02-stable-19-g5fe738a-dirty`），新增 `help_uplink.c/h` 无编译错误 |
+| 模块注册 | ✅ **PASS** | `help_uplink.c` 已加入 CMakeLists.txt 源文件列表 |
+| Kconfig 配置项 | ✅ **PASS** | `CONFIG_HELP_VPS_URL`（string）、`CONFIG_HELP_UPLINK_TIMEOUT_MS`（int，默认 10000）已定义 |
+| 公开 API | ✅ **PASS** | `help_uplink_is_configured()`、`help_uplink_send_event()` 签名完整 |
+
+### 提交 `5fe738a` — fix(help_uplink): correct protocol semantics for JSON timestamps and config
+
+| 验证项 | 结果 | 证据 |
+|--------|------|------|
+| `idf.py build` 编译通过 | ✅ **PASS** | `idf.py build` 实际运行通过（`week02-stable-19-g5fe738a-dirty`），`Project build complete`，0 error |
+| 时间戳语义正确性 | ✅ **PASS** | `sent_at_us` 注明为设备端 HTTP POST 完成时刻（非 VPS 上传时间），0 值序列化为 JSON `null` |
+| 代码审查无新 WARNING | ✅ **PASS** | 构建日志无新增编译警告 |
+
+### ⚠️ 未验证项目（诚实记录）
+
+| 项目 | 原因 |
+|------|------|
+| **实机 HTTP POST 测试** | 未配置真实 VPS URL，未烧录验证实际网络行为 |
+| **`help_uplink` 接入 `main.c`** | 当前模块未被 main.c 调用，尚未集成到事件发送路径 |
+| **超时路径测试** | 需实机验证 `CONFIG_HELP_UPLINK_TIMEOUT_MS` 超时行为 |
+| **非 2xx 响应处理** | 需实机 mock VPS 验证 HTTP 500/404 等错误路径 |
+
+**结论**: `ae89be8` + `5fe738a` 构建验证通过，模块代码完整、无编译错误。但 **help_uplink 尚未集成到 main.c 的事件发送路径**，且未经过任何实机网络验证。闭环链路（按键 → HTTP POST → 远端确认）尚未完成。

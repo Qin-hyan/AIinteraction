@@ -18,7 +18,8 @@ AIinteraction/
 │   ├── wifi_app.c/h        # Wi-Fi STA
 │   ├── http_server.c/h     # HTTP 服务器 + Web 仪表盘 + REST API
 │   ├── camera_app.c/h      # OV2640 摄像头驱动
-│   └── help_event.c/h      # Week 03: 实体按键→物理反馈闭环
+│   ├── help_event.c/h      # Week 03: 实体按键→物理反馈闭环
+│   └── help_uplink.c/h     # Week 03: 求助事件 VPS 上行推送
 ├── partitions.csv          # 8MB Flash 分区表 (factory 3MB, storage ~5MB SPIFFS)
 ├── CMakeLists.txt          # 顶层项目: week02-sensor-collect
 ├── sdkconfig.defaults      # 公开配置模板
@@ -40,7 +41,8 @@ AIinteraction/
 | Wi-Fi STA | `wifi_app.c/h` | ✅ Week 01 | SSID/密码从 sdkconfig 读取 |
 | HTTP 服务器 | `http_server.c/h` | ✅ Week 02 | Web 仪表盘 + REST API + 远程采集 |
 | 摄像头 OV2640 | `camera_app.c/h` | ✅ Week 02 | JPEG 抓拍, PSRAM 存储, 15 次连续验证 |
-| 物理反馈 | `help_event.c/h` | 🔧 Week 03 | 按键→LED→Web 闭环, **有编译缺陷待修复** |
+| 物理反馈 | `help_event.c/h` | ✅ Week 03 | 按键→LED→Web 闭环, 去抖 FSM (30Hz), 快速连按抑制通过 |
+| VPS 上行推送 | `help_uplink.c/h` | 🔧 Week 03 | help_event_t 序列化为 JSON → HTTP POST, **已注册 CMake 但尚未接入 main.c** |
 
 ---
 
