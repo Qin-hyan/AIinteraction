@@ -288,3 +288,41 @@ if (help_button_get_pending(&btn)) {
 | 24 | IntentEnum.all_values 枚举 | ✅ PASS | 枚举辅助 |
 
 **结论**: 结构化任务契约模块 `service/` 实现完成，24 个单元测试全部通过。此模块仅含纯逻辑校验，未接入语言模型，未调用任何设备接口。
+
+---
+
+## Week 04 Step 2 — query_last 受限工具 (2026-10-09)
+
+**分支**: `feature/week04-natural-language`
+**范围**: `service/query_last.py` + `service/test_query_last.py`（纯 Python 标准库，mock HTTP）
+**版本**: 最新提交
+**验证方式**: Python `unittest` 本地运行
+**结果**: **13 PASS / 0 FAIL**（+ 原有 24 PASS = 总计 37 PASS）
+
+| # | 测试项 | 结果 | 分类 |
+|---|--------|------|------|
+| 1 | 成功获取有效观测数据（valid=true，含完整传感器字段） | ✅ PASS | 成功 |
+| 2 | 设备无有效记录（valid=false, source=none） | ✅ PASS | 成功-无数据 |
+| 3 | HTTP 404 错误 | ✅ PASS | HTTP 错误 |
+| 4 | HTTP 500 错误 | ✅ PASS | HTTP 错误 |
+| 5 | 连接失败（URLError） | ✅ PASS | 网络错误 |
+| 6 | 请求超时（TimeoutError） | ✅ PASS | 超时 |
+| 7 | 无效 JSON 响应 | ✅ PASS | 解析错误 |
+| 8 | 环境变量未设置（核心函数） | ✅ PASS | 配置缺失 |
+| 9 | 环境变量已设置（get_base_url） | ✅ PASS | 配置 |
+| 10 | 环境变量末尾斜杠被清理 | ✅ PASS | 配置 |
+| 11 | 环境变量未设置（get_base_url） | ✅ PASS | 配置 |
+| 12 | 环境变量空字符串 | ✅ PASS | 配置 |
+| 13 | 环境变量空白字符串 | ✅ PASS | 配置 |
+
+**设计要点**:
+- `ESP32_BASE_URL` 环境变量读取地址，`/api/observation/last` 路径硬编码
+- 设备原始字段（valid/source/seq/accel/time_quality/stale 等）原样保留
+- 不伪造数据，不接入语言模型，不调用 `trigger_collect`
+
+### ⚠️ 未验证项目
+
+| 项目 | 原因 |
+|------|------|
+| **实机 HTTP 调用** | 无真实 ESP32 设备连接，所有请求通过 mock 验证 |
+| **与 TaskContract 集成** | query_last 工具当前独立，未与 `validator.py` 或语言模型输出连接 |

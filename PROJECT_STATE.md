@@ -7,8 +7,8 @@
 ## 当前：Week 04 — 自然语言查询与请求采集（分支已建立）
 
 **分支**: `feature/week04-natural-language`
-**阶段**: 结构化任务契约与校验模块 (`service/`) 已完成（纯 Python，24 test PASS）
-**Git HEAD**: `d00e33e` docs(week04): sync project documents for Week 04 branch initialization
+**阶段**: Step 1 任务契约校验 ✅ + Step 2 query_last 受限工具 ✅（总计 37 test PASS）
+**Git HEAD**: 待提交
 
 ---
 

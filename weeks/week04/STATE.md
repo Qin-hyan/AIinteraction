@@ -1,6 +1,6 @@
 # Week 04 State — 自然语言查询与请求采集
 
-**状态**: 🔧 分支已建立，尚未开始功能实现
+**状态**: ✅ Module `service/query_last.py` 完成
 **分支**: `feature/week04-natural-language`
 **基线**: `ec9c94b` — Merge pull request #3 (origin/main)
 **上游**: 无（已清除 `origin/main` 的跟踪）
@@ -40,7 +40,26 @@ service/
 
 **不接入语言模型，不调用设备接口。**
 
+### Week 04 Step 2 — query_last 受限工具 (`service/query_last.py`)
+
+**新增文件**:
+```
+service/
+├── query_last.py          # query_last 受限工具
+└── test_query_last.py     # 单元测试 (13 tests)
+```
+
+**设计要点**:
+- 纯 Python 标准库（`urllib.request`），零外部依赖
+- ESP32 基础地址仅从环境变量 `ESP32_BASE_URL` 读取
+- 请求路径固定为 `/api/observation/last`，不可被用户或模型修改
+- 原样保留设备返回的 `valid` / `source` / `seq` / `accel_x/y/z` / `button` / `observed_ms` / `received_ms` / `data_age_ms` / `time_quality` 等字段
+- 无有效记录、HTTP 错误、超时及无效 JSON 均明确报告，不伪造数据
+- 13 个单元测试覆盖：成功有数据、成功无记录、HTTP 404/500、连接失败、超时、无效 JSON、环境变量未设置/空/空白/末尾斜杠
+- 测试均 mock HTTP，不发起真实设备请求
+
 ## 前置条件
 
 - Week 03 代码已合并至 `main`（PR #3，`ec9c94b`）
+- 运行 `query_last()` 前需设置环境变量 `ESP32_BASE_URL`（如 `http://192.168.1.100`）
 - 真实 ESP32→VPS HTTP POST 端到端闭环仍待验收（属于 Week 03 收尾项，非 Week 04 阻塞项）

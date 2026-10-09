@@ -14,6 +14,14 @@ from .validator import (
     parse_and_validate,
 )
 
+from .query_last import (
+    ENV_KEY,
+    FIXED_PATH,
+    QueryLastResult,
+    get_base_url,
+    query_last,
+)
+
 __all__ = [
     "IntentEnum",
     "TaskContract",
@@ -22,4 +30,9 @@ __all__ = [
     "ValidationResult",
     "ParsedTask",
     "parse_and_validate",
+    "ENV_KEY",
+    "FIXED_PATH",
+    "QueryLastResult",
+    "get_base_url",
+    "query_last",
 ]
