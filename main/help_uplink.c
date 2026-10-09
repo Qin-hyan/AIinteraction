@@ -13,9 +13,52 @@
 #include "esp_log.h"
 #include "esp_http_client.h"
 #include "cJSON.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <string.h>
 
 static const char *TAG = "W3-UPLINK";
+
+/* ================================================================
+ * 异步任务基础设施
+ * ================================================================ */
+
+#define UPLINK_TASK_STACK_SIZE  4096
+#define UPLINK_TASK_PRIORITY    3
+
+static TaskHandle_t     s_uplink_task    = NULL;
+static help_event_t     s_event_copy;       /**< 事件副本，后台任务只读此拷贝 */
+static volatile bool    s_uplink_busy    = false;
+static volatile bool    s_uplink_done    = false;
+static volatile esp_err_t s_uplink_result = ESP_FAIL;
+
+/**
+ * @brief 后台上行任务入口
+ *
+ * 等待主循环通过 xTaskNotifyGive 触发，然后对 s_event_copy
+ * 执行同步 HTTP POST（最长阻塞 10 s）。结果写入 s_uplink_result，
+ * 完成后置 s_uplink_done = true 并清除 busy 标记。
+ */
+static void uplink_task(void *arg)
+{
+    (void)arg;
+    ESP_LOGI(TAG, "uplink task started");
+
+    while (1) {
+        /* 阻塞等待主循环触发 */
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        ESP_LOGI(TAG, "uplink task: starting HTTP POST for event %s",
+                 s_event_copy.help_id);
+
+        s_uplink_result = help_uplink_send_event(&s_event_copy);
+        s_uplink_done   = true;
+        s_uplink_busy   = false;
+
+        ESP_LOGI(TAG, "uplink task: done (result=%d) for event %s",
+                 s_uplink_result, s_event_copy.help_id);
+    }
+}
 
 /* ================================================================
  * 内部辅助
@@ -149,4 +192,71 @@ esp_err_t help_uplink_send_event(const help_event_t *event)
     ESP_LOGI(TAG, "event %s sent successfully (status=%d)",
              event->help_id, status_code);
     return ESP_OK;
+}
+
+/* ================================================================
+ * 异步接口实现
+ * ================================================================ */
+
+esp_err_t help_uplink_start(void)
+{
+    if (s_uplink_task != NULL) {
+        ESP_LOGW(TAG, "uplink task already started");
+        return ESP_OK;
+    }
+
+    BaseType_t ret = xTaskCreate(uplink_task, "uplink",
+                                 UPLINK_TASK_STACK_SIZE,
+                                 NULL,
+                                 UPLINK_TASK_PRIORITY,
+                                 &s_uplink_task);
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "failed to create uplink task");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "uplink task created");
+    return ESP_OK;
+}
+
+bool help_uplink_request_send(const help_event_t *event)
+{
+    if (s_uplink_task == NULL) {
+        ESP_LOGW(TAG, "uplink task not started, cannot request send");
+        return false;
+    }
+
+    if (!event) {
+        ESP_LOGW(TAG, "invalid event pointer");
+        return false;
+    }
+
+    if (s_uplink_busy) {
+        ESP_LOGW(TAG, "uplink task busy, cannot accept new request");
+        return false;
+    }
+
+    /* 拷贝事件到任务内部缓冲区（避免任务运行时主循环修改原事件） */
+    memcpy(&s_event_copy, event, sizeof(help_event_t));
+    s_uplink_done   = false;
+    s_uplink_busy   = true;
+    s_uplink_result = ESP_FAIL;
+
+    xTaskNotifyGive(s_uplink_task);
+    return true;
+}
+
+bool help_uplink_poll(esp_err_t *out_result)
+{
+    if (!s_uplink_done) {
+        return false;
+    }
+
+    if (out_result) {
+        *out_result = s_uplink_result;
+    }
+
+    /* 消费本次结果，准备下一次请求 */
+    s_uplink_done = false;
+    return true;
 }

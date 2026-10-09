@@ -31,6 +31,7 @@
 #include "camera_app.h"
 #include "esp_heap_caps.h"
 #include "help_event.h"
+#include "help_uplink.h"
 
 static const char *TAG = "MAIN";
 
@@ -360,6 +361,7 @@ void app_main(void)
     static help_event_t help_event;
     help_event_init(&help_event);
     help_button_service_start(btn_handle); /* 启动独立 30Hz 按键扫描任务 */
+    help_uplink_start();                    /* 启动异步 VPS 上行推送任务 */
 
     /* HTTP 服务器 — Week 2: 加入采集任务上下文 */
     static collect_task_t collect_task = {0};
@@ -583,23 +585,52 @@ void app_main(void)
                          help_event.help_id);
             }
 
-            /* 事件状态机：本地确认 → 尝试发送 */
+            /* 事件状态机：TRIGGERED → SENDING → SENT/FAILED */
             if (help_event.status == HELP_TRIGGERED) {
                 const char *ip = wifi_app_get_ip();
-                if (ip && strcmp(ip, "0.0.0.0") != 0) {
-                    help_event_start_sending(&help_event);
-                    /* 设备即服务器，数据立即可用 */
-                    help_event_mark_sent(&help_event);
-                    ESP_LOGI(TAG, "[W3-NET] event %s available via API",
-                             help_event.help_id);
-                } else {
+                if (!ip || strcmp(ip, "0.0.0.0") == 0) {
                     help_event_fail(&help_event);
                     ESP_LOGW(TAG, "[W3-NET] event %s FAILED: Wi-Fi not connected",
                              help_event.help_id);
+                } else if (!help_uplink_is_configured()) {
+                    help_event_fail(&help_event);
+                    ESP_LOGW(TAG, "[W3-NET] event %s FAILED: VPS URL not configured",
+                             help_event.help_id);
+                } else {
+                    help_event_start_sending(&help_event);
+                    if (!help_uplink_request_send(&help_event)) {
+                        help_event_fail(&help_event);
+                        ESP_LOGW(TAG, "[W3-NET] event %s FAILED: uplink unavailable",
+                                 help_event.help_id);
+                    }
                 }
             }
 
-            /* SENT 超时保护：若 30s 未被确认，自动重置 */
+            /* SENDING：轮询异步上行结果 */
+            if (help_event.status == HELP_SENDING) {
+                esp_err_t uplink_res;
+                if (help_uplink_poll(&uplink_res)) {
+                    if (uplink_res == ESP_OK) {
+                        help_event_mark_sent(&help_event);
+                        ESP_LOGI(TAG, "[W3-NET] event %s sent to VPS (HTTP 2xx)",
+                                 help_event.help_id);
+                    } else {
+                        help_event_fail(&help_event);
+                        ESP_LOGW(TAG, "[W3-NET] event %s FAILED: VPS uplink err=0x%X",
+                                 help_event.help_id, uplink_res);
+                    }
+                } else {
+                    /* 超时保护：从触发起 >15s 仍未完成 */
+                    int64_t elapsed = now_us - help_event.triggered_at_us;
+                    if (elapsed > 15000000LL) { /* 15s */
+                        help_event_fail(&help_event);
+                        ESP_LOGW(TAG, "[W3-NET] event %s FAILED: SENDING timeout",
+                                 help_event.help_id);
+                    }
+                }
+            }
+
+            /* SENT 超时保护：若 30s 未被远端确认，自动重置 */
             if (help_event.status == HELP_SENT) {
                 int64_t elapsed_us = now_us - help_event.sent_at_us;
                 if (elapsed_us > 30000000LL) { /* 30s */
