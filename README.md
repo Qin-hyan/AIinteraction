@@ -3,7 +3,7 @@
 **ESP32-S3-EYE v2.2 + ESP32-S3-EYE-SUB V1.1 · OV2640 摄像头 · QMA6100P 加速度计**
 
 课程: AI 交互原型与用户体验设计
-版本: v2.2 · 2026-10-06（Week 02 稳定基线：传感器采集 + 远程指令 + 摄像头抓拍）
+版本: v2.3 · 2026-10-09（Week 03 已合并至 main；Week 04 开发分支已建立）
 
 ---
 
@@ -11,6 +11,8 @@
 
 ✅ **Week 01（已完成）**：传感器数据采集、ADC 按键、Wi-Fi、HTTP 仪表盘
 ✅ **Week 02（已完成且实机验证）**：远程采集指令、request_id 追踪、状态链、摄像头 JPEG 抓拍（PSRAM 存储）、15 次连续抓拍验证通过
+🔀 **Week 03（已合并至 main）**：实体按键与物理反馈闭环 — 按键去抖 FSM、help_event 事件生命周期、help_uplink HTTP POST 模块（已合并，真实 ESP32→VPS 端到端闭环仍待验收）
+⚙️ **Week 04（开发分支已建立）**：`feature/week04-natural-language` 已从 `main`（`ec9c94b`）创建，尚未开始功能实现
 🔒 **稳定基线**：`week02-stable` tag（可随时回退到此版本）
 
 ---
@@ -390,10 +392,12 @@ obs-{seq:05d}                      例如: obs-00047
 
 | 分支 / Tag | 说明 |
 |-----------|------|
-| `main` | 最新合并版本 |
+| `main` | 最新合并版本（含 PR #3 Week 03 合并，`ec9c94b`） |
 | `week02-stable` (tag) | **Week 02 稳定基线** — 经实机 12 项全 PASS 验证 |
-| `feature/week02-remote-task` | Week 02 远程采集功能开发分支 |
-| `feature/repo-cleanup` | 仓库清洁整理（本阶段） |
+| `feature/week02-remote-task` | Week 02 远程采集功能开发分支（已合并） |
+| `feature/repo-cleanup` | 仓库清洁整理（已合并） |
+| `feature/week03-physical-feedback` | Week 03 实体按键与物理反馈闭环（已合并至 main） |
+| `feature/week04-natural-language` | **当前** Week 04 开发分支（从 `ec9c94b` 创建，尚未开始实现） |
 
 ---
 

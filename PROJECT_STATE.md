@@ -4,11 +4,11 @@
 
 ---
 
-## 当前：Week 03 — 实体按键与物理反馈闭环
+## 当前：Week 04 — 自然语言查询与请求采集（分支已建立）
 
-**分支**: `feature/week03-physical-feedback`
-**阶段**: 按键扫描解耦 + help_uplink HTTP POST 模块已完成 ✅（idf.py build 通过）
-**Git HEAD**: `be276c2` docs(week03): sync project memory and test log for help_uplink module (ae89be8, 5fe738a)
+**分支**: `feature/week04-natural-language`
+**阶段**: 开发基线已初始化（从 `ec9c94b` 创建），尚未开始功能实现
+**Git HEAD**: `ec9c94b` Merge pull request #3 from Qin-hyan/feature/week03-physical-feedback
 
 ---
 
@@ -18,8 +18,8 @@
 |------|-----|------|------|
 | 单元1 | Week 01 | 传感数据采集与 Web 展示 | ✅ 完成 |
 | | Week 02 | 远程采集指令与执行反馈 | ✅ 完成 (tag: week02-stable) |
-| | **Week 03** | **实体按键与物理反馈闭环** | 🔧 **开发中** |
-| 单元2 | Week 04-06 | 自然语言与语音任务交互 | ⏳ 未开始 |
+| | **Week 03** | **实体按键与物理反馈闭环** | ✅ 已合并至 main |
+| 单元2 | Week 04-06 | 自然语言与语音任务交互 | 🔧 分支已建立 |
 | 单元3 | Week 07-09 | 视觉感知与事件反馈 | ⏳ 未开始 |
 | 单元4 | Week 10-12 | 多源上下文与状态推断 | ⏳ 未开始 |
 | 单元5 | Week 13-15 | 边云协作与韧性通信 | ⏳ 未开始 |
