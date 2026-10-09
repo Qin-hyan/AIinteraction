@@ -8,7 +8,7 @@
 
 **分支**: `feature/week03-physical-feedback`
 **阶段**: 按键扫描解耦 + help_uplink HTTP POST 模块已完成 ✅（idf.py build 通过）
-**Git HEAD**: `5fe738a` fix(help_uplink): correct protocol semantics for JSON timestamps and config
+**Git HEAD**: `be276c2` docs(week03): sync project memory and test log for help_uplink module (ae89be8, 5fe738a)
 
 ---
 
