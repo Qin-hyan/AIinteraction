@@ -7,6 +7,7 @@ idf_component_register(
         "wifi_app.c"
         "http_server.c"
         "help_event.c"
+        "help_uplink.c"
     INCLUDE_DIRS
         "."
     REQUIRES
@@ -14,6 +15,7 @@ idf_component_register(
         esp_wifi
         nvs_flash
         esp_http_server
+        esp_http_client
         esp_timer
         esp_adc
         esp_psram
