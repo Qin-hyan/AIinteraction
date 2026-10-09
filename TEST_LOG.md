@@ -250,3 +250,41 @@ if (help_button_get_pending(&btn)) {
 | **非 2xx 响应处理** | 需实机 mock VPS 验证 HTTP 500/404 等错误路径 |
 
 **结论**: `ae89be8` + `5fe738a` 构建验证通过，模块代码完整、无编译错误。但 **help_uplink 尚未集成到 main.c 的事件发送路径**，且未经过任何实机网络验证。闭环链路（按键 → HTTP POST → 远端确认）尚未完成。
+---
+
+## Week 04 — 结构化任务契约校验模块 (2026-10-09)
+
+**分支**: `feature/week04-natural-language`  
+**范围**: `service/` (Python 标准库，纯逻辑，不接入语言模型，不调用设备接口)  
+**版本**: (提交前 HEAD `d00e33e`)  
+**验证方式**: Python `unittest` 本地运行  
+**结果**: **24 PASS / 0 FAIL**
+
+| # | 测试项 | 结果 | 分类 |
+|---|--------|------|------|
+| 1 | query_last 合法输入 | ✅ PASS | 合法意图 |
+| 2 | trigger_collect 合法输入 | ✅ PASS | 合法意图 |
+| 3 | clarify 合法输入（带 question） | ✅ PASS | 合法意图 |
+| 4 | unsupported 合法输入（带 reason） | ✅ PASS | 合法意图 |
+| 5 | clarify 缺少 question | ✅ PASS | 歧义拒绝 |
+| 6 | clarify 空字符串 question | ✅ PASS | 歧义拒绝 |
+| 7 | unsupported 缺少 reason | ✅ PASS | 歧义拒绝 |
+| 8 | 非法 JSON | ✅ PASS | 格式拒绝 |
+| 9 | 空输入 | ✅ PASS | 格式拒绝 |
+| 10 | 未知意图 turn_on_light | ✅ PASS | 意图拒绝 |
+| 11 | query_last 携带 device_address | ✅ PASS | 越界拒绝 |
+| 12 | trigger_collect 携带 interface | ✅ PASS | 越界拒绝 |
+| 13 | unsupported 携带额外 device_id | ✅ PASS | 越界拒绝 |
+| 14 | confidence > 1.0 | ✅ PASS | 边界拒绝 |
+| 15 | confidence < 0.0 | ✅ PASS | 边界拒绝 |
+| 16 | original 空字符串 | ✅ PASS | 边界拒绝 |
+| 17 | 缺少 intent | ✅ PASS | 必需字段拒绝 |
+| 18 | 缺少 confidence | ✅ PASS | 必需字段拒绝 |
+| 19 | intent 非字符串 | ✅ PASS | 类型拒绝 |
+| 20 | confidence 非数值 | ✅ PASS | 类型拒绝 |
+| 21 | TaskContract.to_dict 排除 None | ✅ PASS | 序列化 |
+| 22 | TaskContract.to_json 往返 | ✅ PASS | 序列化 |
+| 23 | TaskContract.from_dict | ✅ PASS | 反序列化 |
+| 24 | IntentEnum.all_values 枚举 | ✅ PASS | 枚举辅助 |
+
+**结论**: 结构化任务契约模块 `service/` 实现完成，24 个单元测试全部通过。此模块仅含纯逻辑校验，未接入语言模型，未调用任何设备接口。

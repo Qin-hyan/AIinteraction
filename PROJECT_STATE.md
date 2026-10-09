@@ -7,8 +7,8 @@
 ## 当前：Week 04 — 自然语言查询与请求采集（分支已建立）
 
 **分支**: `feature/week04-natural-language`
-**阶段**: 开发基线已初始化（从 `ec9c94b` 创建），尚未开始功能实现
-**Git HEAD**: `ec9c94b` Merge pull request #3 from Qin-hyan/feature/week03-physical-feedback
+**阶段**: 结构化任务契约与校验模块 (`service/`) 已完成（纯 Python，24 test PASS）
+**Git HEAD**: `d00e33e` docs(week04): sync project documents for Week 04 branch initialization
 
 ---
 
