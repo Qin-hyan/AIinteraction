@@ -49,7 +49,7 @@ typedef struct {
     int             event_counter;      /**< 事件计数器（每次按键 +1） */
     /* 时间戳（μs since boot，相对时间） */
     int64_t         triggered_at_us;    /**< 按键触发时间 */
-    int64_t         sent_at_us;         /**< 发送完成时间 */
+    int64_t         sent_at_us;         /**< 设备端 HTTP 发送完成时间（非 VPS 上传时间） */
     int64_t         remote_received_at_us; /**< 远端确认接收时间 */
     int64_t         cancelled_at_us;    /**< 取消时间 */
     /* 远端证据 */

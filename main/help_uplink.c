@@ -18,16 +18,33 @@
 static const char *TAG = "W3-UPLINK";
 
 /* ================================================================
+ * 内部辅助
+ * ================================================================ */
+
+/**
+ * @brief 时间戳或 null 写入 JSON
+ *
+ * 值 = 0 表示"尚未发生"→ JSON null；
+ * 值 > 0 写入数值（μs since boot）。
+ */
+static void add_timestamp_or_null(cJSON *obj, const char *key, int64_t value_us)
+{
+    if (value_us == 0) {
+        cJSON_AddNullToObject(obj, key);
+    } else {
+        cJSON_AddNumberToObject(obj, key, (double)value_us);
+    }
+}
+
+/* ================================================================
  * 公开 API
  * ================================================================ */
 
 bool help_uplink_is_configured(void)
 {
-#ifdef CONFIG_HELP_VPS_URL
+    /* CONFIG_HELP_VPS_URL 是 Kconfig string 类型，始终有定义；
+     * 空字符串表示未配置。 */
     return CONFIG_HELP_VPS_URL[0] != '\0';
-#else
-    return false;
-#endif
 }
 
 esp_err_t help_uplink_send_event(const help_event_t *event)
@@ -38,15 +55,11 @@ esp_err_t help_uplink_send_event(const help_event_t *event)
     }
 
     /* ---- 检查 VPS URL 是否已配置 ---- */
-#ifdef CONFIG_HELP_VPS_URL
+    /* CONFIG_HELP_VPS_URL 是 Kconfig string 类型，始终有定义。 */
     if (CONFIG_HELP_VPS_URL[0] == '\0') {
-        ESP_LOGW(TAG, "VPS URL is empty in menuconfig — skipping send");
+        ESP_LOGW(TAG, "VPS URL is empty — skipping send");
         return ESP_ERR_INVALID_STATE;
     }
-#else
-    ESP_LOGW(TAG, "VPS URL not configured in menuconfig — skipping send");
-    return ESP_ERR_INVALID_STATE;
-#endif
 
     /* ---- 1. 构造 JSON 载荷 ---- */
     cJSON *root = cJSON_CreateObject();
@@ -63,14 +76,15 @@ esp_err_t help_uplink_send_event(const help_event_t *event)
                             adc_button_name(event->trigger_button));
     cJSON_AddNumberToObject(root, "event_counter",
                             event->event_counter);
-    cJSON_AddNumberToObject(root, "triggered_at_us",
-                            (double)event->triggered_at_us);
-    cJSON_AddNumberToObject(root, "sent_at_us",
-                            (double)event->sent_at_us);
-    cJSON_AddNumberToObject(root, "remote_received_at_us",
-                            (double)event->remote_received_at_us);
-    cJSON_AddNumberToObject(root, "cancelled_at_us",
-                            (double)event->cancelled_at_us);
+    add_timestamp_or_null(root, "triggered_at_us",
+                          event->triggered_at_us);
+    /* sent_at_us = 设备端 HTTP POST 完成时刻，非 VPS 上传时间 */
+    add_timestamp_or_null(root, "sent_at_us",
+                          event->sent_at_us);
+    add_timestamp_or_null(root, "remote_received_at_us",
+                          event->remote_received_at_us);
+    add_timestamp_or_null(root, "cancelled_at_us",
+                          event->cancelled_at_us);
     cJSON_AddBoolToObject(root, "remote_confirmed",
                           event->remote_confirmed);
     cJSON_AddStringToObject(root, "remote_note",
