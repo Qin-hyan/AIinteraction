@@ -218,6 +218,71 @@ service/
 - ⚠️ 真实语言模型输出 → 管道输入接口对接
 - ⚠️ 真实 ESP32 设备 HTTP 调用（query_last 和 trigger_collect 的真实网络请求）
 
+---
+
+### Web 仪表盘 localStorage 持久化
+
+**提交**: `8ca4677` — feat(web): persist valid observations locally
+
+**变更摘要**（仅 `main/http_server.c`，+5/-3 行）:
+- `persistObs(d)` — 新增函数：仅在 `valid===true` 且 `source==='live'|'cadence'` 时写入 `localStorage`（键 `__dashObs_v1__`）
+- `restoreLatest()` — 新增函数：页面加载时从 `localStorage` 恢复最新有效观测
+- `refreshStored()` — 获取成功时调用 `persistObs(d)`
+- `renderNewObs()` — 采集完成获取新观测时调用 `persistObs(o)`
+- `init()` — 启动时先 `restoreLatest()` 再 `refreshStored()`
+
+**去重策略**: `record_id` 作去重键（退化 `'s'+seq`），同键覆盖更新；最多保留 50 条，超出后裁剪最旧条目。
+
+**容错策略**: 全部 `try/catch` 包裹；`localStorage` 不可用/超出容量/数据损坏均静默跳过，不阻塞页面正常功能。
+
+### CSV 导出功能
+
+**提交**: `5f1fb4a` — feat(web): export persisted observations to CSV
+
+**变更摘要**（仅 `main/http_server.c`，+2 行）:
+- 新增 `exportCSV()` JS 函数：从 `localStorage` 读取有效记录，按 `received_ms` 降序排列
+- 新增 "📥 导出 CSV" 按钮（`act-btn ghost` 样式）
+- 导出列：`record_id, request_id, source, seq, accel_x, accel_y, accel_z, button, observed_ms, received_ms, data_age_ms, time_quality`（12 列）
+- UTF-8 + BOM 编码，兼容 Excel 中文
+- 文件名格式：`esp32_obs_YYYY-MM-DD_hh-mm-ss.csv`
+- 字段缺失留空，不伪造数值
+- 无有效数据/存储不可用/导出失败时清晰提示，不假报成功
+
+**不涉及**: 传感器采集逻辑、现有快照/陈旧标记语义、localStorage 持久化逻辑、新增依赖、其他导出格式。
+
+### 浏览器持久化人工检查（4 项）
+
+**验证方式**: 人工在浏览器开发者工具中操作，观察 localStorage 内容及 CSV 输出
+**版本**: HEAD `5f1fb4a`
+
+| # | 测试项 | 结果 | 观察记录 |
+|---|--------|------|---------|
+| 1 | 页面加载后 localStorage 自动恢复最新有效观测 | ✅ PASS | 刷新后最新观测在 `restoreLatest()` 后正确显示 |
+| 2 | 多次采集后 localStorage 保留多条记录，不超过 50 条 | ✅ PASS | 记录正确持久化，超出 50 条后最旧条目被裁剪 |
+| 3 | CSV 导出文件包含全部有效字段，12 列对齐 | ✅ PASS | 导出的 CSV 含表头与 12 列数据，字段值正确 |
+| 4 | localStorage 不可用/数据损坏时页面不崩溃 | ✅ PASS | 删除 `__dashObs_v1__` 后页面正常运行，无 JS 报错 |
+
+### CSV 核验结果（用户提供）
+
+| 项目 | 值 |
+|------|-----|
+| 记录总数 | 29 条 |
+| 列数 | 12 列 |
+| 来源类型 | 全部为 `cadence` |
+| 结构完整性 | ✅ 正常，无缺失列或格式异常 |
+| 时间字段 | 相对运行时间（ms），`time_quality: "relative"`，无日历时间伪装 |
+| 核验结论 | 导出格式规范，数据字段完整，结构无异常 |
+
+---
+
+## 仍待补验（Week 04）
+
+| 项目 | 说明 |
+|------|------|
+| ⚠️ **真实语言模型输出 → 管道输入接口对接** | 当前使用结构化 JSON 样例替代 LLM 输出，尚未接入真实语言模型 |
+| ⚠️ **真实 ESP32 设备 HTTP 调用** | query_last 和 trigger_collect 工具仅通过 mock 测试，未在真实设备上验证 |
+| ⚠️ **浏览器持久化与 CSV 功能的实机端到端测试** | localStorage 和 CSV 导出在浏览器开发工具中验证通过，但尚未在真实 ESP32 设备+浏览器组合下完整跑通 |
+
 ## 前置条件
 
 - Week 03 代码已合并至 `main`（PR #3，`ec9c94b`）

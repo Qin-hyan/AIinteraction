@@ -565,3 +565,34 @@ if (help_button_get_pending(&btn)) {
 - 无有效数据 / 存储不可用 / 导出失败时通过 `setNote()` 显示清晰提示，不假报成功
 
 **不涉及**: 传感器采集逻辑、现有快照/陈旧标记语义、localStorage 持久化逻辑、新增依赖、CSV 以外的导出格式。
+
+---
+
+## Week 04 — 浏览器持久化人工检查 (2026-10-10)
+
+**分支**: `feature/week04-natural-language`
+**版本**: HEAD `5f1fb4a`
+**验证方式**: 人工在浏览器开发者工具中操作，观察 localStorage 内容及 CSV 输出
+**结果**: **4 PASS / 0 FAIL**
+
+| # | 测试项 | 结果 | 观察记录 |
+|---|--------|------|---------|
+| 1 | 页面加载后 localStorage 自动恢复最新有效观测 | ✅ PASS | 刷新后最新观测在 `restoreLatest()` 后正确显示 |
+| 2 | 多次采集后 localStorage 保留多条记录，不超过 50 条 | ✅ PASS | 记录正确持久化，超出 50 条后最旧条目被裁剪 |
+| 3 | CSV 导出文件包含全部有效字段，12 列对齐 | ✅ PASS | 导出的 CSV 含表头与 12 列数据，字段值正确 |
+| 4 | localStorage 不可用/数据损坏时页面不崩溃 | ✅ PASS | 删除 `__dashObs_v1__` 后页面正常运行，无 JS 报错 |
+
+## Week 04 — CSV 核验 (2026-10-10)
+
+**验证方式**: 用户提供的 CSV 文件人工核验
+**结果**: ✅ **结构正常，29 条记录 / 12 列 / 全部 cadence**
+
+| 检查项 | 结果 |
+|--------|------|
+| 记录总数 | 29 条 |
+| 列数（含表头） | 12 列 |
+| 列名完整 | `record_id, request_id, source, seq, accel_x, accel_y, accel_z, button, observed_ms, received_ms, data_age_ms, time_quality` |
+| source 分布 | 全部为 `cadence` |
+| 时间字段语义 | 相对运行时间（ms），`time_quality: "relative"`，无日历时间伪装 |
+| 字段缺失 | 无数据缺失，每行 12 列完整 |
+| 核验结论 | ✅ 导出格式规范，数据字段完整，结构无异常 |

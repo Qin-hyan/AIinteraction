@@ -3,7 +3,7 @@
 **ESP32-S3-EYE v2.2 + ESP32-S3-EYE-SUB V1.1 · OV2640 摄像头 · QMA6100P 加速度计**
 
 课程: AI 交互原型与用户体验设计
-版本: v2.3 · 2026-10-09（Week 03 已合并至 main；Week 04 开发分支已建立）
+版本: v2.4 · 2026-10-10（Week 03 已合并至 main；Week 04 开发中）
 
 ---
 
@@ -12,7 +12,7 @@
 ✅ **Week 01（已完成）**：传感器数据采集、ADC 按键、Wi-Fi、HTTP 仪表盘
 ✅ **Week 02（已完成且实机验证）**：远程采集指令、request_id 追踪、状态链、摄像头 JPEG 抓拍（PSRAM 存储）、15 次连续抓拍验证通过
 🔀 **Week 03（已合并至 main）**：实体按键与物理反馈闭环 — 按键去抖 FSM、help_event 事件生命周期、help_uplink HTTP POST 模块（已合并，真实 ESP32→VPS 端到端闭环仍待验收）
-⚙️ **Week 04（开发分支已建立）**：`feature/week04-natural-language` 已从 `main`（`ec9c94b`）创建，尚未开始功能实现
+⚙️ **Week 04（开发分支 `feature/week04-natural-language`）**：自然语言任务管道 — 任务契约校验、query_last/trigger_collect 受限工具、任务分发、结果格式化、任务处理入口（102 单元/集成测试全部 PASS）；Web 仪表盘 localStorage 持久化（50 条上限、record_id 去重）与 CSV 导出（29 条已核验）；Python 服务端工具的真实 HTTP 调用和真实语言模型接入仍待补验
 🔒 **稳定基线**：`week02-stable` tag（可随时回退到此版本）
 
 ---
@@ -36,6 +36,13 @@
 12. **OV2640 摄像头驱动** — JPEG 抓拍通过 HTTP API 触发
 13. **PSRAM JPEG 存储** — 长期保存抓拍帧从内部 DRAM 转移到 PSRAM，避免大分辨率下内存不足
 14. **连续抓拍** — 15 次连续抓拍验证通过
+
+### 本地观测持久化与 CSV 导出（Week 04）
+15. **浏览器 localStorage 持久化** — 每次获取到有效观测（`valid===true` 且 `source∈{live, cadence}`），自动持久化至 `localStorage`（键名 `__dashObs_v1__`）；页面加载时从存储恢复最新有效观测，避免刷新丢失数据
+16. **50 条上限与去重** — 最多保留 50 条记录，超出后裁剪最旧条目；使用 `record_id` 作去重键（退化 `'s'+seq`），同键覆盖更新；全部 `try/catch` 包裹，存储不可用/容量不足/数据损坏均静默跳过
+17. **CSV 导出** — 从 `localStorage` 读取有效记录，过滤 `valid===true` 且 `source∈{live, cadence}`，按 `received_ms` 降序排列；导出列字段：`record_id, request_id, source, seq, accel_x, accel_y, accel_z, button, observed_ms, received_ms, data_age_ms, time_quality`；UTF-8 + BOM 编码兼容 Excel；文件名 `esp32_obs_YYYY-MM-DD_hh-mm-ss.csv`；字段缺失留空，不伪造数值
+18. **时间说明** — 所有时间字段基于 `esp_timer` 相对运行时间轴（`time_quality: "relative"`），单位为毫秒（ms since boot），**不伪造墙钟时间**；CSV 中的时间字段同样为相对运行时间
+19. **免责声明** — 浏览器 localStorage 持久化与 CSV 导出功能已在本地 Python 单元测试（102 PASS）和 ESP-IDF 编译验证中通过；Python 服务端工具（query_last / trigger_collect）的真实 ESP32 HTTP 调用和真实语言模型输出→管道输入接入仍待补验
 
 ---
 
@@ -397,7 +404,7 @@ obs-{seq:05d}                      例如: obs-00047
 | `feature/week02-remote-task` | Week 02 远程采集功能开发分支（已合并） |
 | `feature/repo-cleanup` | 仓库清洁整理（已合并） |
 | `feature/week03-physical-feedback` | Week 03 实体按键与物理反馈闭环（已合并至 main） |
-| `feature/week04-natural-language` | **当前** Week 04 开发分支（从 `ec9c94b` 创建，尚未开始实现） |
+| `feature/week04-natural-language` | **当前** Week 04 开发分支 — 自然语言任务管道 + Web 本地持久化 + CSV 导出 |
 
 ---
 

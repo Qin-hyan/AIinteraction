@@ -52,6 +52,8 @@ AIinteraction/
 | 工具结果格式化 | `service/result_formatter.py` | ✅ Week 04 | 单一入口 `format_result()` → 五种场景格式化，
 | | 任务处理入口 | `service/task_pipeline.py` | ✅ Week 04 | 单一入口 `run_task()` 串联 dispatch->format，7 集成测试 PASS |
 保留 source/seq/相对时间，不伪装日历时间，20 单元测试 PASS |
+| | Web 仪表盘 localStorage 持久化 | `main/http_server.c` | ✅ Week 04 | 有效观测自动持久化至 localStorage（50 条上限，`record_id` 去重），页面加载恢复，`try/catch` 容错 |
+| | CSV 导出 | `main/http_server.c` | ✅ Week 04 | 从 localStorage 导出有效记录为 UTF-8+BOM CSV，12 列字段，文件名含时间戳，字段缺失留空 |
 
 ---
 
