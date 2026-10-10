@@ -29,7 +29,7 @@
 ## 当前状态
 
 - `feature/week05-voice-interaction` 已从 `main` (`7dd788b`) 创建
-- 分支上的提交全部为**文档提交**（无功能实现提交）；截至事实修正提交 `e322dc7` 共 6 个：
+- 分支提交分两类：早期 6 个**文档提交**（截至事实修正提交 `e322dc7`）+ Step 1 的**功能/文档提交**（`d187249` feat、`2e83909` docs）；完整列表以 `git log --oneline` 为准：
   | 提交 | 说明 |
   |------|------|
   | `8a522b5` | docs(week05): sync project documents for Week 05 branch initialization |
@@ -38,6 +38,9 @@
   | `ae5c467` | docs(status): correct help_uplink integration status and Week 05 branch commits |
   | `7f7698c` | docs(week05): add voice interaction architecture design v1.0 |
   | `e322dc7` | docs(week05): correct Whisper ASR and edge-tts TTS service facts |
+  | `07b21a1` | docs(week05): correct ASR timeout wording, service facts and stale HEAD records |
+  | `d187249` | feat(week05): add PC audio capture module with simulated-stream tests |
+  | `2e83909` | docs(week05): record Step 1 real-device audio evidence |
 - 未配置远端 upstream（分支尚未推送）
 - Step 1 已新增源码与测试（详见下方「Step 1 状态」），最新提交以 `git log --oneline` 为准
 
