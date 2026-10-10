@@ -271,6 +271,7 @@ AIinteraction/
 | [DECISIONS.md](DECISIONS.md) | 技术决策记录 |
 | [TEST_LOG.md](TEST_LOG.md) | 完整测试记录（版本、输入、预期、实际、PASS/FAIL） |
 | [weeks/week04/STATE.md](weeks/week04/STATE.md) | Week 04 详细设计、测试覆盖、验证结果 |
+| [weeks/week05/STATE.md](weeks/week05/STATE.md) | Week 05 详细状态（分支 `feature/week05-voice-interaction`，功能实现尚未开始） |
 | [每周计划/](每周计划/) | 18 周课程计划 HTML |
 
 ### HTTP API 速查
@@ -302,7 +303,7 @@ IDLE → SUBMITTED(已提交·已受理) → RECEIVED(设备已接收)
 | `main` | 最新合并版本 `7dd788b`（PR #4）— 已包含 Week 01–04 完整代码，与 `origin/main` 同步 |
 | `week02-stable` (tag) | **稳定基线** — 12 项实机验证全 PASS |
 | `feature/week04-natural-language` | 已合并的**历史分支**（PR #4 → `main` `7dd788b`；分支 HEAD `0b4b323` 保留） |
-| `feature/week05-voice-interaction` | **当前** — Week 05 开发分支（基线 `7dd788b`，无远端 upstream；已有文档提交 `8a522b5`、`575aba4`，尚无 Week 05 功能实现提交） |
+| `feature/week05-voice-interaction` | **当前** — Week 05 开发分支（基线 `7dd788b`，无远端 upstream；已有文档提交 `8a522b5`、`575aba4`、`bef1432`（当前已知 HEAD），尚无 Week 05 功能实现提交） |
 
 ---
 

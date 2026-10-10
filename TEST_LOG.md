@@ -230,7 +230,7 @@ if (help_button_get_pending(&btn)) {
 | `idf.py build` 编译通过 | ✅ **PASS** | `idf.py build` 实际运行通过（版本 `week02-stable-19-g5fe738a-dirty`），新增 `help_uplink.c/h` 无编译错误 |
 | 模块注册 | ✅ **PASS** | `help_uplink.c` 已加入 CMakeLists.txt 源文件列表 |
 | Kconfig 配置项 | ✅ **PASS** | `CONFIG_HELP_VPS_URL`（string）、`CONFIG_HELP_UPLINK_TIMEOUT_MS`（int，默认 10000）已定义 |
-| 公开 API | ✅ **PASS** | `help_uplink_is_configured()`、`help_uplink_send_event()` 签名完整 |
+| 公开 API（`ae89be8` 时点，同步） | ✅ **PASS** | `help_uplink_is_configured()`、`help_uplink_send_event()` 签名完整；异步 API（`29dd72d`）见下节 |
 
 ### 提交 `5fe738a` — fix(help_uplink): correct protocol semantics for JSON timestamps and config
 
@@ -240,16 +240,54 @@ if (help_button_get_pending(&btn)) {
 | 时间戳语义正确性 | ✅ **PASS** | `sent_at_us` 注明为设备端 HTTP POST 完成时刻（非 VPS 上传时间），0 值序列化为 JSON `null` |
 | 代码审查无新 WARNING | ✅ **PASS** | 构建日志无新增编译警告 |
 
-### ⚠️ 未验证项目（诚实记录）
+### ⚠️ 未验证项目（诚实记录，`ae89be8`/`5fe738a` 时点）
 
 | 项目 | 原因 |
 |------|------|
 | **实机 HTTP POST 测试** | 未配置真实 VPS URL，未烧录验证实际网络行为 |
-| **`help_uplink` 接入 `main.c`** | 当前模块未被 main.c 调用，尚未集成到事件发送路径 |
+| ~~**`help_uplink` 接入 `main.c`**~~ → **已解决（软件集成）** | ~~当前模块未被 main.c 调用，尚未集成到事件发送路径~~；该集成已由后续提交 `29dd72d` 完成（见下节），但**实机网络验证仍未进行** |
 | **超时路径测试** | 需实机验证 `CONFIG_HELP_UPLINK_TIMEOUT_MS` 超时行为 |
 | **非 2xx 响应处理** | 需实机 mock VPS 验证 HTTP 500/404 等错误路径 |
 
-**结论**: `ae89be8` + `5fe738a` 构建验证通过，模块代码完整、无编译错误。但 **help_uplink 尚未集成到 main.c 的事件发送路径**，且未经过任何实机网络验证。闭环链路（按键 → HTTP POST → 远端确认）尚未完成。
+**结论（`ae89be8` + `5fe738a` 时点）**: 构建验证通过，模块代码完整、无编译错误。**当时** help_uplink 尚未集成到 `main.c` 的事件发送路径；该软件集成已由后续提交 `29dd72d` 完成（见下节）。**但真实 ESP32→VPS 端到端实机验收仍未完成（HTTP POST 成功/失败/超时路径均未验证）**，闭环链路（按键 → HTTP POST → 远端确认）**不得声称已通过**。
+
+---
+
+## Week 03 — help_uplink 异步接口集成（`29dd72d`，2026-10-10 文档事实核对）
+
+**提交**: `29dd72d` feat(week03): integrate help_uplink async task into event state machine
+（`main/help_uplink.c` +110 行、`main/help_uplink.h` +42 行、`main/main.c` +49 行；该提交位于 PR #3 合并 `ec9c94b` 的历史中，并随 PR #4 进入 `main` `7dd788b`）
+
+### 集成后的公开 API 清单（覆盖同步 + 异步）
+
+| API | 类型 | 说明 | 验证状态 |
+|-----|------|------|---------|
+| `help_uplink_is_configured()` | 同步 | 检查 `CONFIG_HELP_VPS_URL` 是否非空 | 签名 ✅（`ae89be8`）；集成 ⛔ 未验证 |
+| `help_uplink_send_event()` | 同步（阻塞） | 构造 JSON → HTTP POST；**不能在 1 Hz 主循环直接调用** | 编译 ✅ PASS（`ae89be8`/`5fe738a`）；实机 ⛔ 未验证 |
+| `help_uplink_start()` | 异步 | 创建后台 FreeRTOS 上行推送任务 | ⛔ 未验证（`29dd72d` 无构建条目） |
+| `help_uplink_request_send()` | 异步 | 主循环请求一次上行 | ⛔ 未验证（`29dd72d` 无构建条目） |
+| `help_uplink_poll()` | 异步 | 轮询异步上行结果 | ⛔ 未验证（`29dd72d` 无构建条目） |
+
+### 源码集成证据（`main/main.c`，当前代码）
+
+| 位置 | 调用 |
+|------|------|
+| `main/main.c:34` | `#include "help_uplink.h"` |
+| `main/main.c:364` | `help_uplink_start();`（启动异步 VPS 上行推送任务） |
+| `main/main.c:595` | `help_uplink_is_configured()`（未配置则 `help_event_fail()`） |
+| `main/main.c:601` | `help_uplink_request_send(&help_event)`（未被接受则 `help_event_fail()`） |
+| `main/main.c:612` | `help_uplink_poll(&uplink_res)`（`ESP_OK` → `help_event_mark_sent()`，否则 `help_event_fail()`） |
+
+### ⚠️ 未验证项目（不新增无证据结论）
+
+| 项目 | 原因 |
+|------|------|
+| **`29dd72d` 编译验证** | `TEST_LOG.md` 无该提交的构建条目；本次仅做文档事实核对，**未运行固件构建**，故不新增构建结论 |
+| **真实 ESP32→VPS HTTP POST（成功/失败/超时）** | 未配置真实 `CONFIG_HELP_VPS_URL`，无实机网络证据 |
+| **非 2xx 响应 / 超时路径实机验证** | 需实机 mock VPS 验证 HTTP 500/404 等错误路径 |
+
+**结论**: 异步接口已在**源码层**集成至 `main.c` 事件状态机（软件集成完成），但编译与实机网络路径**均无验证证据**，不得标记为 PASS。真实 ESP32→VPS 端到端验收**仍未完成**。
+
 ---
 
 ## Week 04 — 结构化任务契约校验模块 (2026-10-09)

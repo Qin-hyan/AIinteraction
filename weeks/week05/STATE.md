@@ -1,8 +1,9 @@
 # Week 05 State — 接通按键说话与语音播报
 
-**状态**: 🔧 分支已建立，功能实现未开始
+**状态**: 🔧 分支已建立（含 3 个本地文档提交），**Week 05 功能实现尚未开始**
 **分支**: `feature/week05-voice-interaction`（本地分支，无远端 upstream）
 **基线**: `7dd788b` — Merge pull request #4 (origin/main)
+**当前已知 HEAD**: `bef1432` docs(week03): correct help_uplink integration status across docs
 **上游**: 无
 
 ## 目标（来自课程计划）
@@ -19,14 +20,20 @@
 
 ## 当前状态
 
-- `feature/week05-voice-interaction` 已从 `main` (`7dd788b`) 创建
-- 该分支与 `main` 内容一致（`main..feature/week05-voice-interaction` 无提交，`git diff` 为空）
+- `feature/week05-voice-interaction` 已从 `main` (`7dd788b`) 创建（基线 `7dd788b`）
+- 分支上已有 3 个本地**文档提交**（无功能实现提交）：
+  | 提交 | 说明 |
+  |------|------|
+  | `8a522b5` | docs(week05): sync project documents for Week 05 branch initialization |
+  | `575aba4` | docs(status): mark Week 03 merged and correct Week 04 branch status |
+  | `bef1432` | docs(week03): correct help_uplink integration status across docs（**当前已知 HEAD**） |
 - 未配置远端 upstream（`git for-each-ref` 显示该分支 upstream 为空）
-- 尚无新增提交、源码或测试
+- **尚无源码变更、功能实现提交或测试**（分支上的提交均为文档修改）
 
 ## 已完成
 
 - 分支初始化（基线 `7dd788b`，取自已合并 PR #4 的 `main`）
+- 文档同步提交 3 个（`8a522b5`、`575aba4`、`bef1432`）—— 仅文档事实修正，不含任何 Week 05 功能代码
 
 ## 待完成（尚未开始，不得无证据标记为已完成）
 

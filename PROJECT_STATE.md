@@ -8,7 +8,8 @@
 
 **分支**: `feature/week05-voice-interaction`（本地分支，无远端 upstream）
 **基线**: `7dd788b` — Merge pull request #4（= `main` = `origin/main`）
-**阶段**: 🔧 分支已建立，分支内容与 `main` 一致（无新增提交），**语音功能实现尚未开始**
+**当前已知 HEAD**: `bef1432` docs(week03): correct help_uplink integration status across docs
+**阶段**: 🔧 分支已建立，已有 3 个本地**文档提交**（`8a522b5`、`575aba4`、`bef1432`），**语音功能实现尚未开始**（无功能代码提交）
 
 **本周待完成（均未开始，不得无证据标记为完成）**:
 - 按键开始/结束录音 → 音频采集与采样格式
@@ -61,11 +62,12 @@
 - 👉 **Week 03 按键扫描解耦**：独立 FreeRTOS 任务 (30 Hz) + FreeRTOS Queue 通信，主循环不再负责按键采样
 - 👉 **help_uplink 模块**：独立 HTTP POST 模块 (`help_uplink.c/.h`)，将 `help_event_t` 构造为 JSON 推送到外部 VPS 端点（`ae89be8`）
 - 👉 **JSON 时间戳语义修正**：`sent_at_us` 标注为设备端 HTTP POST 完成时刻，0 值序列化为 `null`（`5fe738a`）
+- 👉 **help_uplink 异步接口集成至 `main.c`**（`29dd72d`）：新增异步接口 `help_uplink_start()` / `help_uplink_request_send()` / `help_uplink_poll()`，由后台 FreeRTOS 任务执行 HTTP POST；`main.c` 初始化阶段调用 `help_uplink_start()`，事件状态机接入 `help_uplink_is_configured()` / `help_uplink_request_send()` / `help_uplink_poll()`（源码位置 `main.c:364` / `:595` / `:601` / `:612`）
 
 **待完成**:
-- **`help_uplink` 接入 `main.c`**：目前模块已存在但未被调用，需要将 `help_uplink_send_event()` 接入事件发送路径
+- ~~**`help_uplink` 接入 `main.c`**~~ → **已完成（软件集成）**：异步接口已集成至 `main.c` 事件状态机（`29dd72d`），**「模块已存在但未被调用」的旧描述已作废**
 - **完整闭环链路测试**（按键 → 去抖 → event_id → LED 反馈 → HTTP 发送 → 远端确认/取消 → 物理反馈更新）
-- **实机网络验证**（需配置真实 VPS URL，验证 HTTP POST 成功/失败路径，检查远端接收状态及响应）
+- **真实 ESP32→VPS 端到端实机验收（仍未完成）**：软件集成已完成（`29dd72d`），但需配置真实 VPS URL，实测 HTTP POST 成功/失败/超时路径并检查远端接收状态及响应；**在取得实机证据前不得声称端到端链路已通过**
 
 ### ⚠️ 实机测试记录 (2026-10-09)
 
