@@ -47,6 +47,8 @@ AIinteraction/
 | query_last 工具 | `service/query_last.py` | ✅ Week 04 | 读取 `ESP32_BASE_URL` 环境变量 → HTTP GET `/api/observation/last`，纯标准库，mock 测试 13 PASS |
 | trigger_collect 工具 | `service/trigger_collect.py` | ✅ Week 04 | POST `/api/collect` → 轮询 `/api/collect/status` 直至完成/失败/超时，
 纯标准库，mock 测试 12 PASS，复用 `query_last` 的 `ESP32_BASE_URL` 配置 |
+| 受限任务分发 | `service/task_dispatcher.py` | ✅ Week 04 | 单一入口 `dispatch_task()` → `parse_and_validate()` → 四种意图分发，
+`clarify`/`unsupported`/校验失败不调工具，16 单元测试 PASS |
 
 ---
 

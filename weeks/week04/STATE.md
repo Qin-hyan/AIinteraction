@@ -1,6 +1,6 @@
 # Week 04 State — 自然语言查询与请求采集
 
-**状态**: ✅ Module `service/trigger_collect.py` 完成（49 PASS）
+**状态**: ✅ Step 1-3 完成 + Step 4 受限任务分发模块完成（65 PASS）
 **分支**: `feature/week04-natural-language`
 **基线**: `ec9c94b` — Merge pull request #3 (origin/main)
 **上游**: 无（已清除 `origin/main` 的跟踪）
@@ -77,6 +77,49 @@ service/
 - 12 个单元测试覆盖：成功流程、设备失败、设备超时、轮询超时、请求不匹配、观测无效、
   缺失观测、POST HTTP 错误、轮询 HTTP 错误、无效 JSON 响应、配置缺失、POST 缺少 request_id
 - 测试均 mock HTTP，不发起真实设备请求
+
+### Week 04 Step 4 — 受限任务分发模块 (`service/task_dispatcher.py`)
+
+**新增文件**:
+```
+service/
+├── task_dispatcher.py          # 受限任务分发入口
+└── test_task_dispatcher.py     # 单元测试 (16 tests)
+```
+
+**设计要点**:
+- 单一入口 `dispatch_task(raw_input: str) → DispatchResult`
+- 调用 `parse_and_validate()` 完成三步校验（JSON 解析 → Schema → 意图契约）
+- 四种意图分发：
+  - `query_last`: 真实调用 `query_last()` 工具，返回 `observation`
+  - `trigger_collect`: 真实调用 `trigger_collect()` 工具，返回 `request_id`/`collect_status`/`collect_observation`
+  - `clarify`: 直接返回 `question`，**不调用任何设备工具**
+  - `unsupported`: 直接返回 `reason`，**不调用任何设备工具**
+- 非法 JSON、校验失败、未知意图 → `success=False`，**不执行任何工具**
+- 工具内部异常 → 捕获并返回错误，不崩溃
+- 纯 Python 标准库，零外部依赖
+
+**16 个单元测试覆盖**:
+| # | 测试项 | 结果 | 分类 |
+|---|--------|------|------|
+| 1 | query_last 成功获取有效观测 | ✅ PASS | query_last |
+| 2 | query_last 设备无有效记录 | ✅ PASS | query_last |
+| 3 | query_last 工具失败 (HTTP 404) | ✅ PASS | query_last |
+| 4 | query_last 工具异常 (ConnectionError) | ✅ PASS | query_last |
+| 5 | trigger_collect 完整成功流程 | ✅ PASS | trigger_collect |
+| 6 | trigger_collect 工具失败 (设备端失败) | ✅ PASS | trigger_collect |
+| 7 | trigger_collect 工具异常 (TimeoutError) | ✅ PASS | trigger_collect |
+| 8 | clarify 返回澄清问题，不调任何工具 | ✅ PASS | clarify |
+| 9 | unsupported 返回拒绝原因，不调任何工具 | ✅ PASS | unsupported |
+| 10 | 非法 JSON，不调任何工具 | ✅ PASS | 失败关闭 |
+| 11 | 未知意图，不调任何工具 | ✅ PASS | 失败关闭 |
+| 12 | query_last 带额外字段 (device_address)，不调工具 | ✅ PASS | 失败关闭 |
+| 13 | 缺少必需字段 (confidence/original)，不调工具 | ✅ PASS | 失败关闭 |
+| 14 | clarify 缺少 question，不调工具 | ✅ PASS | 失败关闭 |
+| 15 | unsupported 缺少 reason，不调工具 | ✅ PASS | 失败关闭 |
+| 16 | confidence 越界 (1.5)，不调工具 | ✅ PASS | 失败关闭 |
+
+**总计**: 65 PASS / 0 FAIL（原有 49 + 新增 16）
 
 ## 前置条件
 

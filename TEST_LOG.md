@@ -359,10 +359,47 @@ if (help_button_get_pending(&btn)) {
 - 成功条件：`status=="completed"` + `linked==true` + `observation.valid==true`
 - 不伪造数据，不接入语言模型，不修改 ESP32 业务代码
 
+---
+
+## Week 04 Step 4 — 受限任务分发模块 (2026-10-10)
+
+**分支**: `feature/week04-natural-language`
+**范围**: `service/task_dispatcher.py` + `service/test_task_dispatcher.py`（纯 Python 标准库，mock 工具）
+**版本**: 最新提交（65 PASS）
+**验证方式**: Python `unittest` 本地运行
+**结果**: **16 PASS / 0 FAIL**（+ 原有 49 PASS = 总计 **65 PASS**）
+
+| # | 测试项 | 结果 | 分类 |
+|---|--------|------|------|
+| 1 | query_last 成功获取有效观测 | ✅ PASS | query_last |
+| 2 | query_last 设备无有效记录 | ✅ PASS | query_last |
+| 3 | query_last 工具失败 (HTTP 404) | ✅ PASS | query_last |
+| 4 | query_last 工具异常 (ConnectionError) | ✅ PASS | query_last |
+| 5 | trigger_collect 完整成功流程 | ✅ PASS | trigger_collect |
+| 6 | trigger_collect 工具失败 (设备端失败) | ✅ PASS | trigger_collect |
+| 7 | trigger_collect 工具异常 (TimeoutError) | ✅ PASS | trigger_collect |
+| 8 | clarify 返回澄清问题，不调任何工具 | ✅ PASS | clarify |
+| 9 | unsupported 返回拒绝原因，不调任何工具 | ✅ PASS | unsupported |
+| 10 | 非法 JSON，不调任何工具 | ✅ PASS | 失败关闭 |
+| 11 | 未知意图，不调任何工具 | ✅ PASS | 失败关闭 |
+| 12 | query_last 带额外字段 (device_address)，不调工具 | ✅ PASS | 失败关闭 |
+| 13 | 缺少必需字段 (confidence/original)，不调工具 | ✅ PASS | 失败关闭 |
+| 14 | clarify 缺少 question，不调工具 | ✅ PASS | 失败关闭 |
+| 15 | unsupported 缺少 reason，不调工具 | ✅ PASS | 失败关闭 |
+| 16 | confidence 越界 (1.5)，不调工具 | ✅ PASS | 失败关闭 |
+
+**设计要点**:
+- 单一入口 `dispatch_task(raw_input: str) → DispatchResult`
+- 调用 `parse_and_validate()` 校验，四种意图分发
+- `clarify` / `unsupported` / 非法 JSON / 校验失败 → 不调用任何设备工具
+- 工具异常被捕获并返回 `success=False`，不崩溃
+- 纯 Python 标准库，零外部依赖
+- 测试均 mock `query_last` / `trigger_collect`，不发起真实 HTTP 请求
+
 ### ⚠️ 未验证项目
 
 | 项目 | 原因 |
 |------|------|
-| **实机 HTTP 调用** | 无真实 ESP32 设备连接，所有请求通过 mock 验证 |
-| **与 TaskContract 集成** | trigger_collect 工具当前独立，未与 `validator.py` 或语言模型输出连接 |
-| **POST 请求体内容协商** | ESP32 服务端 POST /api/collect 忽略请求体，当前实现发送空 body |
+| **与真实 ESP32 设备集成** | 无真实设备连接，所有工具通过 mock 验证 |
+| **与语言模型输出连接** | 当前分发器接收结构化 JSON，未接入 LLM |
+| **实机 HTTP 调用** | 无真实 ESP32 设备连接 |

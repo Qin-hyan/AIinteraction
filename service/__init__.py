@@ -29,6 +29,10 @@ from .query_last import (
     get_base_url,
     query_last,
 )
+from .task_dispatcher import (
+    DispatchResult,
+    dispatch_task,
+)
 
 __all__ = [
     "IntentEnum",
@@ -49,4 +53,6 @@ __all__ = [
     "query_last",
     "trigger_collect",
     "_poll_status",
+    "DispatchResult",
+    "dispatch_task",
 ]
