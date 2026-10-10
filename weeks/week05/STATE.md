@@ -1,6 +1,6 @@
 # Week 05 State — 接通按键说话与语音播报
 
-**状态**: 📋 **方案已形成，功能未实现**
+**状态**: 🟡 **Step 1 代码与自动测试完成；真实录音格式通过，有效语音信号未通过**
 **分支**: `feature/week05-voice-interaction`（本地分支，无远端 upstream）
 **基线**: `7dd788b` — Merge pull request #4 (origin/main)
 
@@ -39,9 +39,36 @@
   | `7f7698c` | docs(week05): add voice interaction architecture design v1.0 |
   | `e322dc7` | docs(week05): correct Whisper ASR and edge-tts TTS service facts |
 - 未配置远端 upstream（分支尚未推送）
-- **尚无源码变更、功能实现提交或测试**
+- Step 1 已新增源码与测试（详见下方「Step 1 状态」），最新提交以 `git log --oneline` 为准
 
 > 提交记录为截至 2026-10-10 的快照；最新提交以 `git log --oneline` 为准。
+
+## Step 1 状态 — PC 音频采集（2026-10-10）
+
+**新增文件**（仅此三项，未改 `main/` 固件、未加 ASR/TTS/网络/按键集成）:
+
+| 文件 | 作用 |
+|------|------|
+| `service/audio_capture.py` | `sounddevice.RawInputStream` 采集 + 标准库 `wave` 写 WAV；API `start_recording()` / `stop_recording()`；默认 16kHz/16bit/mono，采样率可配置 |
+| `service/test_audio_capture.py` | 31 项自动测试，全部使用模拟音频流（假 `sounddevice`），不依赖真实麦克风 |
+| `requirements-audio.txt` | 仅声明 `sounddevice==0.5.6`（音频采集最小依赖；ASR/TTS 依赖未提前引入） |
+
+**关键行为**: 重复启动 / 未启动就停止 / 空录音 / 数据长度不符 / 设备打开失败 / 设备实际采样率与请求不一致 → 一律抛明确异常，不写空 WAV、不静默降级。
+
+**验证结果**:
+
+| 验证项 | 结果 | 证据 |
+|--------|------|------|
+| 自动测试（模拟音频流） | ✅ PASS 31/31（另 6 subtests） | 隔离虚拟环境 `D:\AIinteraction-venvs\week05-audio`（Python 3.11.7 / sounddevice 0.5.6 / cffi 2.1.1 / pytest 9.1.1） |
+| 既有回归测试（Week 04 等 102 项） | ✅ PASS 102/102 | 同一虚拟环境运行 `pytest service/`，未受影响 |
+| 输入设备枚举 | ✅ PASS（实测） | 识别到 21 个输入设备；默认输入 = `麦克风阵列 (Realtek(R) Audio)`（MME，device 1，44100Hz） |
+| 真实录音 + WAV 参数 | ✅ PASS（实测） | 16 kHz / 1 ch / 16 bit / 2.90 s（46400 帧）/ 92844 字节；`read_wav_info` 文件头复核一致；`status_flags` 为空 |
+| 有效语音信号 | ❌ **未通过** | 两次真实录音峰值仅 39/32768（0.12%）与 218/32768（0.67%）满量程，属近乎静音的环境底噪，未捕捉到说话声 |
+| 麦克风权限 | ✅ 未被拒绝（间接证据） | 录音确实采集到 46400 / 62400 帧真实样本，非空数据 |
+
+> **不得夸大**: 设备可用性与 WAV 格式已由实测证明；「录到有效语音」**未被证明**，
+> 真实麦克风验证因此**不应**被判为完全通过。仓库内不保留任何录音文件（录音只写仓库外临时目录并在验证后删除）。
+> 复现命令（临时探针脚本，仓库外，未提交）: `D:\AIinteraction-venvs\week05-audio\Scripts\python.exe D:\AIinteraction-tmp\week05_audio_check\record_probe.py 3 6`
 
 ## 架构设计状态
 
@@ -62,7 +89,7 @@
 
 | 项目 | 状态 |
 |------|------|
-| PC 音频采集验证 (Step 1) | ⏳ 未开始 |
+| PC 音频采集验证 (Step 1) | 🟡 代码 + 自动测试完成；真实录音格式 PASS；有效语音信号 **未通过** |
 | 按键事件→PC 链路 (Step 2) | ⏳ 未开始 |
 | ASR 接入 (Step 3) | ⏳ 未开始 |
 | 语言模型 NL→JSON (Step 4) | ⏳ 未开始 |

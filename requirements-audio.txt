@@ -1,0 +1,9 @@
+# Week 05 Step 1 — PC 端音频采集依赖（最小集合）
+# 用途: service/audio_capture.py —— sounddevice.RawInputStream 采集 + 标准库 wave 写 WAV
+# 范围: 只含音频采集依赖；ASR / LLM / TTS 依赖在后续 Step 单独声明，不提前引入。
+# 安装（务必用隔离虚拟环境，不要装进系统全局 Python）:
+#   python -m venv <仓库外的虚拟环境目录>
+#   <venv>\Scripts\python.exe -m pip install -r requirements-audio.txt
+# 已验证环境: Windows + Python 3.11.7 + PortAudio V19.7.0-devel (由 sounddevice 自带)
+# 传递依赖: CFFI 2.1.1 / pycparser 3.11（由 sounddevice 自动安装，无需手工固定）
+sounddevice==0.5.6
