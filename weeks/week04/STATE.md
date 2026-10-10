@@ -1,6 +1,6 @@
 # Week 04 State — 自然语言查询与请求采集
 
-**状态**: ✅ Step 1-6 全部完成（92 PASS）
+**状态**: ✅ Step 1-6 全部完成（102 PASS）
 **分支**: `feature/week04-natural-language`
 **基线**: `ec9c94b` — Merge pull request #3 (origin/main)
 **上游**: 无（已清除 `origin/main` 的跟踪）
@@ -177,6 +177,46 @@ service/
 | 7 | 未知意图 | ✅ PASS | 非法输入 |
 
 **总计**: 92 PASS / 0 FAIL（原有 85 + Step 6 新增 7）
+
+---
+
+### Week 04 Step 6 集成验证 — 本地结构化样例链路验证 (`service/test_task_pipeline_integration.py`)
+
+**新增文件**: `service/test_task_pipeline_integration.py`
+
+**测试策略**:
+- 使用结构化 JSON 样例作为模型输出的替代输入
+- 调用**真实处理链路**：`parse_and_validate → dispatch_task → 真实工具代码 → format_result`
+- 只 mock HTTP 网络边界 (`urllib.request.urlopen`) 和 `time.sleep`
+- 不 mock 分发器和业务工具（validator/dispatcher/formatter/工具函数体全部走真实代码）
+- 不发起真实 HTTP 请求
+
+**10 个集成测试覆盖**:
+
+| # | 测试项 | 结果 | 核验点 |
+|---|--------|------|--------|
+| 1 | query_last 有效观测 | ✅ PASS | 来源/序号/相对时间保留，不伪装日历时间 |
+| 2 | query_last 无记录 | ✅ PASS | 正确提示无数据 |
+| 3 | trigger_collect 采集成功 | ✅ PASS | 输出采集详情，相对时间保留 |
+| 4 | trigger_collect 设备失败 | ✅ PASS | 输出失败信息，不反馈成功 |
+| 5 | trigger_collect 设备超时 | ✅ PASS | 输出超时信息，不反馈成功 |
+| 6 | clarify 澄清 | ✅ PASS | HTTP 未被调用 |
+| 7 | unsupported 拒绝 | ✅ PASS | HTTP 未被调用 |
+| 8 | 非法 JSON | ✅ PASS | 校验失败，HTTP 未被调用 |
+| 9 | 未知意图 | ✅ PASS | 校验失败，HTTP 未被调用 |
+| 10 | 额外字段拒绝 | ✅ PASS | 校验失败，HTTP 未被调用 |
+
+**总计**: **102 PASS / 0 FAIL**（原有 92 + 集成验证新增 10）
+
+**已验证事项**:
+- `parse_and_validate` → `dispatch_task` → `query_last`/`trigger_collect` 真实工具代码 → `format_result` 完整真实链路
+- 以上链路中仅 HTTP 网络调用被 mock（工具函数体、validator、dispatcher、formatter 全部执行真实逻辑）
+- clarify、unsupported、非法输入路径均不触发 HTTP 请求
+- 设备端失败/超时场景不反馈成功
+
+**仍待补验**:
+- ⚠️ 真实语言模型输出 → 管道输入接口对接
+- ⚠️ 真实 ESP32 设备 HTTP 调用（query_last 和 trigger_collect 的真实网络请求）
 
 ## 前置条件
 

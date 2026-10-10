@@ -471,3 +471,42 @@ if (help_button_get_pending(&btn)) {
 | **与真实 ESP32 设备集成** | 无真实设备连接，所有工具通过 mock 验证 |
 | **与语言模型输出连接** | 当前管道接收结构化 JSON，未接入 LLM |
 | **实机 HTTP 调用** | 无真实 ESP32 设备连接 |
+
+---
+
+## Week 04 Step 6 集成验证 — 本地结构化样例链路验证 (2026-10-10)
+
+**分支**: `feature/week04-natural-language`
+**范围**: `service/test_task_pipeline_integration.py`（纯 Python 标准库）
+**版本**: HEAD `22738b9`（待提交）
+**验证方式**: Python `unittest` 本地运行
+**测试策略**: 调用真实处理链路（`parse_and_validate → dispatch_task → 真实工具代码 → format_result`），仅 mock HTTP 网络边界
+**结果**: **10 PASS / 0 FAIL**（+ 原有 92 PASS = 总计 **102 PASS**）
+
+| # | 测试项 | 结果 | 分类 |
+|---|--------|------|------|
+| 1 | query_last 有效观测（来源/序号/相对时间保留） | ✅ PASS | 查询 |
+| 2 | query_last 无有效记录 | ✅ PASS | 查询 |
+| 3 | trigger_collect 采集成功（相对时间保留） | ✅ PASS | 采集 |
+| 4 | trigger_collect 设备失败（不反馈成功） | ✅ PASS | 采集 |
+| 5 | trigger_collect 设备超时（不反馈成功） | ✅ PASS | 采集 |
+| 6 | clarify 返回澄清问题（HTTP 未被调用） | ✅ PASS | 澄清 |
+| 7 | unsupported 返回拒绝原因（HTTP 未被调用） | ✅ PASS | 拒绝 |
+| 8 | 非法 JSON（校验失败，HTTP 未被调用） | ✅ PASS | 非法输入 |
+| 9 | 未知意图（校验失败，HTTP 未被调用） | ✅ PASS | 非法输入 |
+| 10 | 额外字段拒绝（校验失败，HTTP 未被调用） | ✅ PASS | 非法输入 |
+
+**设计要点**:
+- 使用结构化 JSON 样例作为模型输出的替代输入
+- 只 mock `urllib.request.urlopen` 和 `time.sleep`，其余全部走真实代码
+- 不 mock 分发器、业务工具和格式化器
+- 验证数据来源 (`source`)、序号 (`seq`)、相对时间 (`time_quality: "relative"`) 在完整链路中得以保留
+- 非法任务（非法 JSON、未知意图、额外字段）不调用 HTTP 工具
+- 采集未完成（失败/超时）不反馈成功
+
+### ⚠️ 仍待补验
+
+| 项目 | 原因 |
+|------|------|
+| **真实语言模型输出 → 管道输入** | 当前使用结构化 JSON 样例替代 LLM 输出 |
+| **真实 ESP32 设备 HTTP 调用** | 无真实设备连接，HTTP 边界通过 mock 模拟 |
