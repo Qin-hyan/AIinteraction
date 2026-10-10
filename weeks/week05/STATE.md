@@ -1,6 +1,6 @@
 # Week 05 State — 接通按键说话与语音播报
 
-**状态**: 🟡 **Step 1 代码与自动测试完成；真实录音格式通过；真实麦克风有效语音采集（第 3 轮）✅ PASS；Whisper ASR 尚未接入**
+**状态**: 🟡 **Step 1 完成（WAV 格式 PASS；真实麦克风有效语音第 3 轮 ✅ PASS）；Step 2A PC 端录音 HTTP 控制服务 ✅ 已实现并通过自动测试（39/39）；ESP32 尚未接入；Whisper ASR 未接入**
 **分支**: `feature/week05-voice-interaction`（本地分支，无远端 upstream）
 **基线**: `7dd788b` — Merge pull request #4 (origin/main)
 
@@ -148,6 +148,69 @@
 
 **下一步（未开始，需另行授权）**: Step 2 按键事件 → PC 链路；Step 3 Whisper ASR 接入（依赖安装、模型下载、推理性能与识别准确率验证）。
 
+## Step 2A 状态 — PC 端语音录音 HTTP 控制服务（2026-10-10）
+
+**结论边界（先读）**: 本节只证明「**PC 端 HTTP 录音控制服务已实现并通过自动测试**」。
+**ESP32 尚未接入**——未修改固件、未烧录、未做 ESP32 → PC 的真实网络请求、未改防火墙规则。
+本步未调用 ASR / LLM / TTS，也未重复验证真实麦克风（真实录音能力见上方 Step 1 记录）。
+
+**前置条件**: 分支 `feature/week05-voice-interaction`、HEAD `0a46039`、工作区干净；使用仓库外虚拟环境 `D:\AIinteraction-venvs\week05-audio`。
+
+**新增文件**（仅此三项 + 本文件，未改 `main/` 固件与既有 Python 模块）:
+
+| 文件 | 作用 |
+|------|------|
+| `service/voice_control_server.py` | Flask 服务：`POST /api/voice/start`、`POST /api/voice/stop`、`GET /api/voice/status`；**完全复用** `audio_capture.AudioCapture`（本模块不含任何 PCM/写盘逻辑）；提供 `create_app(capture=...)` 注入点与 CLI（默认 `127.0.0.1:8080`） |
+| `service/test_voice_control_server.py` | 39 项自动测试；Flask test client + 假 `AudioCapture`，不打开真实麦克风、不写任何录音文件 |
+| `requirements-voice-control.txt` | 仅声明 `flask==3.1.3` 及其传递依赖（固定为实测通过版本） |
+
+**依赖（实测通过版本）**:
+
+| 包 | 版本 | 说明 |
+|----|------|------|
+| flask | 3.1.3 | 本步唯一新增的直接依赖 |
+| werkzeug / jinja2 / markupsafe / itsdangerous / click / blinker | 3.1.9 / 3.1.6 / 3.0.4 / 2.2.0 / 8.5.0 / 1.9.0 | Flask 传递依赖，固定为实测版本 |
+
+安装位置：仓库外虚拟环境 `D:\AIinteraction-venvs\week05-audio`（Python 3.11.7）；**未安装到系统全局 Python**。
+
+**API 行为与错误映射**:
+
+| 场景 | HTTP | JSON `error` | 说明 |
+|------|------|--------------|------|
+| start 成功 | 200 | — | `state=recording`，含 `target_path`（尚未落盘） |
+| stop 成功 | 200 | — | `state=idle`，含 `wav` 元数据（path/samplerate/channels/sample_width_bytes/frames/duration_seconds/size_bytes/status_flags） |
+| status 查询 | 200 | — | `state` / `recording` / `frames_recorded` / `elapsed_seconds` / `target_path` / `last_recording` / `config` |
+| 重复启动 | 409 | `already_recording` | 不重复触达底层采集器 |
+| 未录音就停止 / 二次停止 | 409 | `not_recording` | — |
+| 请求体非法 JSON / 非 JSON 对象 | 400 | `invalid_request` | body 可省略（兼容 ESP32 极简请求） |
+| 录音为空 | 422 | `empty_recording` | 不登记 `last_recording`、不留待写路径 |
+| 设备/依赖错误 | 503 | `audio_device_error` | 失败后状态仍为 `idle`，可再次 start |
+| 其它录音错误 | 500 | `audio_capture_error` | — |
+| 未预期异常 | 500 | `internal_error` | `exception` 字段保留异常类名 |
+| 未知路径 / 方法不允许 | 404 / 405 | `not_found` / `method_not_allowed` | 同样返回 JSON（非 Flask 默认 HTML） |
+
+错误对象统一形如 `{"ok":false,"error":"<code>","message":"<可读中文>","exception":"<类名>","state":"idle|recording"}`；响应为 UTF-8 原样中文（`ensure_ascii=False`）。
+
+**输出路径与暴露面控制**:
+- 默认输出目录 = `audio_capture.DEFAULT_OUTPUT_DIR` = `%TEMP%/voice_task/`（仓库外），**不写仓库**
+- 显式覆盖输出目录时，若解析后位于仓库内（含仓库根）→ 直接拒绝（`VoiceControlConfigError`），不静默改写
+- 默认**只监听** `127.0.0.1:8080`；`--host` 可显式改为局域网地址，此时打印「未验证」警告。本次**未做**局域网暴露、**未改**防火墙
+
+**验证结果**:
+
+| 验证项 | 结果 | 证据 |
+|--------|------|------|
+| 新增测试 `service/test_voice_control_server.py` | ✅ PASS **39/39** | `python -m pytest service/test_voice_control_server.py -q`（0.72 s） |
+| 回归测试（Week 04 + Step 1 全部既有用例） | ✅ PASS **133/133** | 同一命令集合下 `pytest service/`；既有文件未改动 |
+| 合计 `pytest service/` | ✅ PASS **172/172**（另 6 subtests） | 1.02 s：audio 31 + query_last 13 + result_formatter 20 + task_dispatcher 16 + task_pipeline 7 + integration 10 + trigger_collect 12 + validator 24 + voice_control 39 |
+| 测试是否留下录音文件 | ✅ 无残留 | `%TEMP%/voice_task/` 为空；仓库内无 `*.wav`；测试用 `TemporaryDirectory` 已自动清理 |
+| 真实麦克风录音 | ⛔ **本次未验证**（不在 Step 2A 范围） | Step 2A 全程使用假采集器；真实录音能力见上方 Step 1 记录 |
+| ESP32 → PC 真实请求 | ⛔ **未验证**（未接入固件） | 未改 `main/`、未烧录、未做网络连通性/防火墙测试 |
+
+**测试覆盖（39 项）**: 正常路径 8（status/start/stop、WAV 元数据、无残留文件）、调用顺序错误 3、录音异常映射 8、HTTP/JSON 契约 6、默认配置与输出目录保护及 CLI 14（含 `--help` 渲染回归保护）。
+
+**下一步（未开始，需另行授权）**: Step 2B — ESP32 PLAY 按键事件 → PC（含局域网地址/防火墙连通性验证）；Step 3 Whisper ASR 接入。
+
 ## 架构设计状态
 
 | 设计项 | 状态 |
@@ -168,7 +231,7 @@
 | 项目 | 状态 |
 |------|------|
 | PC 音频采集验证 (Step 1) | 🟡 代码 + 自动测试完成；真实录音格式 PASS；有效语音采集（第 3 轮）**PASS**；ASR（Whisper）**未接入** |
-| 按键事件→PC 链路 (Step 2) | ⏳ 未开始 |
+| 按键事件→PC 链路 (Step 2) | 🟡 **拆分**：Step 2A「PC 端录音 HTTP 控制服务」✅ 已实现并通过自动测试（39/39）；Step 2B「ESP32 按键事件 → PC + 局域网连通性」⏳ 未开始 |
 | ASR 接入 (Step 3) | ⏳ 未开始 |
 | 语言模型 NL→JSON (Step 4) | ⏳ 未开始 |
 | TTS 播报 (Step 5) | ⏳ 未开始 |
