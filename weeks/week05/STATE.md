@@ -10,10 +10,10 @@
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — Week 05 语音交互架构设计（2026-10-10，v1.0）
   - 完整 Mermaid 数据流图：ESP32 按键→PC HTTP Server→录音→ASR→语言模型→run_task()→TTS→播放
   - 12 个设计节：课程要求、数据流图、模块运行位置、按键→PC 方案比较与推荐、核心接口、状态机、服务授权与依赖、异常矩阵、分步实施、前置条件、文件规划、审查记录
-  - 推荐方案：ESP32 PLAY 按键 HTTP 回调 → PC Flask Server → whisper 本地 ASR → DeepSeek/Qwen LLM → edge-tts
+  - 推荐方案：ESP32 PLAY 按键 HTTP 回调 → PC Flask Server → whisper 本地模型推理 ASR（无需 API Key） → DeepSeek/Qwen LLM → edge-tts（PC 端调用微软在线 TTS 服务，需网络）
   - 状态机与 help_event 状态机隔离设计
   - 14 种异常场景覆盖
-  - 8 步原子实施路线 + 10 项待确认前置条件
+  - 8 步原子实施路线 + 12 项待确认前置条件
 
 ## 目标（来自课程计划）
 
@@ -51,9 +51,9 @@
 | 核心接口 (按键/ASR/NL→JSON/TTS/LED) | ✅ 完成 |
 | 语音交互状态机 (Mermaid) | ✅ 完成 |
 | 异常处理矩阵 (14 场景) | ✅ 完成 |
-| 服务选型推荐 (whisper + edge-tts) | ✅ 完成 |
+| 服务选型推荐 (whisper 本地推理 + edge-tts 在线 TTS) | ✅ 完成 |
 | 分步实施路线 (8 Steps) | ✅ 完成 |
-| 实机验证前置条件清单 (10 项) | ✅ 完成 |
+| 实机验证前置条件清单 (12 项) | ✅ 完成 |
 | 人工审阅 | ⏳ 待安排 |
 
 ## 待完成（均未开始，不得无证据标记为已完成）
@@ -78,6 +78,8 @@
   - PC 麦克风/扬声器硬件可用性
   - PC 防火墙允许 ESP32 HTTP 入站 (8080 端口)
   - ESP32 与 PC 在同一 LAN 子网
-  - ASR/LLM 服务授权与 API Key（凭据不得写入仓库）
+  - whisper 本地推理前置条件：依赖安装、首次下载模型权重、FFmpeg、电脑推理性能（**不需要 ASR API Key**）
+  - LLM 服务授权与 API Key（凭据不得写入仓库）
   - whisper 本地推理速度是否满足交互体验要求
-  - edge-tts 网络连通性
+  - edge-tts 网络连通性：PC 端调用微软在线 TTS 服务，**需要网络、不需要 API Key**，合成文本会发送给外部服务（隐私待确认）
+  - 课程许可：教师确认 whisper 模型与微软在线 TTS 服务的使用权限（独立于 API Key，待确认）

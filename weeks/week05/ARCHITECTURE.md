@@ -48,10 +48,10 @@ flowchart TD
         STATUS_MGR["状态管理器<br/>录音→识别→执行→播报"]
     end
 
-    subgraph EXT_SVC["外部服务 (授权预训练)"]
-        ASR_API["ASR 服务<br/>待选型"]
+    subgraph EXT_SVC["本地推理与外部在线服务"]
+        ASR_API["whisper 本地模型推理<br/>无 API Key"]
         LLM_API["语言模型服务<br/>待选型"]
-        TTS_API["TTS 服务<br/>待选型"]
+        TTS_API["微软在线 TTS 服务<br/>经 edge-tts 调用<br/>无 API Key"]
     end
 
     subgraph ESP32_API["ESP32 HTTP API (复用)"]
@@ -101,11 +101,11 @@ flowchart TD
 | **语音模式 LED** | ESP32 固件 | GPIO38 RGB LED 指示语音交互阶段 | ⏳ 待实现 (可复用 `help_led_update()` 框架) |
 | **PC HTTP Server** | Windows Python | 接收 ESP32 按键事件，管理语音交互状态机 | ⏳ 待实现 |
 | **音频录音** | Windows Python | sounddevice 采集麦克风 16kHz/16bit/mono PCM，存为 WAV | ⏳ 待实现 (**待验证**: 麦克风可用性) |
-| **ASR 语音识别** | 外部服务/本地 Python | WAV 音频→中文文本 | ⏳ 待实现 (**待确认**: 授权服务选型与凭据) |
+| **ASR 语音识别** | Windows PC (本地 Python) | **whisper 本地模型推理**：WAV 音频→中文文本；**不需要 ASR API Key**。前置条件：依赖安装、首次下载模型权重、FFmpeg、电脑推理性能 | ⏳ 待实现 (**待确认**: 前置条件就绪；推理性能) |
 | **NL→结构化任务** | 外部服务/本地 Python | 将中文自然语言转换为 TaskContract JSON | ⏳ 待实现 (**待确认**: 语言模型选型与凭据) |
 | **任务处理管道** | Windows Python | `run_task()` — 校验 JSON→分发意图→调设备工具→格式化结果 | ✅ 已有 (`service/task_pipeline.py`) |
 | **设备 API 调用** | Windows→ESP32 HTTP | query_last/trigger_collect 通过 HTTP 与 ESP32 交互 | 🔧 工具已有，真实 ESP32 HTTP 调用待验证 |
-| **TTS 语音合成** | 外部服务/本地 Python | 格式化文本→语音播放 | ⏳ 待实现 (**待确认**: TTS 服务选型与凭据) |
+| **TTS 语音合成** | Windows PC 调用微软在线 TTS 服务 | edge-tts 将格式化文本发送给微软在线 TTS 服务→音频播放；**不需要 API Key**，**需要网络连接** | ⏳ 待实现 (**待确认**: 网络连通性；隐私与课程许可) |
 | **状态管理器** | Windows Python | 跟踪语音交互全生命周期状态，为 UI 和 LED 提供状态 | ⏳ 待实现 |
 | **Web 仪表盘状态显示** | ESP32 HTTP Server | 在现有 Web 页面中增加语音交互状态显示区域 | ⏳ 待实现 (可选) |
 | **文字入口 (保留)** | 任意 HTTP Client | 直接发送 TaskContract JSON 到 `run_task()` | ✅ 已有 (Week 04) |
@@ -311,18 +311,18 @@ stateDiagram-v2
 | 模块 | 推荐方案 | 授权 | 运行位置 | 选择依据 |
 |------|----------|------|----------|----------|
 | **麦克风录音** | `sounddevice` (Python) | MIT | Windows PC | 跨平台，支持 WAV 导出，比 `pyaudio` 更易安装 |
-| **ASR 语音识别** | **whisper (base/small)** 本地运行 | MIT | Windows PC (本地) | 1) 离线可用，不依赖网络 2) 不涉及 API 凭据管理 3) 中文识别准确率可接受 4) base 模型 ~142MB，CPU 推理 3-10s |
+| **ASR 语音识别** | **whisper (base/small)** 本地模型推理 | MIT (模型权重另有许可) | Windows PC (本地) | 1) **不需要 ASR API Key**，无云端 ASR 调用、无凭据管理 2) 离线可用（首次需下载模型权重） 3) 中文识别准确率可接受 4) base 模型 ~142MB，CPU 推理 3-10s 5) 课程许可为独立条件（见 §7.5） |
 | **语言模型 NL→JSON** | **DeepSeek API** 或 **本地 Qwen2.5-1.5B (Ollama)** | 服务条款授权 | 云端 (DeepSeek) 或 PC 本地 | 1) DeepSeek: 便宜且中文强，REST API 2) Qwen 本地: 无 API 凭据，离线可用。**需教师确认授权** |
-| **TTS 语音合成** | **edge-tts** (Python) | MIT | Windows PC (本地) | 1) 免费，无需 API 凭据 2) 中文普通话语音自然度高 3) 直接播放或导出 MP3 |
+| **TTS 语音合成** | **edge-tts** (Python 客户端) → **微软在线 TTS 服务** | 客户端 MIT；服务为 Microsoft 在线服务 | Windows PC 调用**微软在线 TTS 服务**（非本地 TTS） | 1) **不需要 API Key** 2) **需要网络连接**，离线不可用 3) **合成文本会发送给外部服务** 4) 中文普通话语音自然度高 5) 隐私与课程许可待确认（见 §7.5） |
 
 ### 7.2 方案限制与风险
 
 | 方案 | 限制 |
 |------|------|
-| whisper 本地 | 首次运行需下载模型 (~142-466MB)；CPU 推理速度取决于 PC 性能；嘈杂环境准确率下降 |
+| whisper 本地 | 前置条件：安装 Python 依赖 (openai-whisper 等) 与 **FFmpeg**（音频解码）；首次运行需下载模型权重 (~142-466MB，需网络)；CPU 推理速度取决于**电脑性能** (base 约 3-10s)；嘈杂环境准确率下降 |
 | DeepSeek API | 需网络 + API Key（不得写入仓库）；免费额度有限 |
 | Qwen 本地 (Ollama) | 需安装 Ollama + 下载模型 (~1-3GB)；需足够 RAM |
-| edge-tts | 需网络连接 Microsoft 服务；非完全离线 |
+| edge-tts | PC 端调用**微软在线 TTS 服务**：**需要网络连接**，无网络即不可用；**不需要 API Key**；**合成文本会发送给外部服务**（隐私待确认） |
 
 ### 7.3 依赖清单 (Python)
 
@@ -330,9 +330,13 @@ stateDiagram-v2
 # requirements_voice.txt (待创建)
 sounddevice>=0.4.6       # 音频采集 (MIT)
 numpy>=1.24.0            # 音频数据处理 (BSD)
-openai-whisper>=20231117 # 本地 ASR (MIT) — 首版方案
-edge-tts>=6.1.0          # TTS 合成 (MIT)
+openai-whisper>=20231117 # 本地 ASR 推理 (MIT) — 首版方案；不需要 API Key，首次运行自动下载模型权重
+edge-tts>=6.1.0          # TTS 合成 (MIT) — 调用微软在线服务，需网络，无 API Key
 flask>=3.0.0             # PC HTTP Server (BSD)
+
+# 系统前置 (非 pip 包):
+#   FFmpeg — whisper 音频解码依赖，需单独安装并加入 PATH
+#   模型权重 — whisper 首次运行自动下载 (~142-466MB, 需网络)
 
 # 若使用 DeepSeek API (备选):
 # openai>=1.0.0          # DeepSeek 兼容 OpenAI SDK (Apache 2.0)
@@ -346,9 +350,26 @@ flask>=3.0.0             # PC HTTP Server (BSD)
 | 配置项 | 位置 | 存储 | 安全要求 |
 |--------|------|------|----------|
 | PC_IP + Port | ESP32 `sdkconfig` (menuconfig) | 本地 (gitignore) | 不写入仓库 |
-| ASR/LLM API Key | PC 环境变量 `VOICE_ASR_KEY` `VOICE_LLM_KEY` | 本地，不写入仓库 | 不写入仓库/提交/截图 |
-| TTS 服务 | 无需凭据 (edge-tts) | — | — |
+| LLM API Key | PC 环境变量 `VOICE_LLM_KEY` | 本地，不写入仓库 | 不写入仓库/提交/截图 |
+| ASR (whisper 本地推理) | 不需要 API Key | — | 无云端凭据；课程许可为独立条件（见 §7.5） |
+| TTS (edge-tts → 微软在线服务) | 不需要 API Key | — | 合成文本会发送给外部服务，隐私待确认（见 §7.5） |
 | 音频文件 | PC 临时目录 `%TEMP%/voice_task/` | 本地 | 录音文件不提交 |
+
+### 7.5 课程许可与隐私（独立于 API Key 的待确认项）
+
+> 本节记录的是**课程许可 / 隐私确认**，与 API Key（凭据管理）属于两类不同事项，不得混为一谈。
+
+| # | 事项 | 性质 | 当前状态 | 确认方式 |
+|---|------|------|----------|----------|
+| L1 | 教师确认可使用的模型或服务范围（whisper 模型 + 微软在线 TTS 服务） | 课程许可 | ⏳ 待确认 | 向教师/助教确认并记录 |
+| L2 | whisper 模型权重的许可与下载来源 | 模型许可 | ⏳ 待确认 | 使用官方发布来源（openai-whisper 自动下载） |
+| L3 | edge-tts 合成文本会发送给微软在线服务 | 隐私 | ⏳ 待确认 | 仅发送任务结果/状态提示文本（不含录音音频）；与教师确认允许范围 |
+| L4 | 录音 WAV 与临时文件的留存 | 隐私 | ⏳ 待确认 | 仅存本地 `%TEMP%/voice_task/`，不提交仓库；留存时长待定 |
+
+**事实边界**:
+
+- whisper = **本地模型推理**：音频不上传外部语音识别服务，**不需要 ASR API Key**；前置条件为依赖安装、首次下载模型权重、FFmpeg、电脑推理性能。
+- edge-tts = Python 客户端，**PC 端调用微软在线 TTS 服务**：**需要网络连接**、**不需要 API Key**、**合成文本会发送给外部服务**。
 
 ---
 
@@ -397,9 +418,9 @@ flask>=3.0.0             # PC HTTP Server (BSD)
 | 项 | 内容 |
 |----|------|
 | 目标 | WAV 文件 → ASR → 中文文本 |
-| 任务 | 1) 安装 whisper 或确认 ASR 服务 2) `service/asr_client.py` 封装 ASR 调用 3) 单元测试：已知音频 → 预期文本 |
+| 任务 | 1) 安装 whisper 本地推理依赖 (openai-whisper + FFmpeg) 2) `service/asr_client.py` 封装本地 ASR 调用 3) 单元测试：已知音频 → 预期文本 |
 | 验收 | 录制 "查看最近的加速度数据" → ASR 输出准确匹配 |
-| 状态 | ⏳ **待确认**: ASR 服务选型与授权；PC 性能是否满足 whisper 推理 |
+| 状态 | ⏳ **待确认**: 本地推理前置条件（依赖/模型权重下载/FFmpeg）；电脑性能是否满足 whisper 推理；课程许可（见 §7.5，独立于 API Key） |
 
 ### Step 4: 语言模型 NL→JSON 接入 (优先级: P0)
 
@@ -415,9 +436,9 @@ flask>=3.0.0             # PC HTTP Server (BSD)
 | 项 | 内容 |
 |----|------|
 | 目标 | 文本 → TTS 语音 → PC 播放 |
-| 任务 | 1) `service/tts_client.py` 封装 edge-tts 2) 单元测试：中英文文本 → 播放验证 |
+| 任务 | 1) `service/tts_client.py` 封装 edge-tts（PC 端调用微软在线 TTS 服务，需网络） 2) 单元测试：中英文文本 → 播放验证 |
 | 验收 | TTS 语音清晰可懂，中文普通话自然 |
-| 状态 | ⏳ **待验证**: edge-tts 网络依赖 |
+| 状态 | ⏳ **待验证**: edge-tts 网络连通性（调用微软在线 TTS 服务）；隐私与课程许可待确认（见 §7.5） |
 
 ### Step 6: 全链路串联 (优先级: P1)
 
@@ -456,12 +477,14 @@ flask>=3.0.0             # PC HTTP Server (BSD)
 | 2 | PC 扬声器/耳机是否可用 | 阻塞 Step 5 | 播放测试音频 |
 | 3 | ESP32 与 PC 是否在同一 LAN 子网 | 阻塞 Step 2 | 从 ESP32 ping PC IP，查看 serial monitor |
 | 4 | PC 防火墙是否允许 8080 端口入站 | 阻塞 Step 2 | 临时关闭防火墙测试或添加规则 |
-| 5 | ASR 服务授权与 API Key（若用云服务） | 阻塞 Step 3 | 与教师确认授权；API Key 配置在 PC 环境变量 |
+| 5 | whisper 本地推理前置条件：依赖安装、模型权重下载、FFmpeg | 阻塞 Step 3 | 安装依赖（含 FFmpeg）并运行一次推理测试，确认可解码音频 |
 | 6 | 语言模型服务授权与 API Key（若用云服务） | 阻塞 Step 4 | 与教师确认授权 |
 | 7 | whisper base 模型在目标 PC 上的推理速度 | 影响 Step 3 方案 | 运行一次 whisper 推理测试，记录耗时 |
-| 8 | edge-tts 是否能访问 Microsoft TTS 服务 | 影响 Step 5 | `pip install edge-tts && edge-tts --text "测试" --write-media test.mp3` |
+| 8 | edge-tts 网络连通性（PC 端能否访问微软在线 TTS 服务） | 影响 Step 5 | `pip install edge-tts && edge-tts --text "测试" --write-media test.mp3` |
 | 9 | PLAY 按键在 main.c 主循环中的现有行为 | 影响 Step 2 | 审计 main.c L578–L651 事件状态机，确认 PLAY 不会意外触发 help_event |
 | 10 | ESP32 固件中 esp_http_client 可用 RAM/Stack | 影响 Step 2 | 检查现有 help_uplink 异步任务的 stack 使用情况 |
+| 11 | 课程许可: 教师确认 whisper 模型与微软在线 TTS 服务的使用权限 | 阻塞 Step 3/5 | 向教师/助教确认并记录（独立于 API Key，见 §7.5） |
+| 12 | 隐私: edge-tts 合成文本会发送给微软在线服务 | 影响 Step 5 | 与教师确认允许发送的内容范围；录音音频仅在本地处理（见 §7.5） |
 
 ---
 
@@ -486,6 +509,7 @@ flask>=3.0.0             # PC HTTP Server (BSD)
 | 日期 | 审查项 | 结果 | 备注 |
 |------|--------|------|------|
 | 2026-10-10 | 初始架构设计完成 | 通过 | 待人工审阅；所有"待实现"/"待验证"标记均代表当前代码库真实状态 |
+| 2026-10-10 | 事实修正: Whisper 为本地模型推理（无需 ASR API Key）；edge-tts 为 PC 端调用微软在线 TTS 服务（需网络、无 API Key、合成文本外发） | 通过 | 仅修正事实描述（§2 图标签、§3、§7、Step 3/5、§10）；架构结构与实施步骤顺序未变更 |
 | — | 教师/助教审阅 | 待安排 | — |
 
 ---
