@@ -7,7 +7,7 @@
 ## 当前：Week 04 — 自然语言查询与请求采集（分支已建立）
 
 **分支**: `feature/week04-natural-language`
-**阶段**: Step 1 任务契约校验 ✅ + Step 2 query_last 受限工具 ✅（总计 37 test PASS）
+**阶段**: Step 1 任务契约校验 ✅ + Step 2 query_last 受限工具 ✅ + Step 3 trigger_collect 受限工具 ✅（总计 49 test PASS）
 **Git HEAD**: 待提交
 
 ---

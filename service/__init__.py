@@ -14,6 +14,14 @@ from .validator import (
     parse_and_validate,
 )
 
+from .trigger_collect import (
+    FIXED_COLLECT_PATH,
+    FIXED_STATUS_PATH,
+    MAX_POLL_ATTEMPTS,
+    CollectResult,
+    trigger_collect,
+    _poll_status,
+)
 from .query_last import (
     ENV_KEY,
     FIXED_PATH,
@@ -32,7 +40,13 @@ __all__ = [
     "parse_and_validate",
     "ENV_KEY",
     "FIXED_PATH",
+    "FIXED_COLLECT_PATH",
+    "FIXED_STATUS_PATH",
+    "MAX_POLL_ATTEMPTS",
     "QueryLastResult",
+    "CollectResult",
     "get_base_url",
     "query_last",
+    "trigger_collect",
+    "_poll_status",
 ]

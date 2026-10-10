@@ -1,6 +1,6 @@
 # Week 04 State — 自然语言查询与请求采集
 
-**状态**: ✅ Module `service/query_last.py` 完成
+**状态**: ✅ Module `service/trigger_collect.py` 完成（49 PASS）
 **分支**: `feature/week04-natural-language`
 **基线**: `ec9c94b` — Merge pull request #3 (origin/main)
 **上游**: 无（已清除 `origin/main` 的跟踪）
@@ -56,6 +56,26 @@ service/
 - 原样保留设备返回的 `valid` / `source` / `seq` / `accel_x/y/z` / `button` / `observed_ms` / `received_ms` / `data_age_ms` / `time_quality` 等字段
 - 无有效记录、HTTP 错误、超时及无效 JSON 均明确报告，不伪造数据
 - 13 个单元测试覆盖：成功有数据、成功无记录、HTTP 404/500、连接失败、超时、无效 JSON、环境变量未设置/空/空白/末尾斜杠
+- 测试均 mock HTTP，不发起真实设备请求
+
+### Week 04 Step 3 — trigger_collect 受限工具 (`service/trigger_collect.py`)
+
+**新增文件**:
+```
+service/
+├── trigger_collect.py          # trigger_collect 受限工具
+└── test_trigger_collect.py     # 单元测试 (12 tests)
+```
+
+**设计要点**:
+- 纯 Python 标准库（`urllib.request`），零外部依赖
+- ESP32 基础地址仅从环境变量 `ESP32_BASE_URL` 读取（复用 `query_last.get_base_url`）
+- 固定路径：`POST /api/collect` → 获取 `request_id` → 轮询 `GET /api/collect/status?request_id=xxx`
+- 轮询上限 20 次 × 0.5s 间隔（最多 10s），可通过参数调整
+- 成功条件严格：仅当状态 `completed` + `linked=true` + `observation.valid=true` 时报告成功
+- 设备失败、超时、轮询超时、请求不匹配、观测无效、缺失观测、HTTP 错误、无效 JSON 均明确返回错误
+- 12 个单元测试覆盖：成功流程、设备失败、设备超时、轮询超时、请求不匹配、观测无效、
+  缺失观测、POST HTTP 错误、轮询 HTTP 错误、无效 JSON 响应、配置缺失、POST 缺少 request_id
 - 测试均 mock HTTP，不发起真实设备请求
 
 ## 前置条件

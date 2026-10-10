@@ -326,3 +326,43 @@ if (help_button_get_pending(&btn)) {
 |------|------|
 | **实机 HTTP 调用** | 无真实 ESP32 设备连接，所有请求通过 mock 验证 |
 | **与 TaskContract 集成** | query_last 工具当前独立，未与 `validator.py` 或语言模型输出连接 |
+
+---
+
+## Week 04 Step 3 — trigger_collect 受限工具 (2026-10-10)
+
+**分支**: `feature/week04-natural-language`
+**范围**: `service/trigger_collect.py` + `service/test_trigger_collect.py`（纯 Python 标准库，mock HTTP）
+**版本**: 待提交（当前 HEAD）
+**验证方式**: Python `unittest` 本地运行（pytest）
+**结果**: **12 PASS / 0 FAIL**（+ 原有 37 PASS = 总计 49 PASS）
+
+| # | 测试项 | 结果 | 分类 |
+|---|--------|------|------|
+| 1 | 完整成功流程：POST → submitted → completed + linked + valid | ✅ PASS | 成功流程 |
+| 2 | 设备执行失败（status=failed） | ✅ PASS | 设备失败 |
+| 3 | 设备端超时（status=timeout） | ✅ PASS | 设备超时 |
+| 4 | 轮询耗尽 max_attempts 仍未完成 | ✅ PASS | 轮询超时 |
+| 5 | 任务完成但 linked=false（请求不匹配） | ✅ PASS | 请求不匹配 |
+| 6 | 任务完成、请求匹配但 observation.valid=false | ✅ PASS | 观测无效 |
+| 7 | 任务完成但响应中缺少 observation 字段 | ✅ PASS | 缺失观测 |
+| 8 | POST 请求返回 HTTP 500 错误 | ✅ PASS | HTTP 错误 |
+| 9 | POST 成功但轮询返回 HTTP 500 错误 | ✅ PASS | HTTP 错误 |
+| 10 | 轮询返回非 JSON 内容 | ✅ PASS | 解析错误 |
+| 11 | 环境变量未设置 | ✅ PASS | 配置缺失 |
+| 12 | POST 响应缺少 request_id | ✅ PASS | 响应错误 |
+
+**设计要点**:
+- 复用 `query_last.get_base_url()` 读取 `ESP32_BASE_URL` 环境变量
+- 固定路径 `POST /api/collect` 和 `GET /api/collect/status?request_id=xxx` 硬编码
+- 轮询上限 20 次 × 0.5s（默认），可通过参数调整
+- 成功条件：`status=="completed"` + `linked==true` + `observation.valid==true`
+- 不伪造数据，不接入语言模型，不修改 ESP32 业务代码
+
+### ⚠️ 未验证项目
+
+| 项目 | 原因 |
+|------|------|
+| **实机 HTTP 调用** | 无真实 ESP32 设备连接，所有请求通过 mock 验证 |
+| **与 TaskContract 集成** | trigger_collect 工具当前独立，未与 `validator.py` 或语言模型输出连接 |
+| **POST 请求体内容协商** | ESP32 服务端 POST /api/collect 忽略请求体，当前实现发送空 body |
