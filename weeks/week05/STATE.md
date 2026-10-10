@@ -1,6 +1,6 @@
 # Week 05 State — 接通按键说话与语音播报
 
-**状态**: 🟡 **Step 1 完成（WAV 格式 PASS；真实麦克风有效语音第 3 轮 ✅ PASS）；Step 2A PC 端录音 HTTP 控制服务 ✅ 已实现并通过自动测试（39/39）；Step 2B ESP32 固件侧 PLAY→PC 控制代码 ✅ 已实现并 `idf.py build` 通过（未烧录、未做真实网络联调）；Whisper ASR 未接入**
+**状态**: 🟢 **Step 1 完成（WAV 格式 PASS；真实麦克风有效语音第 3 轮 ✅ PASS）；Step 2A PC 端录音 HTTP 控制服务 ✅ 已实现并通过自动测试（39/39）；Step 2B ESP32 固件侧 PLAY→PC 控制代码 ✅ 已实现并 `idf.py build` 通过；Step 2C 实机联调 ✅ **已烧录并实测通过**（PLAY→start→recording→stop→idle 双端取证，含一次瞬时连接失败的如实记录）；Whisper ASR 未接入**
 **分支**: `feature/week05-voice-interaction`（本地分支，无远端 upstream）
 **基线**: `7dd788b` — Merge pull request #4 (origin/main)
 
@@ -325,7 +325,62 @@ idf.py build
 - LED 语音状态反馈（Step 7；本次刻意未改 LED 逻辑，避免与 Week 03 LED 反馈冲突）
 - ASR / LLM / TTS 全链路（Step 3–6）与文字入口回归测试
 
-**下一步（需另行授权）**: Step 2B 实机联调（配置真实 PC 地址 + 防火墙 + 烧录 + 串口取证）；Step 3 Whisper ASR 接入。
+**下一步（需另行授权）**: Step 2C 实机联调（配置真实 PC 地址 + 防火墙 + 烧录 + 串口取证）；Step 3 Whisper ASR 接入。
+
+## Step 2C 实机联调验证（2026-10-11，本地分支，未推送）
+
+> 以下均为**实际硬件/网络取证**，不是代码审阅结论。测试后未保留任何录音文件（按指令清理）。
+
+### 前置条件确认
+
+| 前置项 | 结果 | 证据 |
+|--------|------|------|
+| 分支 / HEAD / 工作区 | ✅ | `feature/week05-voice-interaction` @ `fd1e5a70`，`git status` 干净 |
+| `sdkconfig` 是否曾入 git | ✅ 从未 | `git ls-files sdkconfig` 空、`git log --all -- sdkconfig` 空；公共仓库唯一 Wi-Fi 相关跟踪文件 `sdkconfig.defaults` 仅含占位符（`YOUR_WIFI_SSID`/`YOUR_WIFI_PASSWORD`）→ 无旧凭据提交，无需更换密码 |
+| 板载旧 SPIFFS 数据 | ✅ 用户确认可放弃 | 新分区表（factory 3 MiB + storage SPIFFS 紧随其后）会改变旧数据偏移；已获用户授权后烧录 |
+| PC LAN 地址 | ✅ `10.132.124.130` | WLAN `Get-NetIPAddress` |
+| PC 录音服务监听 | ✅ | PID 139680 `python -m service.voice_control_server --host 10.132.124.130 --port 8080`；另有 127.0.0.1:8080 node 进程（不相关）；重复进程 154076（week05-audio venv）未处于 Listen，仅记录 |
+| `GET /api/voice/status` | ✅ HTTP 200 | 基线 `state=idle, ok=true`，输出目录 `%TEMP%\voice_task` |
+| ESP32 串口 | ✅ 唯一 | VID/PID `303A:1001` → **COM10**（仅一台 ESP32-S3） |
+| 防火墙 | ℹ️ 全 profile Disabled + `Python Allow Public` 规则 | 非阻塞点；实际首测仍遇一次瞬时 TCP 连接失败（见下） |
+
+### 烧录结果
+
+- 命令：`idf.py -p COM10 flash`（ESP-IDF v5.4.3，bootloader + partition-table + app）
+- `week02-sensor-collect.bin` = `0x10CF60` B（1,101,664 ≈ 1.05 MiB）写入 `0x10000`；**factory 分区 0x300000，剩余 65%**
+- 三段写入 hash 均 verified，`Hard resetting via RTS pin... Done`，退出码 0
+- 串口证据（复位后捕获）：`WIFI: Got IP: 10.132.124.63`（同子网 10.132.124.0/24）、`W5-VOICE: 语音控制已启用：PC 服务 = http://10.132.124.130:8080（请求超时 5000 ms）`、`HTTP ready`、IMU/camera 初始化正常
+
+### PLAY 按键 → PC 录音实测（双端取证）
+
+| 项 | 结果 | 证据 |
+|----|------|------|
+| 第一次 PLAY（初测） | ❌ **失败（瞬时）** | ESP32 日志 `btn pressed: PLAY` → 入队 START → `HTTP POST 失败：ESP_ERR_HTTP_CONNECT (err=0x7002)` / HTTP=0；PC 端 /api/voice/status 保持 idle、无请求到达（netstat 无 ESP32 连接）。**并非按键超时**——按键事件完整落日志 |
+| 第二次重测 PLAY（按 1 次，两段同时发生 start+stop，即两次按下） | ✅ **PASS** | 见下 |
+| 第 1 次按下 → start | ✅ | ESP32 `[voice-475439-0002] PC 已受理：HTTP 200, state=recording` + `已确认：PC 已开始录音 → 本地确认状态 RECORDING`；PC netstat 出现 `10.132.124.130:8080 ↔ 10.132.124.63`（ESP32）连接 |
+| 第 2 次按下 → stop | ✅ | ESP32 `[voice-488688-0003] PC 已受理：HTTP 200, state=idle` + `已确认：PC 已结束录音（wav: frames=203200, 12.70 s）`；PC `/api/voice/status` → `state=idle, last_recording.duration_seconds=12.7` |
+| 可追踪关联 | ✅ | 请求 ID `voice-{ms}-{nnnn}` 贯穿 ESP32 日志与 PC 契约校验；本地确认状态仅在实际成功响应后才变化（start→RECORDING、stop→IDLE） |
+
+### WAV 元数据（本次实机录音，随后已删除）
+
+- 文件：`%TEMP%\voice_task\voice_20261011_005539_511.wav`（仓库外）
+- 头部解析：`RIFF/WAVE`、PCM（fmt=1）、**1 声道 mono、16000 Hz、16 bit**、byteRate 32000、blockAlign 2
+- 文件 406,444 B（数据 406,400 B）→ 时长 **12.70 s**；与 PC 服务返回 `frames=203200` 完全一致（203200 / 16000 = 12.7s）
+- `status_flags: []`（无异常标记）；未上传、未播放、未输出内容
+
+### 清理与收尾
+
+- ✅ 已删除本次录音 WAV，`%TEMP%\voice_task` 现为空目录；仓库内**无任何 WAV**（递归检查 + `git status`）
+- ✅ 已停用两处临时串口捕获进程；PC 服务保持运行且最终 `/api/voice/status` = `idle`
+- ✅ `git diff --check` 通过；工作区仅含本文件修改（见提交记录）
+
+### 未验证（不得宣称已完成）
+
+- ASR / LLM / TTS 全链路（Step 3–6）——未接入
+- PC 端 409（already_recording/not_recording）与超时路径的**实机**触发（本次只实测成功路径 + 一次无线层瞬时失败）
+- LED 语音状态反馈（Step 7；本次未改 LED 逻辑）
+- 首次瞬时 `ESP_ERR_HTTP_CONNECT` 的根因（可能为 AP/无线瞬时状态；重测即通过，未复现，不无限重试）
+- 文字入口回归测试（未被本次改动涉及）
 ## 架构设计状态
 
 | 设计项 | 状态 |
