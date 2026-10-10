@@ -355,6 +355,8 @@ static const char INDEX_HTML[] =
 "function setBadge(id,text,cls){var e=$(id);if(e){e.textContent=text;e.className='badge '+cls;}}"
 "function setHint(msg,cls){var e=$('liveHint');if(e){e.textContent=msg;e.className='hint '+(cls||'');}}"
 "function step(n,cls){var e=$('st'+n);if(e)e.className='step '+(cls||'');}"
+"function persistObs(d){if(!d||!d.valid||(d.source!=='live'&&d.source!=='cadence'))return;try{var raw=localStorage.getItem('__dashObs_v1__');var list=raw?JSON.parse(raw):[];if(!Array.isArray(list))list=[];var key=d.record_id||'s'+d.seq;var found=false;for(var i=0;i<list.length;i++){var k=list[i].record_id||'s'+list[i].seq;if(k===key){list[i]=d;found=true;break;}}if(!found)list.push(d);if(list.length>50)list=list.slice(list.length-50);localStorage.setItem('__dashObs_v1__',JSON.stringify(list));}catch(e){}}"
+"function restoreLatest(){try{var raw=localStorage.getItem('__dashObs_v1__');if(!raw)return;var list=JSON.parse(raw);if(!Array.isArray(list))return;list.sort(function(a,b){return((b.received_ms||b.observed_ms||0)-((a.received_ms||a.observed_ms||0)))});for(var i=0;i<list.length;i++){if(list[i].valid===true&&(list[i].source==='live'||list[i].source==='cadence')){storedObs=list[i];storedAt=Date.now();snapshotKept=false;renderStored();return;}}}catch(e){}}"
 "function fetchLive(){"
 "fetch('/api/sensor').then(function(r){"
 "if(!r.ok)throw new Error('HTTP '+r.status);return r.json();"
@@ -448,7 +450,7 @@ static const char INDEX_HTML[] =
 "txt('nElapsed',(d.elapsed_ms!=null?d.elapsed_ms+' ms':'—'));"
 "txt('nAcc',xyz(o.accel_x,o.accel_y,o.accel_z));"
 "txt('nBtn',orDash(o.button));"
-"setBadge('newBadge','新观测已关联本次请求','ok');"
+"setBadge('newBadge','新观测已关联本次请求','ok');persistObs(o);"
 "setNote('完成：请求 '+orDash(currentReqId)+' 已收到设备新观测 '+orDash(o.record_id)+'（seq '+orDash(o.seq)+'）。左侧保留采集前快照，点“刷新已存数据”可看到它已更新为本次观测；对比两者的 seq 与采集时间即可确认不是重显旧值。','ok');"
 "snapshotKept=true;updateAge();}"
 "function resetCollectBtn(){var btn=$('collectBtn');"
@@ -462,7 +464,7 @@ static const char INDEX_HTML[] =
 "fetch('/api/auto_refresh?on='+(on?'1':'0'),{method:'POST'}).catch(function(){});}"
 "function refreshStored(){"
 "fetch('/api/observation/last').then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})"
-".then(function(d){storedObs=d;storedAt=Date.now();snapshotKept=false;renderStored();})"
+".then(function(d){storedObs=d;storedAt=Date.now();snapshotKept=false;renderStored();persistObs(d);})"
 ".catch(function(ex){setNote('读取已存数据失败：'+ex.message,'err');});}"
 "function renderStored(){"
 "var d=storedObs;if(!d)return;"
@@ -552,7 +554,7 @@ static const char INDEX_HTML[] =
 "n.textContent='定时抓拍运行中。板端每 '+d.interval_s+'s 自动调用摄像头拍摄 JPEG。';}"
 "else{b.textContent='已停用';b.style.color='#8b949e';e.style.display='';f.style.display='none';"
 "n.textContent='定时抓拍未启用。启用后板端将按周期自动调用摄像头拍摄 JPEG。';}}).catch(function(){});}"
-"function init(){startAuto();refreshStored();loadRecords();loadGallery();refreshAutoCapStatus();ageTimer=setInterval(tick,1000);}"
+"function init(){startAuto();restoreLatest();refreshStored();loadRecords();loadGallery();refreshAutoCapStatus();ageTimer=setInterval(tick,1000);}"
 "init();</script></body></html>";
 /* ================================================================
  * HTTP Request Handlers
