@@ -1,9 +1,10 @@
 # Week 04 State — 自然语言查询与请求采集
 
-**状态**: ✅ Step 1-6 全部完成（102 PASS）
-**分支**: `feature/week04-natural-language`
+**状态**: ✅ Step 1-6 全部完成（102 PASS），已通过 PR #4 合并至 `main`（`7dd788b`）
+**分支**: `feature/week04-natural-language`（HEAD `0b4b323`，历史提交保留）
 **基线**: `ec9c94b` — Merge pull request #3 (origin/main)
-**上游**: 无（已清除 `origin/main` 的跟踪）
+**上游**: `origin/feature/week04-natural-language`
+**合并**: PR #4 → `main` `7dd788b`（2026-10-10）
 
 ## 目标（来自课程计划）
 
@@ -12,8 +13,10 @@
 ## 当前状态
 
 - `feature/week04-natural-language` 已从 `origin/main` (`ec9c94b`) 创建
-- 该分支不跟踪任何远程分支（上游已清除）
-- 待 Week 04 功能完成并准备合并时，再配置上游跟踪
+- Week 04 功能已完成，并通过 PR #4 合并至 `main`（`7dd788b`，2026-10-10）
+- 分支保留不删除，HEAD 为 `0b4b323`（历史提交完整保留，未重写）
+- 上游跟踪已建立：`origin/feature/week04-natural-language`
+- 后续开发已切换至 `feature/week05-voice-interaction`（基线 `7dd788b`）
 
 ## 已完成
 

@@ -115,8 +115,10 @@ IDLE → SUBMITTED → RECEIVED → COMPLETED / FAILED
 
 | 引用 | 说明 |
 |------|------|
-| `main` | 最新合并版本 (94e3350) |
+| `main` | 最新合并版本 `7dd788b` (PR #4)，与 `origin/main` 同步 |
 | `week02-stable` (tag) | Week 02 稳定基线, 12 PASS / 0 FAIL |
 | `feature/week02-remote-task` | Week 02 开发分支（已合并） |
 | `feature/repo-cleanup` | 仓库清洁分支（已合并） |
-| `feature/week03-physical-feedback` | **当前** Week 03 开发分支 |
+| `feature/week03-physical-feedback` | Week 03 开发分支（已合并，PR #3 → `ec9c94b`） |
+| `feature/week04-natural-language` | Week 04 开发分支（已合并，PR #4 → `7dd788b`；分支 HEAD `0b4b323` 保留） |
+| `feature/week05-voice-interaction` | **当前** Week 05 开发分支（基线 `7dd788b`，无远端 upstream，尚无提交） |
