@@ -8,6 +8,7 @@ idf_component_register(
         "http_server.c"
         "help_event.c"
         "help_uplink.c"
+        "voice_button.c"
     INCLUDE_DIRS
         "."
     REQUIRES

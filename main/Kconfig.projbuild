@@ -14,6 +14,36 @@ menu "Week 01 Sensor Web Configuration"
 
 endmenu
 
+menu "Week 05 Voice Control Configuration"
+
+    config VOICE_PC_URL
+        string "PC voice control base URL"
+        default ""
+        help
+            Base URL of the PC-side voice recording HTTP service
+            (Week 05 Step 2A, service/voice_control_server.py), for example
+            http://192.168.x.x:8080 -- do NOT put your real computer's
+            private IP address or any credential in this repository.
+
+            The firmware appends "/api/voice/start" and "/api/voice/stop"
+            to this base URL, so do not include a path here.
+
+            Leave empty (default) to keep voice control disabled: no task and
+            no queue are created, an explicit warning is printed at boot, and
+            the PLAY button keeps its Week 03 teaching-event behavior.
+
+    config VOICE_HTTP_TIMEOUT_MS
+        int "Voice control HTTP timeout (ms)"
+        default 5000
+        range 1000 30000
+        help
+            Timeout for one HTTP POST to the PC voice control service.
+            Default: 5000 (5 seconds). The request runs in an independent
+            FreeRTOS task, so this timeout only bounds how long that task may
+            block; button scanning and the main loop stay responsive.
+
+endmenu
+
 menu "Week 03 Help Uplink Configuration"
 
     config HELP_VPS_URL

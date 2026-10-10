@@ -1,6 +1,6 @@
 # Week 05 State — 接通按键说话与语音播报
 
-**状态**: 🟡 **Step 1 完成（WAV 格式 PASS；真实麦克风有效语音第 3 轮 ✅ PASS）；Step 2A PC 端录音 HTTP 控制服务 ✅ 已实现并通过自动测试（39/39）；ESP32 尚未接入；Whisper ASR 未接入**
+**状态**: 🟡 **Step 1 完成（WAV 格式 PASS；真实麦克风有效语音第 3 轮 ✅ PASS）；Step 2A PC 端录音 HTTP 控制服务 ✅ 已实现并通过自动测试（39/39）；Step 2B ESP32 固件侧 PLAY→PC 控制代码 ✅ 已实现并 `idf.py build` 通过（未烧录、未做真实网络联调）；Whisper ASR 未接入**
 **分支**: `feature/week05-voice-interaction`（本地分支，无远端 upstream）
 **基线**: `7dd788b` — Merge pull request #4 (origin/main)
 
@@ -209,8 +209,123 @@
 
 **测试覆盖（39 项）**: 正常路径 8（status/start/stop、WAV 元数据、无残留文件）、调用顺序错误 3、录音异常映射 8、HTTP/JSON 契约 6、默认配置与输出目录保护及 CLI 14（含 `--help` 渲染回归保护）。
 
-**下一步（未开始，需另行授权）**: Step 2B — ESP32 PLAY 按键事件 → PC（含局域网地址/防火墙连通性验证）；Step 3 Whisper ASR 接入。
+**下一步（需另行授权）**: Step 2B 实机联调（配置真实 PC 地址 + 防火墙 + 烧录 + 串口取证，见下节「Step 2B 状态」）；Step 3 Whisper ASR 接入。
 
+## Step 2B 状态 — ESP32 固件侧 PLAY 按键 → PC 录音控制（2026-10-10）
+
+### 结论边界（先读）
+
+- ✅ **本次完成的是「固件侧代码实现 + 编译通过」**：`idf.py build` 在本机 ESP-IDF v5.4.3 环境实际执行，退出码 **0**，`voice_button.c` / `main.c` 均参与编译，**0 warning / 0 error**。
+- ⛔ **未烧录、未做 ESP32 → PC 真实网络请求**：未接设备、未改防火墙、未启动 PC 服务、未做局域网连通性验证；下文中所有 HTTP 行为均为**代码审阅结论**，不是实测结论。
+- 未调用 ASR / LLM / TTS；**未修改** `service/voice_control_server.py`（Step 2A 契约保持不变）。
+- 未读取/未修改本地 `sdkconfig`；仓库内无真实 PC 私有 IP、无任何凭据。
+
+### PLAY 按键证据（不猜引脚、不猜语义）
+
+| 项 | 证据 |
+|----|------|
+| 引脚与电压 | `adc_button.h:26` `BTN_PLAY`（注释 PLAY 键 1.98V）；`adc_button.c:26,64` `BTN_PLAY_MV 1980` + `BTN_TOLERANCE_MV` 判定 |
+| 事件语义 | `help_event.c` `button_scan_task`（30 Hz，去抖阈值 3）产生「按下」事件 → 队列（长度 1）→ `help_button_get_pending()` 非阻塞取出（`help_event.c:179`） |
+| 修改前行为 | `main.c` 原 L581：`help_button_get_pending(&btn) && help_event.status == HELP_IDLE` → **4 个按键（含 PLAY）在 `HELP_IDLE` 时都会触发 Week 03 教学测试事件** |
+| 本次路由规则 | `btn == BTN_PLAY && voice_button_is_configured()` → 交给语音控制；其余情况（含「未配置时的 PLAY」）→ 保持 Week 03 原行为 |
+| 与 Week 03 的关系 | 语音地址未配置（**默认**）时 PLAY 行为与本分支修改前**一致**；配置后 PLAY 专用于开/停录音、不再触发 help_event |
+| MENU / DOWN / UP+ | 行为完全未改（仍走 help_event 通道） |
+
+**设计权衡（如实记录）**：现有实现里 PLAY 并非专用键——4 个按键都能触发 help_event。`ARCHITECTURE.md` §4.3 已决定「语音模式下 PLAY 不触发 help_event，MENU 保留给 help_event」，本次按该决策实现，并做两处保守化处理：
+
+1. 功能**默认关闭**（地址为空 → 完全不创建资源），默认固件的按键行为与本分支修改前一致；
+2. PLAY 被语音通道占用后，即使语音请求被拒（在途/队列满）也**不回退** help_event——避免一次按键同时产生两个通道的动作。
+
+### 新增/修改文件
+
+| 文件 | 变更 | 说明 |
+|------|------|------|
+| `main/voice_button.h` | 新增 | 动作/状态枚举、状态快照、模块自定义错误码、API 契约说明 |
+| `main/voice_button.c` | 新增 | 独立任务 `voice_ctl` + 请求队列 + 互斥锁；`esp_http_client` POST；Step 2A 契约校验；本地「已确认状态」 |
+| `main/CMakeLists.txt` | 修改 | `SRCS` 增加 `voice_button.c`（复用已有 `esp_http_client` / `json`：未新增组件依赖） |
+| `main/Kconfig.projbuild` | 修改 | 新增 menu「Week 05 Voice Control Configuration」：`VOICE_PC_URL`（默认空）、`VOICE_HTTP_TIMEOUT_MS`（默认 5000，范围 1000–30000） |
+| `main/main.c` | 修改 | `#include`；启动时调用 `voice_button_start()`；主循环按键路由（PLAY → 语音，其余不变） |
+| `sdkconfig.defaults` | 修改 | 公开模板增加 `CONFIG_VOICE_PC_URL=""`（= 关闭；无真实 IP/凭据）与超时默认值 |
+
+**未改**：`service/*`（Step 2A 实现与契约）、`main/help_event.c/h`、`main/help_uplink.c/h`、`main/http_server.c`、LED 反馈逻辑（Step 7 再处理）。
+
+### 配置与「默认关闭」
+
+| 项 | 行为 |
+|----|------|
+| `CONFIG_VOICE_PC_URL` 为空（默认） | 启动打印 `W5-VOICE: CONFIG_VOICE_PC_URL 未配置 → 语音控制关闭…`；**不创建任务/队列/锁**；`voice_button_start()` 返回 `VOICE_ERR_NOT_CONFIGURED`；`main.c` 再打印一行「语音控制未启用…PLAY 按键保持 Week 03 行为」 |
+| 缺少 `http://` / `https://` 前缀 | 拒绝启动（`ESP_ERR_INVALID_ARG`）+ ERROR 日志 |
+| 长度 ≥ 128 字节 | 拒绝启动（`ESP_ERR_INVALID_SIZE`），**不静默截断** |
+| 结尾 `/` | 自动去除，避免拼出 `//api/voice/start` |
+| 路径 | 配置项只填**基地址**（形如 `http://192.168.x.x:8080`）；固件自动追加 `/api/voice/start`、`/api/voice/stop` |
+
+### HTTP 控制状态逻辑（代码审阅结论，未实测）
+
+- 两次有效 PLAY = 开始、结束：`voice_button_request_toggle()` 按**已确认状态**选择动作（`IDLE` → `START`，`RECORDING` → `STOP`），入队前先置「在途」标记。
+- 本地状态：`DISABLED`（未配置）/ `IDLE` / `REQUESTING`（有请求在途，**未确认**）/ `RECORDING`；另有 `confirmed_state` 字段单独保存「已确认状态」。
+- **只有成功响应才更新已确认状态**：HTTP 2xx 且 `ok == true` 且 `state` 与动作一致（start → `recording`，stop → `idle`；且 start 必须含 `target_path`、stop 必须含 `wav` 对象）→ 才改写为 `RECORDING` / `IDLE`。
+- **失败不改变已确认状态**：连接失败 / 超时 / 非 2xx / JSON 不符 / 字段缺失 → 状态保持原值，仅累加 `failure_count`、`consecutive_failures` 并记录 `last_error` / `last_http_status` / `last_error_code`；**请求失败不会被伪装成「已开始/已结束录音」**。
+- **重复请求有明确表现**：请求在途时再按 PLAY → `busy_reject_count++`，打印「忽略（重复请求）…本地确认状态保持 X（未修改）」，不入队、不改状态。
+- 失败后**重试语义**：已确认状态未变 → 下次 PLAY 自动重试同一动作（start 失败后重试 start；stop 失败后重试 stop，因为 PC 可能仍在录音）。
+- 请求体（可选 JSON，PC 端只要求「是 JSON 对象」）：`{"event":"voice_btn","button":"PLAY","action":"start|stop","device_id":"esp32s3-eye-wk01","request_id":"voice-{ms}-{nnnn}","requested_at_ms":…}`，并带 `Content-Type: application/json`（缺该头时 PC 端 `optional_json_object()` 解析失败 → 400 `invalid_request`）。
+- 可追踪关联：每次请求生成 `voice-{ms}-{nnnn}`（沿用 Week 03 `help-{ms}-{nnnn}` 命名），出现在串口日志与状态快照中。
+
+### 错误处理映射（代码审阅结论）
+
+| 场景 | 本地表现（日志/状态） | 已确认状态是否改变 |
+|------|----------------------|-------------------|
+| 连接失败 / DNS / 无路由 | `HTTP POST 失败：… (err=0x…)`；`last_error` 保留原始 err | ❌ 不变 |
+| 超时（`CONFIG_VOICE_HTTP_TIMEOUT_MS`） | 同上，错误名显示 `TIMEOUT(请求超时)` | ❌ 不变 |
+| 非 2xx（409 `already_recording` / `not_recording`、422、503、500…） | `PC 未受理请求：HTTP xxx, pc_error=…`，并针对 `already_recording` / `not_recording` / 5xx 打印恢复提示 | ❌ 不变 |
+| 2xx 但响应体不是合法 JSON 对象 | `2xx 但响应体不是合法 JSON 对象（len/truncated）→ 不更新本地状态` | ❌ 不变 |
+| 2xx 但 `ok != true`，或缺 `target_path` / `wav` | `…契约不符，不更新本地状态` | ❌ 不变 |
+| 2xx 但 `state` 与请求动作不一致 | `响应 state="…" 与请求动作 … 期望的 "…" 不一致 → 不更新本地状态` | ❌ 不变 |
+| 在途时重复按 PLAY | 警告日志（含累计抑制次数） | ❌ 不变（不排队） |
+| 连续失败 ≥ 2 次 | 追加警告：检查地址 / PC 服务 / 防火墙，并说明文字入口不受影响 | ❌ 不变 |
+| 地址未配置 | 启动警告 + 功能关闭提示 | 状态 `DISABLED` |
+
+### 非阻塞与资源检查
+
+| 项 | 值 / 依据 |
+|----|-----------|
+| 请求执行位置 | 独立任务 `voice_ctl`（优先级 3）；按键扫描任务优先级 5 → HTTP 阻塞不会饿死按键扫描 |
+| 主循环 | 仅 `voice_button_request_toggle()`（`xQueueSend` 超时 0）+ 日志，不等待网络 |
+| 请求队列 | `xQueueCreate(2)`；同一时刻最多 1 个在途请求 |
+| 互斥锁 | `xSemaphoreCreateMutex()` 保护状态快照；`voice_button_get_status()` 加锁拷贝 |
+| 任务栈 | 5120 字节（`esp_http_client` + cJSON + 512B 响应缓冲 + URL/body 缓冲） |
+| 超时 | `CONFIG_VOICE_HTTP_TIMEOUT_MS` 默认 5000 ms，仅限制该任务阻塞时长 |
+| 内存 | 未配置时**不创建任何资源**；启用时 = 1 任务 + 1 队列 + 1 互斥锁 + 小型静态结构 |
+| 响应缓冲 | 512 字节；超出置 `truncated` 并按**契约不符**失败（不静默当成功） |
+
+### 构建与验证结果
+
+| 验证项 | 结果 | 证据 |
+|--------|------|------|
+| `idf.py build`（ESP-IDF v5.4.3，`export.ps1` 激活） | ✅ **PASS** | 退出码 **0**；日志含 `Building C object …/voice_button.c.obj`、`Building C object …/main.c.obj`、`Project build complete.` |
+| 编译告警 | ✅ **0 warning / 0 error** | 构建日志中 `warning:` 出现次数 = 0 |
+| 产物大小 | ℹ️ 记录 | `week02-sensor-collect.bin` = 0xF1C40 字节（约 967 KB）；app 分区 0x100000，剩余 6% |
+| 静态检查 | ✅ | `git diff --check` 退出码 0（无空白错误） |
+| 烧录 / 串口验证 | ⛔ **未做**（本阶段明确排除） | 未连接 COM 端口、未执行 `idf.py flash` |
+| ESP32 → PC 真实 HTTP 请求（成功 / 409 / 超时 / 连接拒绝） | ⛔ **未验证** | 无局域网/防火墙/PC 服务；需另行授权后再做 |
+| PC 端回归测试 | ℹ️ 未重跑 | **未修改任何 `service/*` 文件**（Step 2A 的 172/172 结论不受影响） |
+
+**构建命令（本次实际执行）**:
+
+```
+D:\esp\Espressif\frameworks\esp-idf-v5.4.3\export.ps1   # 激活 ESP-IDF 环境
+cd D:\AIinteraction
+idf.py build
+```
+
+### 本步未完成（不得无证据标记为完成）
+
+- 真实 ESP32 → PC HTTP 请求的实机验证与串口日志取证（含 409 / 超时 / 连接拒绝路径）
+- 局域网连通性、PC 防火墙入站（8080）、PC 服务改为监听局域网地址
+- 录音起止与按键时序的实测比对（本次只有代码审阅结论）
+- LED 语音状态反馈（Step 7；本次刻意未改 LED 逻辑，避免与 Week 03 LED 反馈冲突）
+- ASR / LLM / TTS 全链路（Step 3–6）与文字入口回归测试
+
+**下一步（需另行授权）**: Step 2B 实机联调（配置真实 PC 地址 + 防火墙 + 烧录 + 串口取证）；Step 3 Whisper ASR 接入。
 ## 架构设计状态
 
 | 设计项 | 状态 |
@@ -231,7 +346,7 @@
 | 项目 | 状态 |
 |------|------|
 | PC 音频采集验证 (Step 1) | 🟡 代码 + 自动测试完成；真实录音格式 PASS；有效语音采集（第 3 轮）**PASS**；ASR（Whisper）**未接入** |
-| 按键事件→PC 链路 (Step 2) | 🟡 **拆分**：Step 2A「PC 端录音 HTTP 控制服务」✅ 已实现并通过自动测试（39/39）；Step 2B「ESP32 按键事件 → PC + 局域网连通性」⏳ 未开始 |
+| 按键事件→PC 链路 (Step 2) | 🟡 **拆分**：Step 2A「PC 端录音 HTTP 控制服务」✅ 已实现并通过自动测试（39/39）；Step 2B「ESP32 按键事件 → PC + 局域网连通性」🟡 **固件侧代码已实现并编译通过**（`idf.py build`，0 warning）；**未烧录、未做真实网络联调**，局域网/防火墙连通性仍未验证 |
 | ASR 接入 (Step 3) | ⏳ 未开始 |
 | 语言模型 NL→JSON (Step 4) | ⏳ 未开始 |
 | TTS 播报 (Step 5) | ⏳ 未开始 |
