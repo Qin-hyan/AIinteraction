@@ -43,6 +43,17 @@ AIinteraction/
 | 摄像头 OV2640 | `camera_app.c/h` | ✅ Week 02 | JPEG 抓拍, PSRAM 存储, 15 次连续验证 |
 | 物理反馈 | `help_event.c/h` | ✅ Week 03 | 按键→LED→Web 闭环, 去抖 FSM (30Hz), 快速连按抑制通过 |
 | VPS 上行推送 | `help_uplink.c/h` | 🔧 Week 03 | help_event_t 序列化为 JSON → HTTP POST, **已注册 CMake 但尚未接入 main.c** |
+| 任务契约校验 | `service/` (Python) | ✅ Week 04 | IntentEnum, TaskContract, JSON Schema, 严格校验, 24 单元测试全部 PASS |
+| query_last 工具 | `service/query_last.py` | ✅ Week 04 | 读取 `ESP32_BASE_URL` 环境变量 → HTTP GET `/api/observation/last`，纯标准库，mock 测试 13 PASS |
+| trigger_collect 工具 | `service/trigger_collect.py` | ✅ Week 04 | POST `/api/collect` → 轮询 `/api/collect/status` 直至完成/失败/超时，
+纯标准库，mock 测试 12 PASS，复用 `query_last` 的 `ESP32_BASE_URL` 配置 |
+| 受限任务分发 | `service/task_dispatcher.py` | ✅ Week 04 | 单一入口 `dispatch_task()` → `parse_and_validate()` → 四种意图分发，
+`clarify`/`unsupported`/校验失败不调工具，16 单元测试 PASS |
+| 工具结果格式化 | `service/result_formatter.py` | ✅ Week 04 | 单一入口 `format_result()` → 五种场景格式化，
+| | 任务处理入口 | `service/task_pipeline.py` | ✅ Week 04 | 单一入口 `run_task()` 串联 dispatch->format，7 集成测试 PASS |
+保留 source/seq/相对时间，不伪装日历时间，20 单元测试 PASS |
+| | Web 仪表盘 localStorage 持久化 | `main/http_server.c` | ✅ Week 04 | 有效观测自动持久化至 localStorage（50 条上限，`record_id` 去重），页面加载恢复，`try/catch` 容错 |
+| | CSV 导出 | `main/http_server.c` | ✅ Week 04 | 从 localStorage 导出有效记录为 UTF-8+BOM CSV，12 列字段，文件名含时间戳，字段缺失留空 |
 
 ---
 

@@ -250,3 +250,349 @@ if (help_button_get_pending(&btn)) {
 | **非 2xx 响应处理** | 需实机 mock VPS 验证 HTTP 500/404 等错误路径 |
 
 **结论**: `ae89be8` + `5fe738a` 构建验证通过，模块代码完整、无编译错误。但 **help_uplink 尚未集成到 main.c 的事件发送路径**，且未经过任何实机网络验证。闭环链路（按键 → HTTP POST → 远端确认）尚未完成。
+---
+
+## Week 04 — 结构化任务契约校验模块 (2026-10-09)
+
+**分支**: `feature/week04-natural-language`  
+**范围**: `service/` (Python 标准库，纯逻辑，不接入语言模型，不调用设备接口)  
+**版本**: (提交前 HEAD `d00e33e`)  
+**验证方式**: Python `unittest` 本地运行  
+**结果**: **24 PASS / 0 FAIL**
+
+| # | 测试项 | 结果 | 分类 |
+|---|--------|------|------|
+| 1 | query_last 合法输入 | ✅ PASS | 合法意图 |
+| 2 | trigger_collect 合法输入 | ✅ PASS | 合法意图 |
+| 3 | clarify 合法输入（带 question） | ✅ PASS | 合法意图 |
+| 4 | unsupported 合法输入（带 reason） | ✅ PASS | 合法意图 |
+| 5 | clarify 缺少 question | ✅ PASS | 歧义拒绝 |
+| 6 | clarify 空字符串 question | ✅ PASS | 歧义拒绝 |
+| 7 | unsupported 缺少 reason | ✅ PASS | 歧义拒绝 |
+| 8 | 非法 JSON | ✅ PASS | 格式拒绝 |
+| 9 | 空输入 | ✅ PASS | 格式拒绝 |
+| 10 | 未知意图 turn_on_light | ✅ PASS | 意图拒绝 |
+| 11 | query_last 携带 device_address | ✅ PASS | 越界拒绝 |
+| 12 | trigger_collect 携带 interface | ✅ PASS | 越界拒绝 |
+| 13 | unsupported 携带额外 device_id | ✅ PASS | 越界拒绝 |
+| 14 | confidence > 1.0 | ✅ PASS | 边界拒绝 |
+| 15 | confidence < 0.0 | ✅ PASS | 边界拒绝 |
+| 16 | original 空字符串 | ✅ PASS | 边界拒绝 |
+| 17 | 缺少 intent | ✅ PASS | 必需字段拒绝 |
+| 18 | 缺少 confidence | ✅ PASS | 必需字段拒绝 |
+| 19 | intent 非字符串 | ✅ PASS | 类型拒绝 |
+| 20 | confidence 非数值 | ✅ PASS | 类型拒绝 |
+| 21 | TaskContract.to_dict 排除 None | ✅ PASS | 序列化 |
+| 22 | TaskContract.to_json 往返 | ✅ PASS | 序列化 |
+| 23 | TaskContract.from_dict | ✅ PASS | 反序列化 |
+| 24 | IntentEnum.all_values 枚举 | ✅ PASS | 枚举辅助 |
+
+**结论**: 结构化任务契约模块 `service/` 实现完成，24 个单元测试全部通过。此模块仅含纯逻辑校验，未接入语言模型，未调用任何设备接口。
+
+---
+
+## Week 04 Step 2 — query_last 受限工具 (2026-10-09)
+
+**分支**: `feature/week04-natural-language`
+**范围**: `service/query_last.py` + `service/test_query_last.py`（纯 Python 标准库，mock HTTP）
+**版本**: 最新提交
+**验证方式**: Python `unittest` 本地运行
+**结果**: **13 PASS / 0 FAIL**（+ 原有 24 PASS = 总计 37 PASS）
+
+| # | 测试项 | 结果 | 分类 |
+|---|--------|------|------|
+| 1 | 成功获取有效观测数据（valid=true，含完整传感器字段） | ✅ PASS | 成功 |
+| 2 | 设备无有效记录（valid=false, source=none） | ✅ PASS | 成功-无数据 |
+| 3 | HTTP 404 错误 | ✅ PASS | HTTP 错误 |
+| 4 | HTTP 500 错误 | ✅ PASS | HTTP 错误 |
+| 5 | 连接失败（URLError） | ✅ PASS | 网络错误 |
+| 6 | 请求超时（TimeoutError） | ✅ PASS | 超时 |
+| 7 | 无效 JSON 响应 | ✅ PASS | 解析错误 |
+| 8 | 环境变量未设置（核心函数） | ✅ PASS | 配置缺失 |
+| 9 | 环境变量已设置（get_base_url） | ✅ PASS | 配置 |
+| 10 | 环境变量末尾斜杠被清理 | ✅ PASS | 配置 |
+| 11 | 环境变量未设置（get_base_url） | ✅ PASS | 配置 |
+| 12 | 环境变量空字符串 | ✅ PASS | 配置 |
+| 13 | 环境变量空白字符串 | ✅ PASS | 配置 |
+
+**设计要点**:
+- `ESP32_BASE_URL` 环境变量读取地址，`/api/observation/last` 路径硬编码
+- 设备原始字段（valid/source/seq/accel/time_quality/stale 等）原样保留
+- 不伪造数据，不接入语言模型，不调用 `trigger_collect`
+
+### ⚠️ 未验证项目
+
+| 项目 | 原因 |
+|------|------|
+| **实机 HTTP 调用** | 无真实 ESP32 设备连接，所有请求通过 mock 验证 |
+| **与 TaskContract 集成** | query_last 工具当前独立，未与 `validator.py` 或语言模型输出连接 |
+
+---
+
+## Week 04 Step 3 — trigger_collect 受限工具 (2026-10-10)
+
+**分支**: `feature/week04-natural-language`
+**范围**: `service/trigger_collect.py` + `service/test_trigger_collect.py`（纯 Python 标准库，mock HTTP）
+**版本**: 待提交（当前 HEAD）
+**验证方式**: Python `unittest` 本地运行（pytest）
+**结果**: **12 PASS / 0 FAIL**（+ 原有 37 PASS = 总计 49 PASS）
+
+| # | 测试项 | 结果 | 分类 |
+|---|--------|------|------|
+| 1 | 完整成功流程：POST → submitted → completed + linked + valid | ✅ PASS | 成功流程 |
+| 2 | 设备执行失败（status=failed） | ✅ PASS | 设备失败 |
+| 3 | 设备端超时（status=timeout） | ✅ PASS | 设备超时 |
+| 4 | 轮询耗尽 max_attempts 仍未完成 | ✅ PASS | 轮询超时 |
+| 5 | 任务完成但 linked=false（请求不匹配） | ✅ PASS | 请求不匹配 |
+| 6 | 任务完成、请求匹配但 observation.valid=false | ✅ PASS | 观测无效 |
+| 7 | 任务完成但响应中缺少 observation 字段 | ✅ PASS | 缺失观测 |
+| 8 | POST 请求返回 HTTP 500 错误 | ✅ PASS | HTTP 错误 |
+| 9 | POST 成功但轮询返回 HTTP 500 错误 | ✅ PASS | HTTP 错误 |
+| 10 | 轮询返回非 JSON 内容 | ✅ PASS | 解析错误 |
+| 11 | 环境变量未设置 | ✅ PASS | 配置缺失 |
+| 12 | POST 响应缺少 request_id | ✅ PASS | 响应错误 |
+
+**设计要点**:
+- 复用 `query_last.get_base_url()` 读取 `ESP32_BASE_URL` 环境变量
+- 固定路径 `POST /api/collect` 和 `GET /api/collect/status?request_id=xxx` 硬编码
+- 轮询上限 20 次 × 0.5s（默认），可通过参数调整
+- 成功条件：`status=="completed"` + `linked==true` + `observation.valid==true`
+- 不伪造数据，不接入语言模型，不修改 ESP32 业务代码
+
+---
+
+## Week 04 Step 4 — 受限任务分发模块 (2026-10-10)
+
+**分支**: `feature/week04-natural-language`
+**范围**: `service/task_dispatcher.py` + `service/test_task_dispatcher.py`（纯 Python 标准库，mock 工具）
+**版本**: 最新提交（65 PASS）
+**验证方式**: Python `unittest` 本地运行
+**结果**: **16 PASS / 0 FAIL**（+ 原有 49 PASS = 总计 **65 PASS**）
+
+| # | 测试项 | 结果 | 分类 |
+|---|--------|------|------|
+| 1 | query_last 成功获取有效观测 | ✅ PASS | query_last |
+| 2 | query_last 设备无有效记录 | ✅ PASS | query_last |
+| 3 | query_last 工具失败 (HTTP 404) | ✅ PASS | query_last |
+| 4 | query_last 工具异常 (ConnectionError) | ✅ PASS | query_last |
+| 5 | trigger_collect 完整成功流程 | ✅ PASS | trigger_collect |
+| 6 | trigger_collect 工具失败 (设备端失败) | ✅ PASS | trigger_collect |
+| 7 | trigger_collect 工具异常 (TimeoutError) | ✅ PASS | trigger_collect |
+| 8 | clarify 返回澄清问题，不调任何工具 | ✅ PASS | clarify |
+| 9 | unsupported 返回拒绝原因，不调任何工具 | ✅ PASS | unsupported |
+| 10 | 非法 JSON，不调任何工具 | ✅ PASS | 失败关闭 |
+| 11 | 未知意图，不调任何工具 | ✅ PASS | 失败关闭 |
+| 12 | query_last 带额外字段 (device_address)，不调工具 | ✅ PASS | 失败关闭 |
+| 13 | 缺少必需字段 (confidence/original)，不调工具 | ✅ PASS | 失败关闭 |
+| 14 | clarify 缺少 question，不调工具 | ✅ PASS | 失败关闭 |
+| 15 | unsupported 缺少 reason，不调工具 | ✅ PASS | 失败关闭 |
+| 16 | confidence 越界 (1.5)，不调工具 | ✅ PASS | 失败关闭 |
+
+**设计要点**:
+- 单一入口 `dispatch_task(raw_input: str) → DispatchResult`
+- 调用 `parse_and_validate()` 校验，四种意图分发
+- `clarify` / `unsupported` / 非法 JSON / 校验失败 → 不调用任何设备工具
+- 工具异常被捕获并返回 `success=False`，不崩溃
+- 纯 Python 标准库，零外部依赖
+- 测试均 mock `query_last` / `trigger_collect`，不发起真实 HTTP 请求
+
+---
+
+## Week 04 Step 5 — 工具结果格式化模块 (2026-10-10)
+
+**分支**: `feature/week04-natural-language`
+**范围**: `service/result_formatter.py` + `service/test_result_formatter.py`（纯 Python 标准库）
+**版本**: 待提交（85 PASS）
+**验证方式**: Python `unittest` 本地运行
+**结果**: **20 PASS / 0 FAIL**（+ 原有 65 PASS = 总计 **85 PASS**）
+
+| # | 测试项 | 结果 | 分类 |
+|---|--------|------|------|
+| 1 | query_last 成功有效观测，含相对时间验证 | ✅ PASS | query_last |
+| 2 | query_last 无有效记录 (valid=false) | ✅ PASS | query_last |
+| 3 | query_last observation=None | ✅ PASS | query_last |
+| 4 | query_last 工具失败 (HTTP 404) | ✅ PASS | query_last |
+| 5 | trigger_collect 成功有效新观测 | ✅ PASS | trigger_collect |
+| 6 | trigger_collect 工具失败 | ✅ PASS | trigger_collect |
+| 7 | trigger_collect observation=None | ✅ PASS | trigger_collect |
+| 8 | trigger_collect 观测无效 (valid=false) | ✅ PASS | trigger_collect |
+| 9 | trigger_collect source=none | ✅ PASS | trigger_collect |
+| 10 | clarify 带澄清问题 | ✅ PASS | clarify |
+| 11 | clarify 无 question (fallback) | ✅ PASS | clarify |
+| 12 | unsupported 带原因 | ✅ PASS | unsupported |
+| 13 | unsupported 无 reason (fallback) | ✅ PASS | unsupported |
+| 14 | 校验失败 | ✅ PASS | 失败 |
+| 15 | 校验失败 error=None | ✅ PASS | 失败 |
+| 16 | 未知意图（防御性） | ✅ PASS | 防御 |
+| 17 | query_last 缺少加速度字段 | ✅ PASS | 容错 |
+| 18 | query_last 部分加速度字段 | ✅ PASS | 容错 |
+| 19 | trigger_collect 缺少时间字段 | ✅ PASS | 容错 |
+| 20 | query_last 包含按键状态 | ✅ PASS | 容错 |
+
+**设计要点**:
+- 单一入口 `format_result(result: DispatchResult) → str`
+- 五种场景格式化：查询结果、采集成功、失败/超时、需要澄清、请求不支持
+- 采集成功仅当 `collect_observation.valid==True` 且 `source!="none"`
+- 设备时间为相对运行时间（ms），不伪装为日历时间
+- 字段缺失容错，不崩溃
+- 纯 Python 标准库，零外部依赖
+
+---
+
+## Week 04 Step 6 — 本地结构化任务处理入口 (2026-10-10)
+
+**分支**: `feature/week04-natural-language`
+**范围**: `service/task_pipeline.py` + `service/test_task_pipeline.py`（纯 Python 标准库，mock 集成测试）
+**版本**: 前次 HEAD `f819b26`（当前已暂存待提交）
+**验证方式**: Python `unittest` 本地运行
+**结果**: **7 PASS / 0 FAIL**（+ 原有 85 PASS = 总计 **92 PASS**）
+
+| # | 测试项 | 结果 | 分类 |
+|---|--------|------|------|
+| 1 | query_last 成功获取有效观测 | ✅ PASS | 查询 |
+| 2 | query_last 无有效记录 | ✅ PASS | 查询 |
+| 3 | trigger_collect 采集成功 | ✅ PASS | 采集 |
+| 4 | clarify 返回澄清问题 | ✅ PASS | 澄清 |
+| 5 | unsupported 返回拒绝原因 | ✅ PASS | 拒绝 |
+| 6 | 非法 JSON | ✅ PASS | 非法输入 |
+| 7 | 未知意图 | ✅ PASS | 非法输入 |
+
+**设计要点**:
+- 单一入口 `run_task(raw_input: str) → str`
+- 串联 `dispatch_task()` + `format_result()`，不重复实现逻辑
+- 纯 Python 标准库，零外部依赖
+- 不接入语言模型，不修改 ESP32 业务代码
+- 测试 mock `dispatch_task`，不发起真实 HTTP 请求
+
+### ⚠️ 未验证项目
+
+| 项目 | 原因 |
+|------|------|
+| **与真实 ESP32 设备集成** | 无真实设备连接，所有工具通过 mock 验证 |
+| **与语言模型输出连接** | 当前管道接收结构化 JSON，未接入 LLM |
+| **实机 HTTP 调用** | 无真实 ESP32 设备连接 |
+
+---
+
+## Week 04 Step 6 集成验证 — 本地结构化样例链路验证 (2026-10-10)
+
+**分支**: `feature/week04-natural-language`
+**范围**: `service/test_task_pipeline_integration.py`（纯 Python 标准库）
+**版本**: HEAD `22738b9`（待提交）
+**验证方式**: Python `unittest` 本地运行
+**测试策略**: 调用真实处理链路（`parse_and_validate → dispatch_task → 真实工具代码 → format_result`），仅 mock HTTP 网络边界
+**结果**: **10 PASS / 0 FAIL**（+ 原有 92 PASS = 总计 **102 PASS**）
+
+| # | 测试项 | 结果 | 分类 |
+|---|--------|------|------|
+| 1 | query_last 有效观测（来源/序号/相对时间保留） | ✅ PASS | 查询 |
+| 2 | query_last 无有效记录 | ✅ PASS | 查询 |
+| 3 | trigger_collect 采集成功（相对时间保留） | ✅ PASS | 采集 |
+| 4 | trigger_collect 设备失败（不反馈成功） | ✅ PASS | 采集 |
+| 5 | trigger_collect 设备超时（不反馈成功） | ✅ PASS | 采集 |
+| 6 | clarify 返回澄清问题（HTTP 未被调用） | ✅ PASS | 澄清 |
+| 7 | unsupported 返回拒绝原因（HTTP 未被调用） | ✅ PASS | 拒绝 |
+| 8 | 非法 JSON（校验失败，HTTP 未被调用） | ✅ PASS | 非法输入 |
+| 9 | 未知意图（校验失败，HTTP 未被调用） | ✅ PASS | 非法输入 |
+| 10 | 额外字段拒绝（校验失败，HTTP 未被调用） | ✅ PASS | 非法输入 |
+
+**设计要点**:
+- 使用结构化 JSON 样例作为模型输出的替代输入
+- 只 mock `urllib.request.urlopen` 和 `time.sleep`，其余全部走真实代码
+- 不 mock 分发器、业务工具和格式化器
+- 验证数据来源 (`source`)、序号 (`seq`)、相对时间 (`time_quality: "relative"`) 在完整链路中得以保留
+- 非法任务（非法 JSON、未知意图、额外字段）不调用 HTTP 工具
+- 采集未完成（失败/超时）不反馈成功
+
+### ⚠️ 仍待补验
+
+| 项目 | 原因 |
+|------|------|
+| **真实语言模型输出 → 管道输入** | 当前使用结构化 JSON 样例替代 LLM 输出 |
+| **真实 ESP32 设备 HTTP 调用** | 无真实设备连接，HTTP 边界通过 mock 模拟 |
+
+---
+
+## Week 04 — Web 仪表盘本地持久化 (2026-10-10)
+
+**分支**: `feature/week04-natural-language`
+**版本**: `8ca4677` — feat(web): persist valid observations locally
+**验证方式**: Python 单元测试 (102 PASS) + ESP-IDF 编译 (build OK)
+**结果**: ✅ **Build PASS / 102 Tests PASS / 0 FAIL**
+
+| # | 测试项 | 结果 | 说明 |
+|---|--------|------|------|
+| 1 | Python 单元测试回归 (102 tests) | ✅ PASS | 全部通过，未回退 |
+| 2 | ESP-IDF `idf.py build` 编译 | ✅ PASS | `week02-sensor-collect.bin` 生成成功 |
+| 3 | `git diff --check` | ✅ PASS | 无空白字符错误 |
+| 4 | 仅修改 `main/http_server.c` | ✅ PASS | 无无关变更 |
+
+**变更摘要**:
+- 仅修改 `main/http_server.c` (5 insertions, 3 deletions)
+- `persistObs(d)` — 新增函数：仅在 `valid===true` 且 `source==='live'` 或 `source==='cadence'` 时写入 `localStorage`
+- `restoreLatest()` — 新增函数：页面加载时从 `localStorage` 恢复最新有效观测
+- `refreshStored()` — 获取成功时调用 `persistObs(d)`
+- `renderNewObs()` — 采集完成获取新观测时调用 `persistObs(o)`
+- `init()` — 启动时先 `restoreLatest()` 再 `refreshStored()`
+
+**去重策略**: 使用 `record_id` 作去重键（退化 `'s'+seq`）；同键记录覆盖更新；最多保留 50 条，超出后裁剪最旧条目。
+
+**容错策略**: 全部 `try/catch` 包裹；`localStorage` 不可用/超出容量/数据损坏均静默跳过，不阻塞页面正常功能。
+
+---
+
+## Week 04 — CSV 导出功能 (2026-10-10)
+
+**分支**: `feature/week04-natural-language`
+**版本**: `HEAD` — feat(web): export persisted observations to CSV
+**验证方式**: Python 单元测试 (102 PASS) + ESP-IDF 编译 (build OK)
+**结果**: ✅ **Build PASS / 102 Tests PASS / 0 FAIL**
+
+| # | 测试项 | 结果 | 说明 |
+|---|--------|------|------|
+| 1 | Python 单元测试回归 (102 tests) | ✅ PASS | 全部通过，未回退 |
+| 2 | ESP-IDF `idf.py build` 编译 | ✅ PASS | `week02-sensor-collect.bin` 生成成功 |
+| 3 | `git diff --check` | ✅ PASS | 无空白字符错误 |
+| 4 | 仅修改 `main/http_server.c` | ✅ PASS | 1 文件 +2 行（函数+按钮），无无关变更 |
+
+**变更摘要**:
+- 新增 `exportCSV()` JS 函数：从 `localStorage` 读取 `__dashObs_v1__`，过滤 `valid===true` 且 `source==='live'|'cadence'` 的记录，按 `received_ms` 降序排列
+- 新增 "📥 导出 CSV" 按钮（`act-btn ghost` 样式），置于"刷新已存数据"与"采集一次"之间
+- 列字段：`record_id, request_id, source, seq, accel_x, accel_y, accel_z, button, observed_ms, received_ms, data_age_ms, time_quality`
+- CSV 编码：UTF-8 + BOM (`0xFEFF`)，兼容 Excel 中文
+- 文件名格式：`esp32_obs_YYYY-MM-DD_hh-mm-ss.csv`
+- 字段缺失时留空，不伪造数值
+- 无有效数据 / 存储不可用 / 导出失败时通过 `setNote()` 显示清晰提示，不假报成功
+
+**不涉及**: 传感器采集逻辑、现有快照/陈旧标记语义、localStorage 持久化逻辑、新增依赖、CSV 以外的导出格式。
+
+---
+
+## Week 04 — 浏览器持久化人工检查 (2026-10-10)
+
+**分支**: `feature/week04-natural-language`
+**版本**: HEAD `5f1fb4a`
+**验证方式**: 人工在浏览器开发者工具中操作，观察 localStorage 内容及 CSV 输出
+**结果**: **4 PASS / 0 FAIL**
+
+| # | 测试项 | 结果 | 观察记录 |
+|---|--------|------|---------|
+| 1 | 页面加载后 localStorage 自动恢复最新有效观测 | ✅ PASS | 刷新后最新观测在 `restoreLatest()` 后正确显示 |
+| 2 | 多次采集后 localStorage 保留多条记录，不超过 50 条 | ✅ PASS | 记录正确持久化，超出 50 条后最旧条目被裁剪 |
+| 3 | CSV 导出文件包含全部有效字段，12 列对齐 | ✅ PASS | 导出的 CSV 含表头与 12 列数据，字段值正确 |
+| 4 | localStorage 不可用/数据损坏时页面不崩溃 | ✅ PASS | 删除 `__dashObs_v1__` 后页面正常运行，无 JS 报错 |
+
+## Week 04 — CSV 核验 (2026-10-10)
+
+**验证方式**: 用户提供的 CSV 文件人工核验
+**结果**: ✅ **结构正常，29 条记录 / 12 列 / 全部 cadence**
+
+| 检查项 | 结果 |
+|--------|------|
+| 记录总数 | 29 条 |
+| 列数（含表头） | 12 列 |
+| 列名完整 | `record_id, request_id, source, seq, accel_x, accel_y, accel_z, button, observed_ms, received_ms, data_age_ms, time_quality` |
+| source 分布 | 全部为 `cadence` |
+| 时间字段语义 | 相对运行时间（ms），`time_quality: "relative"`，无日历时间伪装 |
+| 字段缺失 | 无数据缺失，每行 12 列完整 |
+| 核验结论 | ✅ 导出格式规范，数据字段完整，结构无异常 |
