@@ -1,7 +1,7 @@
 # Week 05 语音交互架构设计
 
 > **状态**: 方案已形成，功能未实现  
-> **分支**: `feature/week05-voice-interaction` (HEAD `ae5c467`)  
+> **分支**: `feature/week05-voice-interaction`（本地分支，无远端 upstream）  
 > **基线**: `7dd788b` (origin/main, PR #4)  
 > **设计日期**: 2026-10-10  
 > **来源**: 课程官网 `https://ai.openkub.com/courses/ai-interaction-ux/#week-05` + 本地课程 HTML + 实际源码审计
@@ -289,7 +289,7 @@ stateDiagram-v2
 | 触发条件 | 动作 |
 |----------|------|
 | 录音中 PC HTTP Server 不可达 | 15s 超时后 ESP32 自动重置，LED 恢复 IDLE |
-| ASR 服务 10s 无响应 | TTS: "语音识别服务超时，请重试" |
+| whisper **本地推理** 10s 未返回结果 | TTS: "本地语音识别超时，请重试" |
 | 语言模型 10s 无响应 | TTS: "语言理解服务超时，请使用文字输入" |
 | 任务执行超时 (COLLECT_TIMEOUT_MS=5s) | 复用 Week 02 超时逻辑 |
 | 任何阶段连续失败 2 次 | 建议使用文字入口 |
@@ -381,7 +381,7 @@ flask>=3.0.0             # PC HTTP Server (BSD)
 | **录音过短** (<200ms) | 音频时长检测 | 不触发 ASR，静默回到 IDLE | 抖动抑制 |
 | **录音过长** (>30s) | 录音计时器 | 自动停止录音，处理已有音频 | 进入 RECOGNIZING |
 | **ASR 返回空** | text 为空或 confidence < 0.3 | TTS: "未能识别语音内容，请重试或使用文字输入" | IDLE |
-| **ASR 超时** (>10s) | 计时器 | TTS: "语音识别超时，请检查网络后重试" | IDLE |
+| **ASR 超时** (>10s) | 本地推理计时器 | TTS: "本地语音识别超时，请重试"（whisper 本地推理等待超时，**与网络无关**，不应误判为网络故障） | IDLE |
 | **语言模型返回非法 JSON** | JSON 解析失败 | TTS: "语言理解出错，请使用文字输入" | IDLE (文字入口可用) |
 | **语言模型超时** (>10s) | 计时器 | TTS: "语言理解超时，请使用文字输入" | IDLE |
 | **run_task() 校验失败** | DispatchResult.success=False | TTS: 格式化错误消息 | IDLE |
@@ -494,9 +494,9 @@ flask>=3.0.0             # PC HTTP Server (BSD)
 |------|------|------|
 | `voice_button.c/h` | `main/` (ESP32) | PLAY 按键检测 + HTTP POST 到 PC |
 | `audio_capture.py` | `service/` (Python) | 麦克风录音，WAV 输出 |
-| `asr_client.py` | `service/` (Python) | ASR 服务封装 |
+| `asr_client.py` | `service/` (Python) | **本地 Whisper 推理封装**：WAV 音频 → 中文文本；本地执行，无云端 ASR 调用、无 API Key |
 | `nl_to_task.py` | `service/` (Python) | 语言模型 → TaskContract JSON |
-| `tts_client.py` | `service/` (Python) | TTS 服务封装 |
+| `tts_client.py` | `service/` (Python) | **通过 edge-tts 调用微软在线 TTS 服务**：文本 → 音频播放；**需要网络连接**；合成文本会外发给外部服务（隐私与课程许可待确认） |
 | `voice_server.py` | `service/` (Python) | PC HTTP Server，接收按键事件 + 状态机 |
 | `voice_pipeline.py` | `service/` (Python) | 全链路串联入口 |
 | `requirements_voice.txt` | 项目根目录 | Python 依赖清单 |

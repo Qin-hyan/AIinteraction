@@ -1,9 +1,8 @@
 # Week 05 State — 接通按键说话与语音播报
 
 **状态**: 📋 **方案已形成，功能未实现**
-**分支**: \eature/week05-voice-interaction\（本地分支，无远端 upstream）
-**基线**: dd788b\ — Merge pull request #4 (origin/main)
-**当前 HEAD**: \e5c467**上游**: 无
+**分支**: `feature/week05-voice-interaction`（本地分支，无远端 upstream）
+**基线**: `7dd788b` — Merge pull request #4 (origin/main)
 
 ## 方案文档
 
@@ -29,17 +28,20 @@
 
 ## 当前状态
 
-- \eature/week05-voice-interaction\ 已从 \main\ (dd788b\) 创建
-- 分支上已有 4 个本地**文档提交**（无功能实现提交）：
+- `feature/week05-voice-interaction` 已从 `main` (`7dd788b`) 创建
+- 分支上的提交全部为**文档提交**（无功能实现提交）；截至事实修正提交 `e322dc7` 共 6 个：
   | 提交 | 说明 |
   |------|------|
-  | \8a522b5\ | docs(week05): sync project documents for Week 05 branch initialization |
-  | Žaba4\ | docs(status): mark Week 03 merged and correct Week 04 branch status |
-  | \ef1432\ | docs(week03): correct help_uplink integration status across docs |
-  | \e5c467\ | docs(status): correct help_uplink integration status and Week 05 branch commits（**当前 HEAD**） |
-  | _(待提交)_ | docs(week05): add voice interaction architecture design v1.0 |
-- 未配置远端 upstream
+  | `8a522b5` | docs(week05): sync project documents for Week 05 branch initialization |
+  | `575aba4` | docs(status): mark Week 03 merged and correct Week 04 branch status |
+  | `bef1432` | docs(week03): correct help_uplink integration status across docs |
+  | `ae5c467` | docs(status): correct help_uplink integration status and Week 05 branch commits |
+  | `7f7698c` | docs(week05): add voice interaction architecture design v1.0 |
+  | `e322dc7` | docs(week05): correct Whisper ASR and edge-tts TTS service facts |
+- 未配置远端 upstream（分支尚未推送）
 - **尚无源码变更、功能实现提交或测试**
+
+> 提交记录为截至 2026-10-10 的快照；最新提交以 `git log --oneline` 为准。
 
 ## 架构设计状态
 
@@ -72,8 +74,8 @@
 
 ## 前置条件
 
-- Week 04 已通过 PR #4 合并至 \main\（dd788b\）
-- 可复用既有模块：\dc_button\（按键）、\help_event\（按键→反馈闭环）、\http_server\（REST API + Web 仪表盘）、\service/\（结构化任务管道）、\help_uplink\（ESP32 HTTP client 参考）
+- Week 04 已通过 PR #4 合并至 `main`（`7dd788b`）
+- 可复用既有模块：`adc_button`（按键）、`help_event`（按键→反馈闭环）、`http_server`（REST API + Web 仪表盘）、`service/`（结构化任务管道）、`help_uplink`（ESP32 HTTP client 参考）
 - **待确认事项**（未取证前不作结论）:
   - PC 麦克风/扬声器硬件可用性
   - PC 防火墙允许 ESP32 HTTP 入站 (8080 端口)
