@@ -183,7 +183,7 @@ idf.py -p COM端口 flash monitor
 - 实机验证：按键检测 ✅、事件创建 ✅、HTTP 发送 ✅、快速连按抑制 ✅、30s 超时自动重置 ✅
 - ⚠️ **真实 ESP32→VPS HTTP 上行仍待实机验收**（help_uplink 异步任务已集成至 main.c，需配置真实 VPS URL 验证 HTTP POST 成功/失败路径）
 
-#### Week 04（当前开发分支 `feature/week04-natural-language`）— 自然语言任务管道
+#### Week 04 — 自然语言任务管道 🔀（已合并至 main，PR #4 → `7dd788b`）
 
 | 模块 | 状态 | 验证方式 |
 |------|------|---------|
@@ -299,9 +299,10 @@ IDLE → SUBMITTED(已提交·已受理) → RECEIVED(设备已接收)
 
 | 引用 | 说明 |
 |------|------|
-| `main` | 最新合并版本（Week 01-03 完整代码） |
+| `main` | 最新合并版本 `7dd788b`（PR #4）— 已包含 Week 01–04 完整代码，与 `origin/main` 同步 |
 | `week02-stable` (tag) | **稳定基线** — 12 项实机验证全 PASS |
-| `feature/week04-natural-language` | **当前** — Week 04 开发分支 |
+| `feature/week04-natural-language` | 已合并的**历史分支**（PR #4 → `main` `7dd788b`；分支 HEAD `0b4b323` 保留） |
+| `feature/week05-voice-interaction` | **当前** — Week 05 开发分支（基线 `7dd788b`，尚无提交） |
 
 ---
 

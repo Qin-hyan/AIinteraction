@@ -1,7 +1,11 @@
 # Week 03 State — 实体按键与物理反馈闭环
 
-**状态**: 🔧 开发中  
-**分支**: `feature/week03-physical-feedback`
+**状态**: ✅ 已完成并合并至 `main`（PR #3）
+**合并**: `ec9c94b` — Merge pull request #3 from Qin-hyan/feature/week03-physical-feedback（2026-10-09）
+**分支**: `feature/week03-physical-feedback`（已合并的**历史分支**，HEAD `cc34961`，为 `ec9c94b` 的祖先；分支保留未删除）
+**后续开发**: 已切换至 `feature/week05-voice-interaction`（基线 `7dd788b`）
+
+> 本次仅更新分支与合并状态；以下技术细节、构建/实机验证记录与未验证事项均保持原样。
 
 ## 本次修改 — 按键扫描解耦 (2026-10-09)
 
