@@ -1,6 +1,6 @@
 # Week 04 State — 自然语言查询与请求采集
 
-**状态**: ✅ Step 1-5 全部完成（85 PASS）
+**状态**: ✅ Step 1-6 全部完成（92 PASS）
 **分支**: `feature/week04-natural-language`
 **基线**: `ec9c94b` — Merge pull request #3 (origin/main)
 **上游**: 无（已清除 `origin/main` 的跟踪）
@@ -144,50 +144,39 @@ service/
 | 19 | trigger_collect 缺少时间字段 | ✅ PASS | 容错 |
 | 20 | query_last 包含按键状态 | ✅ PASS | 容错 |
 
-**总计**: 85 PASS / 0 FAIL（原有 49 + Step 4 新增 16 + Step 5 新增 20）
+**总计**: 92 PASS / 0 FAIL（原有 85 + Step 6 新增 7）
 
-## 前置条件
+---
+
+### Week 04 Step 6 — 本地结构化任务处理入口 (`service/task_pipeline.py`)
 
 **新增文件**:
 ```
 service/
-├── task_dispatcher.py          # 受限任务分发入口
-└── test_task_dispatcher.py     # 单元测试 (16 tests)
+├── task_pipeline.py             # 统一入口：校验→分发→格式化
+└── test_task_pipeline.py        # 集成测试 (7 tests)
 ```
 
 **设计要点**:
-- 单一入口 `dispatch_task(raw_input: str) → DispatchResult`
-- 调用 `parse_and_validate()` 完成三步校验（JSON 解析 → Schema → 意图契约）
-- 四种意图分发：
-  - `query_last`: 真实调用 `query_last()` 工具，返回 `observation`
-  - `trigger_collect`: 真实调用 `trigger_collect()` 工具，返回 `request_id`/`collect_status`/`collect_observation`
-  - `clarify`: 直接返回 `question`，**不调用任何设备工具**
-  - `unsupported`: 直接返回 `reason`，**不调用任何设备工具**
-- 非法 JSON、校验失败、未知意图 → `success=False`，**不执行任何工具**
-- 工具内部异常 → 捕获并返回错误，不崩溃
+- 单一入口 `run_task(raw_input: str) → str`
+- 串联 `dispatch_task()`（校验+分发）与 `format_result()`（格式化）两个已有模块
+- 不重复实现 validator/dispatcher/formatter 的逻辑
 - 纯 Python 标准库，零外部依赖
+- 不接入语言模型，不修改 ESP32 业务代码
 
-**16 个单元测试覆盖**:
+**7 个集成测试覆盖**:
+
 | # | 测试项 | 结果 | 分类 |
 |---|--------|------|------|
-| 1 | query_last 成功获取有效观测 | ✅ PASS | query_last |
-| 2 | query_last 设备无有效记录 | ✅ PASS | query_last |
-| 3 | query_last 工具失败 (HTTP 404) | ✅ PASS | query_last |
-| 4 | query_last 工具异常 (ConnectionError) | ✅ PASS | query_last |
-| 5 | trigger_collect 完整成功流程 | ✅ PASS | trigger_collect |
-| 6 | trigger_collect 工具失败 (设备端失败) | ✅ PASS | trigger_collect |
-| 7 | trigger_collect 工具异常 (TimeoutError) | ✅ PASS | trigger_collect |
-| 8 | clarify 返回澄清问题，不调任何工具 | ✅ PASS | clarify |
-| 9 | unsupported 返回拒绝原因，不调任何工具 | ✅ PASS | unsupported |
-| 10 | 非法 JSON，不调任何工具 | ✅ PASS | 失败关闭 |
-| 11 | 未知意图，不调任何工具 | ✅ PASS | 失败关闭 |
-| 12 | query_last 带额外字段 (device_address)，不调工具 | ✅ PASS | 失败关闭 |
-| 13 | 缺少必需字段 (confidence/original)，不调工具 | ✅ PASS | 失败关闭 |
-| 14 | clarify 缺少 question，不调工具 | ✅ PASS | 失败关闭 |
-| 15 | unsupported 缺少 reason，不调工具 | ✅ PASS | 失败关闭 |
-| 16 | confidence 越界 (1.5)，不调工具 | ✅ PASS | 失败关闭 |
+| 1 | query_last 成功获取有效观测 | ✅ PASS | 查询 |
+| 2 | query_last 无有效记录 | ✅ PASS | 查询 |
+| 3 | trigger_collect 采集成功 | ✅ PASS | 采集 |
+| 4 | clarify 返回澄清问题 | ✅ PASS | 澄清 |
+| 5 | unsupported 返回拒绝原因 | ✅ PASS | 拒绝 |
+| 6 | 非法 JSON | ✅ PASS | 非法输入 |
+| 7 | 未知意图 | ✅ PASS | 非法输入 |
 
-**总计**: 85 PASS / 0 FAIL（原有 49 + Step 4 新增 16 + Step 5 新增 20）
+**总计**: 92 PASS / 0 FAIL（原有 85 + Step 6 新增 7）
 
 ## 前置条件
 

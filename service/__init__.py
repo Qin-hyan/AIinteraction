@@ -36,6 +36,9 @@ from .task_dispatcher import (
 from .result_formatter import (
     format_result,
 )
+from .task_pipeline import (
+    run_task,
+)
 
 __all__ = [
     "IntentEnum",
@@ -59,4 +62,5 @@ __all__ = [
     "DispatchResult",
     "dispatch_task",
     "format_result",
+    "run_task",
 ]

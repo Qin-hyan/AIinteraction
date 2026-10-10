@@ -50,6 +50,7 @@ AIinteraction/
 | 受限任务分发 | `service/task_dispatcher.py` | ✅ Week 04 | 单一入口 `dispatch_task()` → `parse_and_validate()` → 四种意图分发，
 `clarify`/`unsupported`/校验失败不调工具，16 单元测试 PASS |
 | 工具结果格式化 | `service/result_formatter.py` | ✅ Week 04 | 单一入口 `format_result()` → 五种场景格式化，
+| | 任务处理入口 | `service/task_pipeline.py` | ✅ Week 04 | 单一入口 `run_task()` 串联 dispatch->format，7 集成测试 PASS |
 保留 source/seq/相对时间，不伪装日历时间，20 单元测试 PASS |
 
 ---

@@ -437,10 +437,37 @@ if (help_button_get_pending(&btn)) {
 - 字段缺失容错，不崩溃
 - 纯 Python 标准库，零外部依赖
 
+---
+
+## Week 04 Step 6 — 本地结构化任务处理入口 (2026-10-10)
+
+**分支**: `feature/week04-natural-language`
+**范围**: `service/task_pipeline.py` + `service/test_task_pipeline.py`（纯 Python 标准库，mock 集成测试）
+**版本**: 前次 HEAD `f819b26`（当前已暂存待提交）
+**验证方式**: Python `unittest` 本地运行
+**结果**: **7 PASS / 0 FAIL**（+ 原有 85 PASS = 总计 **92 PASS**）
+
+| # | 测试项 | 结果 | 分类 |
+|---|--------|------|------|
+| 1 | query_last 成功获取有效观测 | ✅ PASS | 查询 |
+| 2 | query_last 无有效记录 | ✅ PASS | 查询 |
+| 3 | trigger_collect 采集成功 | ✅ PASS | 采集 |
+| 4 | clarify 返回澄清问题 | ✅ PASS | 澄清 |
+| 5 | unsupported 返回拒绝原因 | ✅ PASS | 拒绝 |
+| 6 | 非法 JSON | ✅ PASS | 非法输入 |
+| 7 | 未知意图 | ✅ PASS | 非法输入 |
+
+**设计要点**:
+- 单一入口 `run_task(raw_input: str) → str`
+- 串联 `dispatch_task()` + `format_result()`，不重复实现逻辑
+- 纯 Python 标准库，零外部依赖
+- 不接入语言模型，不修改 ESP32 业务代码
+- 测试 mock `dispatch_task`，不发起真实 HTTP 请求
+
 ### ⚠️ 未验证项目
 
 | 项目 | 原因 |
 |------|------|
 | **与真实 ESP32 设备集成** | 无真实设备连接，所有工具通过 mock 验证 |
-| **与语言模型输出连接** | 当前分发器接收结构化 JSON，未接入 LLM |
+| **与语言模型输出连接** | 当前管道接收结构化 JSON，未接入 LLM |
 | **实机 HTTP 调用** | 无真实 ESP32 设备连接 |
