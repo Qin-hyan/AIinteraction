@@ -181,7 +181,7 @@ idf.py -p COM端口 flash monitor
 - 按键去抖 FSM、事件生命周期（help_event）、LED 反馈
 - help_uplink HTTP POST 模块（将事件序列化为 JSON 推送至外部 VPS）
 - 实机验证：按键检测 ✅、事件创建 ✅、HTTP 发送 ✅、快速连按抑制 ✅、30s 超时自动重置 ✅
-- ⚠️ **真实的 ESP32→VPS 端到端闭环仍待验收**（help_uplink 尚未接入 main.c；需配置真实 VPS URL）
+- ⚠️ **真实 ESP32→VPS HTTP 上行仍待实机验收**（help_uplink 异步任务已集成至 main.c，需配置真实 VPS URL 验证 HTTP POST 成功/失败路径）
 
 #### Week 04（当前开发分支 `feature/week04-natural-language`）— 自然语言任务管道
 
@@ -204,7 +204,7 @@ idf.py -p COM端口 flash monitor
 |------|------|
 | ⚠️ **真实语言模型输出 → 管道输入接口对接** | 当前使用结构化 JSON 样例替代 LLM 输出 |
 | ⚠️ **真实 ESP32 HTTP 调用** | query_last、trigger_collect 工具仅通过 mock 测试，未在真实设备上运行 |
-| ⚠️ **Week 03 help_uplink 接入 main.c** | 模块已就绪但未被主循环调用 |
+| ⚠️ **Week 03 ESP32→VPS HTTP 上行实机验收** | help_uplink 异步任务已集成至 main.c（初始化 `help_uplink_start`，事件状态机调用 `request_send/poll`），尚需配置真实 VPS URL 验证 HTTP 上行 |
 | ⚠️ **Week 03 ESP32→VPS 端到端验收** | 需配置真实 VPS URL 并验证 HTTP POST 成功/失败路径 |
 
 > 所有测试记录详见 [TEST_LOG.md](TEST_LOG.md)（版本、输入、预期、实际、PASS/FAIL、运行位置和证据）。
