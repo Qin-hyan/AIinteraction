@@ -7,7 +7,7 @@
 ## 当前：Week 04 — 自然语言查询与请求采集（分支已建立）
 
 **分支**: `feature/week04-natural-language`
-**阶段**: Step 1 任务契约校验 ✅ + Step 2 query_last 受限工具 ✅ + Step 3 trigger_collect 受限工具 ✅ + Step 4 受限任务分发 ✅ + Step 5 工具结果格式化 ✅（总计+ Step 6 任务管道 ✅（总计 92 test PASS）
+**阶段**: Step 1 任务契约校验 ✅ + Step 2 query_last 受限工具 ✅ + Step 3 trigger_collect 受限工具 ✅ + Step 4 受限任务分发 ✅ + Step 5 工具结果格式化 ✅ + Step 6 任务管道 ✅（总计 102 test PASS）+ **Web 仪表盘本地持久化 ✅ (`8ca4677`)** + **CSV 导出 ✅**
 
 ---
 

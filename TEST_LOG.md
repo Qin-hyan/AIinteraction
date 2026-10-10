@@ -510,3 +510,58 @@ if (help_button_get_pending(&btn)) {
 |------|------|
 | **真实语言模型输出 → 管道输入** | 当前使用结构化 JSON 样例替代 LLM 输出 |
 | **真实 ESP32 设备 HTTP 调用** | 无真实设备连接，HTTP 边界通过 mock 模拟 |
+
+---
+
+## Week 04 — Web 仪表盘本地持久化 (2026-10-10)
+
+**分支**: `feature/week04-natural-language`
+**版本**: `8ca4677` — feat(web): persist valid observations locally
+**验证方式**: Python 单元测试 (102 PASS) + ESP-IDF 编译 (build OK)
+**结果**: ✅ **Build PASS / 102 Tests PASS / 0 FAIL**
+
+| # | 测试项 | 结果 | 说明 |
+|---|--------|------|------|
+| 1 | Python 单元测试回归 (102 tests) | ✅ PASS | 全部通过，未回退 |
+| 2 | ESP-IDF `idf.py build` 编译 | ✅ PASS | `week02-sensor-collect.bin` 生成成功 |
+| 3 | `git diff --check` | ✅ PASS | 无空白字符错误 |
+| 4 | 仅修改 `main/http_server.c` | ✅ PASS | 无无关变更 |
+
+**变更摘要**:
+- 仅修改 `main/http_server.c` (5 insertions, 3 deletions)
+- `persistObs(d)` — 新增函数：仅在 `valid===true` 且 `source==='live'` 或 `source==='cadence'` 时写入 `localStorage`
+- `restoreLatest()` — 新增函数：页面加载时从 `localStorage` 恢复最新有效观测
+- `refreshStored()` — 获取成功时调用 `persistObs(d)`
+- `renderNewObs()` — 采集完成获取新观测时调用 `persistObs(o)`
+- `init()` — 启动时先 `restoreLatest()` 再 `refreshStored()`
+
+**去重策略**: 使用 `record_id` 作去重键（退化 `'s'+seq`）；同键记录覆盖更新；最多保留 50 条，超出后裁剪最旧条目。
+
+**容错策略**: 全部 `try/catch` 包裹；`localStorage` 不可用/超出容量/数据损坏均静默跳过，不阻塞页面正常功能。
+
+---
+
+## Week 04 — CSV 导出功能 (2026-10-10)
+
+**分支**: `feature/week04-natural-language`
+**版本**: `HEAD` — feat(web): export persisted observations to CSV
+**验证方式**: Python 单元测试 (102 PASS) + ESP-IDF 编译 (build OK)
+**结果**: ✅ **Build PASS / 102 Tests PASS / 0 FAIL**
+
+| # | 测试项 | 结果 | 说明 |
+|---|--------|------|------|
+| 1 | Python 单元测试回归 (102 tests) | ✅ PASS | 全部通过，未回退 |
+| 2 | ESP-IDF `idf.py build` 编译 | ✅ PASS | `week02-sensor-collect.bin` 生成成功 |
+| 3 | `git diff --check` | ✅ PASS | 无空白字符错误 |
+| 4 | 仅修改 `main/http_server.c` | ✅ PASS | 1 文件 +2 行（函数+按钮），无无关变更 |
+
+**变更摘要**:
+- 新增 `exportCSV()` JS 函数：从 `localStorage` 读取 `__dashObs_v1__`，过滤 `valid===true` 且 `source==='live'|'cadence'` 的记录，按 `received_ms` 降序排列
+- 新增 "📥 导出 CSV" 按钮（`act-btn ghost` 样式），置于"刷新已存数据"与"采集一次"之间
+- 列字段：`record_id, request_id, source, seq, accel_x, accel_y, accel_z, button, observed_ms, received_ms, data_age_ms, time_quality`
+- CSV 编码：UTF-8 + BOM (`0xFEFF`)，兼容 Excel 中文
+- 文件名格式：`esp32_obs_YYYY-MM-DD_hh-mm-ss.csv`
+- 字段缺失时留空，不伪造数值
+- 无有效数据 / 存储不可用 / 导出失败时通过 `setNote()` 显示清晰提示，不假报成功
+
+**不涉及**: 传感器采集逻辑、现有快照/陈旧标记语义、localStorage 持久化逻辑、新增依赖、CSV 以外的导出格式。
