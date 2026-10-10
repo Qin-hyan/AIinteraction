@@ -1,6 +1,6 @@
 # Week 04 State — 自然语言查询与请求采集
 
-**状态**: ✅ Step 1-3 完成 + Step 4 受限任务分发模块完成（65 PASS）
+**状态**: ✅ Step 1-5 全部完成（85 PASS）
 **分支**: `feature/week04-natural-language`
 **基线**: `ec9c94b` — Merge pull request #3 (origin/main)
 **上游**: 无（已清除 `origin/main` 的跟踪）
@@ -99,6 +99,74 @@ service/
 - 工具内部异常 → 捕获并返回错误，不崩溃
 - 纯 Python 标准库，零外部依赖
 
+### Week 04 Step 5 — 工具结果格式化模块 (`service/result_formatter.py`)
+
+**新增文件**:
+```
+service/
+├── result_formatter.py          # 结果格式化入口
+└── test_result_formatter.py     # 单元测试 (20 tests)
+```
+
+**设计要点**:
+- 单一入口 `format_result(result: DispatchResult) → str`
+- 五种场景格式化：
+  - **查询结果**：保留 source、seq、加速度、按键状态、相对时间（"设备运行 XXXX ms"），不伪装日历时间
+  - **采集成功**：仅当 `collect_observation.valid==True` 且 `source!="none"` 时报告成功
+  - **失败/超时**：包含请求 ID、状态、错误原因
+  - **需要澄清**：返回 question 字段
+  - **请求不支持**：返回 reason 字段
+- 校验失败返回错误列表
+- 字段缺失容错（加速度部分缺失、时间字段缺失等均不会崩溃）
+- 纯 Python 标准库，零外部依赖
+
+**20 个单元测试覆盖**:
+| # | 测试项 | 结果 | 分类 |
+|---|--------|------|------|
+| 1 | query_last 成功有效观测，含相对时间验证 | ✅ PASS | query_last |
+| 2 | query_last 无有效记录 (valid=false) | ✅ PASS | query_last |
+| 3 | query_last observation=None | ✅ PASS | query_last |
+| 4 | query_last 工具失败 (HTTP 404) | ✅ PASS | query_last |
+| 5 | trigger_collect 成功有效新观测 | ✅ PASS | trigger_collect |
+| 6 | trigger_collect 工具失败 | ✅ PASS | trigger_collect |
+| 7 | trigger_collect observation=None | ✅ PASS | trigger_collect |
+| 8 | trigger_collect 观测无效 (valid=false) | ✅ PASS | trigger_collect |
+| 9 | trigger_collect source=none | ✅ PASS | trigger_collect |
+| 10 | clarify 带澄清问题 | ✅ PASS | clarify |
+| 11 | clarify 无 question (fallback) | ✅ PASS | clarify |
+| 12 | unsupported 带原因 | ✅ PASS | unsupported |
+| 13 | unsupported 无 reason (fallback) | ✅ PASS | unsupported |
+| 14 | 校验失败 | ✅ PASS | 失败 |
+| 15 | 校验失败 error=None | ✅ PASS | 失败 |
+| 16 | 未知意图（防御性） | ✅ PASS | 防御 |
+| 17 | query_last 缺少加速度字段 | ✅ PASS | 容错 |
+| 18 | query_last 部分加速度字段 | ✅ PASS | 容错 |
+| 19 | trigger_collect 缺少时间字段 | ✅ PASS | 容错 |
+| 20 | query_last 包含按键状态 | ✅ PASS | 容错 |
+
+**总计**: 85 PASS / 0 FAIL（原有 49 + Step 4 新增 16 + Step 5 新增 20）
+
+## 前置条件
+
+**新增文件**:
+```
+service/
+├── task_dispatcher.py          # 受限任务分发入口
+└── test_task_dispatcher.py     # 单元测试 (16 tests)
+```
+
+**设计要点**:
+- 单一入口 `dispatch_task(raw_input: str) → DispatchResult`
+- 调用 `parse_and_validate()` 完成三步校验（JSON 解析 → Schema → 意图契约）
+- 四种意图分发：
+  - `query_last`: 真实调用 `query_last()` 工具，返回 `observation`
+  - `trigger_collect`: 真实调用 `trigger_collect()` 工具，返回 `request_id`/`collect_status`/`collect_observation`
+  - `clarify`: 直接返回 `question`，**不调用任何设备工具**
+  - `unsupported`: 直接返回 `reason`，**不调用任何设备工具**
+- 非法 JSON、校验失败、未知意图 → `success=False`，**不执行任何工具**
+- 工具内部异常 → 捕获并返回错误，不崩溃
+- 纯 Python 标准库，零外部依赖
+
 **16 个单元测试覆盖**:
 | # | 测试项 | 结果 | 分类 |
 |---|--------|------|------|
@@ -119,7 +187,7 @@ service/
 | 15 | unsupported 缺少 reason，不调工具 | ✅ PASS | 失败关闭 |
 | 16 | confidence 越界 (1.5)，不调工具 | ✅ PASS | 失败关闭 |
 
-**总计**: 65 PASS / 0 FAIL（原有 49 + 新增 16）
+**总计**: 85 PASS / 0 FAIL（原有 49 + Step 4 新增 16 + Step 5 新增 20）
 
 ## 前置条件
 

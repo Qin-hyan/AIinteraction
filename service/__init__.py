@@ -33,6 +33,9 @@ from .task_dispatcher import (
     DispatchResult,
     dispatch_task,
 )
+from .result_formatter import (
+    format_result,
+)
 
 __all__ = [
     "IntentEnum",
@@ -55,4 +58,5 @@ __all__ = [
     "_poll_status",
     "DispatchResult",
     "dispatch_task",
+    "format_result",
 ]

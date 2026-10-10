@@ -396,6 +396,47 @@ if (help_button_get_pending(&btn)) {
 - 纯 Python 标准库，零外部依赖
 - 测试均 mock `query_last` / `trigger_collect`，不发起真实 HTTP 请求
 
+---
+
+## Week 04 Step 5 — 工具结果格式化模块 (2026-10-10)
+
+**分支**: `feature/week04-natural-language`
+**范围**: `service/result_formatter.py` + `service/test_result_formatter.py`（纯 Python 标准库）
+**版本**: 待提交（85 PASS）
+**验证方式**: Python `unittest` 本地运行
+**结果**: **20 PASS / 0 FAIL**（+ 原有 65 PASS = 总计 **85 PASS**）
+
+| # | 测试项 | 结果 | 分类 |
+|---|--------|------|------|
+| 1 | query_last 成功有效观测，含相对时间验证 | ✅ PASS | query_last |
+| 2 | query_last 无有效记录 (valid=false) | ✅ PASS | query_last |
+| 3 | query_last observation=None | ✅ PASS | query_last |
+| 4 | query_last 工具失败 (HTTP 404) | ✅ PASS | query_last |
+| 5 | trigger_collect 成功有效新观测 | ✅ PASS | trigger_collect |
+| 6 | trigger_collect 工具失败 | ✅ PASS | trigger_collect |
+| 7 | trigger_collect observation=None | ✅ PASS | trigger_collect |
+| 8 | trigger_collect 观测无效 (valid=false) | ✅ PASS | trigger_collect |
+| 9 | trigger_collect source=none | ✅ PASS | trigger_collect |
+| 10 | clarify 带澄清问题 | ✅ PASS | clarify |
+| 11 | clarify 无 question (fallback) | ✅ PASS | clarify |
+| 12 | unsupported 带原因 | ✅ PASS | unsupported |
+| 13 | unsupported 无 reason (fallback) | ✅ PASS | unsupported |
+| 14 | 校验失败 | ✅ PASS | 失败 |
+| 15 | 校验失败 error=None | ✅ PASS | 失败 |
+| 16 | 未知意图（防御性） | ✅ PASS | 防御 |
+| 17 | query_last 缺少加速度字段 | ✅ PASS | 容错 |
+| 18 | query_last 部分加速度字段 | ✅ PASS | 容错 |
+| 19 | trigger_collect 缺少时间字段 | ✅ PASS | 容错 |
+| 20 | query_last 包含按键状态 | ✅ PASS | 容错 |
+
+**设计要点**:
+- 单一入口 `format_result(result: DispatchResult) → str`
+- 五种场景格式化：查询结果、采集成功、失败/超时、需要澄清、请求不支持
+- 采集成功仅当 `collect_observation.valid==True` 且 `source!="none"`
+- 设备时间为相对运行时间（ms），不伪装为日历时间
+- 字段缺失容错，不崩溃
+- 纯 Python 标准库，零外部依赖
+
 ### ⚠️ 未验证项目
 
 | 项目 | 原因 |

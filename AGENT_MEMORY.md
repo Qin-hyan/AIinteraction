@@ -49,6 +49,8 @@ AIinteraction/
 纯标准库，mock 测试 12 PASS，复用 `query_last` 的 `ESP32_BASE_URL` 配置 |
 | 受限任务分发 | `service/task_dispatcher.py` | ✅ Week 04 | 单一入口 `dispatch_task()` → `parse_and_validate()` → 四种意图分发，
 `clarify`/`unsupported`/校验失败不调工具，16 单元测试 PASS |
+| 工具结果格式化 | `service/result_formatter.py` | ✅ Week 04 | 单一入口 `format_result()` → 五种场景格式化，
+保留 source/seq/相对时间，不伪装日历时间，20 单元测试 PASS |
 
 ---
 
