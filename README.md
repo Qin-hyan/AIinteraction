@@ -179,7 +179,7 @@ idf.py -p COM端口 flash monitor
 
 - 独立 FreeRTOS 按键扫描任务 (30 Hz) + FreeRTOS Queue 通信
 - 按键去抖 FSM、事件生命周期（help_event）、LED 反馈
-- help_uplink HTTP POST 模块（将事件序列化为 JSON 推送至外部 VPS）
+- help_uplink HTTP POST 模块（将事件序列化为 JSON 推送至外部 VPS）；异步接口已集成至 `main.c` 事件状态机（`29dd72d`）
 - 实机验证：按键检测 ✅、事件创建 ✅、HTTP 发送 ✅、快速连按抑制 ✅、30s 超时自动重置 ✅
 - ⚠️ **真实 ESP32→VPS HTTP 上行仍待实机验收**（help_uplink 异步任务已集成至 main.c，需配置真实 VPS URL 验证 HTTP POST 成功/失败路径）
 
@@ -204,8 +204,7 @@ idf.py -p COM端口 flash monitor
 |------|------|
 | ⚠️ **真实语言模型输出 → 管道输入接口对接** | 当前使用结构化 JSON 样例替代 LLM 输出 |
 | ⚠️ **真实 ESP32 HTTP 调用** | query_last、trigger_collect 工具仅通过 mock 测试，未在真实设备上运行 |
-| ⚠️ **Week 03 ESP32→VPS HTTP 上行实机验收** | help_uplink 异步任务已集成至 main.c（初始化 `help_uplink_start`，事件状态机调用 `request_send/poll`），尚需配置真实 VPS URL 验证 HTTP 上行 |
-| ⚠️ **Week 03 ESP32→VPS 端到端验收** | 需配置真实 VPS URL 并验证 HTTP POST 成功/失败路径 |
+| ⚠️ **Week 03 ESP32→VPS HTTP 上行端到端验收** | **软件集成已完成**：help_uplink 异步任务已集成至 `main.c`（初始化调用 `help_uplink_start`，事件状态机调用 `help_uplink_is_configured` / `help_uplink_request_send` / `help_uplink_poll`，见 `29dd72d`）；**仍未完成**真实 VPS URL 配置与 ESP32→VPS 端到端实机验收（HTTP POST 成功/失败路径未验证） |
 
 > 所有测试记录详见 [TEST_LOG.md](TEST_LOG.md)（版本、输入、预期、实际、PASS/FAIL、运行位置和证据）。
 
@@ -235,7 +234,7 @@ AIinteraction/
 │   ├── http_server.c/h       # HTTP 服务器 + Web 仪表盘 + REST API
 │   ├── camera_app.c/h        # OV2640 摄像头驱动
 │   ├── help_event.c/h        # Week 03：按键→LED→Web 物理反馈闭环
-│   └── help_uplink.c/h       # Week 03：事件 VPS 上行推送（待接入 main）
+│   └── help_uplink.c/h       # Week 03：事件 VPS 上行推送（已集成至 main.c；真实 VPS 验收待完成）
 ├── service/                  # Python 工具链（Week 04，纯标准库）
 │   ├── task_schema.py        # IntentEnum / TaskContract / JSON Schema
 │   ├── validator.py          # 三步校验：JSON 解析 → Schema → 意图契约
@@ -258,7 +257,8 @@ AIinteraction/
     ├── week01/STATE.md
     ├── week02/STATE.md
     ├── week03/STATE.md
-    └── week04/STATE.md
+    ├── week04/STATE.md
+    └── week05/STATE.md
 ```
 ---
 
@@ -302,7 +302,7 @@ IDLE → SUBMITTED(已提交·已受理) → RECEIVED(设备已接收)
 | `main` | 最新合并版本 `7dd788b`（PR #4）— 已包含 Week 01–04 完整代码，与 `origin/main` 同步 |
 | `week02-stable` (tag) | **稳定基线** — 12 项实机验证全 PASS |
 | `feature/week04-natural-language` | 已合并的**历史分支**（PR #4 → `main` `7dd788b`；分支 HEAD `0b4b323` 保留） |
-| `feature/week05-voice-interaction` | **当前** — Week 05 开发分支（基线 `7dd788b`，尚无提交） |
+| `feature/week05-voice-interaction` | **当前** — Week 05 开发分支（基线 `7dd788b`，无远端 upstream；已有文档提交 `8a522b5`、`575aba4`，尚无 Week 05 功能实现提交） |
 
 ---
 
