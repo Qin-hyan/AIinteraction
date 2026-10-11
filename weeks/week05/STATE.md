@@ -1,6 +1,6 @@
 # Week 05 State — 接通按键说话与语音播报
 
-**状态**: 🟢 **Step 1 完成（WAV 格式 PASS；真实麦克风有效语音第 3 轮 ✅ PASS）；Step 2A PC 端录音 HTTP 控制服务 ✅ 已实现并通过自动测试（39/39）；Step 2B ESP32 固件侧 PLAY→PC 控制代码 ✅ 已实现并 `idf.py build` 通过；Step 2C 实机联调 ✅ 已烧录并实测通过（PLAY→start→recording→stop→idle 双端取证，含一次瞬时连接失败的如实记录）；Step 3A 本地 Whisper ASR 模块（`service/asr_whisper.py`）✅ 已实现并通过自动测试（18/18，回归 190 通过）；真实语音识别 ✅ 已执行（stdlib `wave` 解码路径经实测不依赖 FFmpeg；第 2 轮 PASS——base/zh/cpu 纯推理 0.68s，转录非空且语义对应；第 1 轮窗口内无有效语音、转录为空，已如实记录）；Step 3B 录音停止后自动提交后台本地 ASR ✅ 已实现并通过自动测试（`service/test_voice_control_server.py` 58/58，新增 19 项 ASR 相关；`pytest service/` 回归 209 passed + 6 subtests）；Step 3C 真实端到端验证 ✅ 已实测（2026-10-11：ESP32 两次 PLAY→PC 录音→自动后台 Whisper base/zh/cpu 识别 success，START 双端取证成功；ASR 文本「現在測試Whisper本地與音識別」非空且中段语义对应、**前半句未识别，如实记录**；发现真实缺陷：Step 3B 的 stop 响应新增 asr 块后超 ESP32 512B 缓冲 → 固件侧 STOP 契约校验失败（RESPONSE_INVALID，HTTP=200；PC 实际已停录并完成 ASR），本地确认状态停留 RECORDING；**未擅自修改代码，缺陷待修**）；Step 3D 修复该契约缺陷 ✅（2026-10-11：控制接口与查询接口解耦——`POST /api/voice/stop` 改为**紧凑控制回执**（ok/state/recording/wav.frames/wav.duration_seconds/asr.status），完整 wav/asr 调试信息保留在 `GET /api/voice/status`；真实量级 619200 帧场景实测响应 **120B ≪ 512B**，不再截断；固件契约字段核对满足，**无需改 ESP32 固件**；`service/test_voice_control_server.py` 62/62，`pytest service/` 回归 213 passed + 6 subtests；改动仅限 `service/` 两个文件与本文档，未烧录、未真实联调）；**Step 3E 实机验证发现 `btn_scan` 任务栈溢出 → 已修复**（`BTN_TASK_STACK_SIZE` 2048→4096，`idf.py build` 通过，未烧录复核，详见下方 Step 3E 段）；**Step 3F 烧录含修复固件实机复核 ✅ + 端到端重测发现新失败项**（2026-10-11：烧录成功；设备连续运行 720+ 秒含两次真实 PLAY，`btn_scan` 栈溢出**未复现** ✅；START 双端成功；WHISPER ASR success；**但 STOP 在 ESP32 端因 `ESP_ERR_HTTP_EAGAIN (err=0x7007)` 5s 超时失败，本地状态停留 RECORDING**——与 Step 3C 截断不同的传输层失败模式，PC 已停录并完成 ASR；按规则未改代码未重试，详见下方 Step 3F 段）**
+**状态**: 🟢 **Step 1 完成（WAV 格式 PASS；真实麦克风有效语音第 3 轮 ✅ PASS）；Step 2A PC 端录音 HTTP 控制服务 ✅ 已实现并通过自动测试（39/39）；Step 2B ESP32 固件侧 PLAY→PC 控制代码 ✅ 已实现并 `idf.py build` 通过；Step 2C 实机联调 ✅ 已烧录并实测通过（PLAY→start→recording→stop→idle 双端取证，含一次瞬时连接失败的如实记录）；Step 3A 本地 Whisper ASR 模块（`service/asr_whisper.py`）✅ 已实现并通过自动测试（18/18，回归 190 通过）；真实语音识别 ✅ 已执行（stdlib `wave` 解码路径经实测不依赖 FFmpeg；第 2 轮 PASS——base/zh/cpu 纯推理 0.68s，转录非空且语义对应；第 1 轮窗口内无有效语音、转录为空，已如实记录）；Step 3B 录音停止后自动提交后台本地 ASR ✅ 已实现并通过自动测试（`service/test_voice_control_server.py` 58/58，新增 19 项 ASR 相关；`pytest service/` 回归 209 passed + 6 subtests）；Step 3C 真实端到端验证 ✅ 已实测（2026-10-11：ESP32 两次 PLAY→PC 录音→自动后台 Whisper base/zh/cpu 识别 success，START 双端取证成功；ASR 文本「現在測試Whisper本地與音識別」非空且中段语义对应、**前半句未识别，如实记录**；发现真实缺陷：Step 3B 的 stop 响应新增 asr 块后超 ESP32 512B 缓冲 → 固件侧 STOP 契约校验失败（RESPONSE_INVALID，HTTP=200；PC 实际已停录并完成 ASR），本地确认状态停留 RECORDING；**未擅自修改代码，缺陷待修**）；Step 3D 修复该契约缺陷 ✅（2026-10-11：控制接口与查询接口解耦——`POST /api/voice/stop` 改为**紧凑控制回执**（ok/state/recording/wav.frames/wav.duration_seconds/asr.status），完整 wav/asr 调试信息保留在 `GET /api/voice/status`；真实量级 619200 帧场景实测响应 **120B ≪ 512B**，不再截断；固件契约字段核对满足，**无需改 ESP32 固件**；`service/test_voice_control_server.py` 62/62，`pytest service/` 回归 213 passed + 6 subtests；改动仅限 `service/` 两个文件与本文档，未烧录、未真实联调）；**Step 3E 实机验证发现 `btn_scan` 任务栈溢出 → 已修复**（`BTN_TASK_STACK_SIZE` 2048→4096，`idf.py build` 通过，未烧录复核，详见下方 Step 3E 段）；**Step 3F 烧录含修复固件实机复核 ✅ + 端到端重测发现新失败项**（2026-10-11：烧录成功；设备连续运行 720+ 秒含两次真实 PLAY，`btn_scan` 栈溢出**未复现** ✅；START 双端成功；WHISPER ASR success；**但 STOP 在 ESP32 端因 `ESP_ERR_HTTP_EAGAIN (err=0x7007)` 5s 超时失败，本地状态停留 RECORDING**——与 Step 3C 截断不同的传输层失败模式，PC 已停录并完成 ASR；按规则未改代码未重试，详见下方 Step 3F 段）；**Step 3G 实机重测被设备 Brownout 复位中断**（2026-10-11：START 双端成功、ASR success、栈溢出未复现；但 STOP 阶段设备 `E BOD: Brownout detector was triggered` → `rst:0x3 (RTC_SW_SYS_RST)` 硬件复位，STOP 未送达 PC，用户 STOP 按键复位后被误发为 START（409）；经用户授权停录并删除 WAV；Step 3F 的 `ESP_ERR_HTTP_EAGAIN` 本轮未发生（无样本）；详见下方 Step 3G 段）**
 **分支**: `feature/week05-voice-interaction`（本地分支，无远端 upstream）
 **基线**: `7dd788b` — Merge pull request #4 (origin/main)
 
@@ -739,6 +739,82 @@ ESP32 固件**（`main/voice_button.c/h` 无改动）。
   端到端链路「START 受理 → 录音 → 自动 ASR」成立，但「STOP 受理回执 → 设备确认回 IDLE」
   一环需后续排查（未本轮修复）。
 
+## Step 3G 状态 — 修复后真实 PLAY→录音→STOP→Whisper 链路重测（2026-10-11）
+
+> 目标：使用**当前已烧录的 4096B `btn_scan` 栈固件（不重新构建/不烧录）**，重测修复后的
+> 真实「PLAY→录音→STOP→Whisper」链路，逐项核实 START/STOP 双端确认、紧凑响应长度与
+> ASR 最终状态。**只测与取证，0 代码改动，不进入 LLM/TTS，不 push。**
+> 本步因设备硬件 **Brownout 复位**在 STOP 阶段中断，端到端**未完成**，如实记录。
+
+### 前置检查（均通过）
+
+| 项 | 结果 | 证据 |
+|----|------|------|
+| 分支 / HEAD / 工作区 | ✅ `feature/week05-voice-interaction` @ `5dc87c8`（`docs(week05): record Step 3F …`），工作区干净 | `git branch --show-current` / `git rev-parse HEAD` / `git status --porcelain` |
+| 固件 | ✅ 使用已烧录的 Step 3E/3F 固件（`btn_scan` 栈 4096B）；**未重新构建/未烧录** | 设备 boot 日志 `compile time Oct 11 2026 00:31:52`（与 3F 烧录一致）；全程未调 `idf.py build`/`flash` |
+| ESP32 唯一设备 | ✅ `VID_303A&PID_1001` → **COM10**（唯一 USB 串行设备） | PnP 枚举 |
+| PC LAN 地址 | ✅ `10.132.124.130`（WLAN，与 Step 3C/3F 一致） | `ipconfig` |
+| 8080 端口 | ℹ️ `127.0.0.1:8080` = PlatformIO MCP Dashboard（PID 124036，未终止）；PC 语音服务绑定 `10.132.124.130:8080`（PID 58816/117568）与之共存 | `Get-NetTCPConnection` |
+| PC 服务 | ✅ 当前 HEAD（Step 3D 版）；输出目录显式指定仓库外 `%TEMP%\week05_step3g\wav` | 启动 `python -m service.voice_control_server --host 10.132.124.130 --port 8080 --output-dir <仓库外>`；启动时 `GET /api/voice/status` HTTP 200 `state=idle` |
+| 初始双端空闲 | ✅ PC `state=idle, recording=false, asr=idle`；ESP32 串口持续输出 IMU cadence（uptime ~56 分钟） | `GET /status` + 串口捕获 |
+
+### 测试前发现的前置状态异常（如实记录）
+
+- 设备自 Step 3F 测试以来**未重启**（uptime ~56 分钟），固件本地确认状态遗留为 **RECORDING**
+  （Step 3F 的 STOP 传输层失败按设计保持本地状态）。
+- 首次按 PLAY（本意 START）被固件判定为「已在录音 → 请求 STOP」：`voice-3211185-0003`
+  `POST /api/voice/stop` → PC `409 not_recording`（PC 实际 idle）→ 本地保持 RECORDING。
+  **非链路缺陷，是设备/PC 本地状态不同步的前置问题。**
+- 恢复：软重启设备。第一次按 RST **未生效**（uptime 未归零、无 boot 日志）；改用 **USB 重新插拔**
+  后设备成功重新 boot（uptime 归零，`W5-VOICE` 重新初始化、本地确认状态回 IDLE，IP `10.132.124.63`）。
+  **不烧录、不修改代码。**
+
+### 第 1 轮（正式）端到端双端证据
+
+串口捕获为 UTF-8 解码（`%TEMP%\week05_step3g\serial.log`，中文可读）。
+
+| 阶段 | PC HTTP 证据 | ESP32 串口证据 | 判定 |
+|------|-------------|---------------|------|
+| START（15:32:32） | `10.132.124.63 POST /api/voice/start 200`；`GET /status` → `state=recording, recording=true, frames=326400, elapsed=20.4s` | `btn pressed: PLAY` → `[voice-91988-0001] 执行 PLAY 语音请求：START（POST …/api/voice/start）` → `PC 已受理：HTTP 200, state=recording` → `已确认：本地确认状态 RECORDING（下次 PLAY 请求结束录音）` | ✅ 双端成功 |
+| 语音 | — | 录音期内用户以正常音量说「查看最近的加速度数据」（15:32:52 前后） | ✅ 已确认 |
+| STOP（15:33:38 前后） | **PC 端从未收到 STOP**；15:33:38 收到 `POST /api/voice/start 409`（`already_recording`） | ⚠️ uptime ~97s 时 `E BOD: Brownout detector was triggered` → `rst:0x3 (RTC_SW_SYS_RST)` → 设备复位重启、本地状态重置 IDLE → 用户按 PLAY（本意 STOP）被作为 START 发出 | ❌ **设备崩溃中断，STOP 未送达** |
+| 清理停录（经用户授权） | 15:38:36 `POST /api/voice/stop 200` → `{"ok":true,"state":"idle","recording":false,"asr.status":"running","wav":{"frames":5780800,"duration_seconds":361.3}}`，响应体 **134B ≤ 512B** | — | ✅ 清理 |
+| ASR | `asr.status=success`；`model=base / zh / transcribe / cpu`，纯推理 `34.400269 s`，`error=null` | — | ✅ ASR success |
+
+### 逐项验证结果
+
+| 验证项 | 结果 | 证据 / 说明 |
+|--------|------|-------------|
+| START 双端确认 | ✅ PASS | ESP32 `PC 已受理 200, state=recording` + `本地确认状态 RECORDING`；PC `state=recording` |
+| 紧凑 STOP 回执 ≤ 512B | ✅ PASS（PC 侧 134B） | 清理停录回执实测 134B；**未由 ESP32 端实机接收**（STOP 未发出设备已复位） |
+| ESP32 本地回到 IDLE | ⚠️ 因复位而重置 | Brownout 复位重新 boot 后本地默认 IDLE；**非经正常 STOP 契约** |
+| PC 录音停止 | ✅ PASS | `state=idle, recording=false`；WAV 写盘后删除 |
+| Whisper ASR | ✅ PASS success | 转录文本以**「查看最近的加速度数据」**开头；后段为录音延续期间字面对话/环境声的 base 小模型转录；纯推理 34.4s |
+| `ESP_ERR_HTTP_EAGAIN` 是否复现 | ⚠️ 无样本 | 本轮 STOP 请求**未由设备发出**（设备在 STOP 前崩溃），Step 3F 的传输层超时**未发生**，也无新 STOP 传输样本可供判定 |
+| 栈溢出是否复现 | ✅ 否 | 全程（含真实 PLAY、录音期）无 `btn_scan` / `A stack overflow` / `Guru Meditation` / `panic` |
+| 设备稳定性 | ❌ **Brownout 复位** | `E BOD: Brownout detector was triggered`，`rst:0x3 (RTC_SW_SYS_RST)` —— 硬件欠压复位，非软件异常 |
+
+### WAV 与 ASR 元数据（清理用录音，经用户授权）
+
+- WAV：`voice_20261011_153232_006.wav`，`1ch / 16000Hz / 16bit / 5780800 帧 / 361.3s / 11,561,644 B`，`status_flags=[]`
+- 361.3s 构成：START(15:32:32) → 语音完成(约 15:32:52) → 设备 Brownout(约 15:33:37) → **PC 无人 STOP 持续录制至清理(15:38:36)**；预期句位于开头，后段为环境/对话声。
+- ASR：`base / zh / transcribe / cpu`，纯推理 `34.400269 s`，`asr.status=success`；转录文本以「查看最近的加速度数据」开头，**不宣称整句干净识别**。
+
+### 清理与合规（Step 3G）
+
+- ✅ WAV 已删除（`%TEMP%\week05_step3g\wav` 清空）；**诊断日志按用户指示保留**：
+  `%TEMP%\week05_step3g\serial.log`（含 Brownout / 409 / START / 语音证据）、`server.err.log`、`serial_capture.err.log`、`serial_capture.ps1`、`server.log`
+- ✅ PC 语音服务已停止（PID 58816/117568）；PlatformIO MCP Dashboard（PID 124036）未终止；无残留捕获进程；麦克风已释放
+- ✅ 仓库内无 WAV（递归 `*.wav` 为空）；`git status --porcelain` 为空
+- ✅ 未读取/输出 `sdkconfig` 与 Wi-Fi 凭据；未修改业务代码/依赖/防火墙/固件（本轮 0 代码改动）；未进入 LLM/TTS；未 push、未合并
+
+### 结论（Step 3G）
+
+- ❌ **第 1 轮端到端在 STOP 阶段被设备 Brownout 硬件复位中断**：START 双端成功、语音完成，
+  但 STOP 前设备 `E BOD` 复位导致 STOP 未送达 PC，用户 STOP 按键复位后被误发为 START（409）。
+  **「PLAY→录音→STOP→Whisper」完整链路未能在本轮实机确认。**
+- ✅ 栈溢出**未复现**；Step 3F 的 `ESP_ERR_HTTP_EAGAIN` 传输层失败本轮**未发生**。
+- ⚠️ 新失败项为**设备硬件 Brownout 欠压复位**（供电跌落，与业务软件无关，未修复、留档供后续排查）。
 ## 架构设计状态
 
 | 设计项 | 状态 |
@@ -760,7 +836,7 @@ ESP32 固件**（`main/voice_button.c/h` 无改动）。
 |------|------|
 | PC 音频采集验证 (Step 1) | 🟡 代码 + 自动测试完成；真实录音格式 PASS；有效语音采集（第 3 轮）**PASS**；ASR（Whisper）**未接入** |
 | 按键事件→PC 链路 (Step 2) | 🟢 **完成**：Step 2A「PC 端录音 HTTP 控制服务」✅ 自动测试 39/39；Step 2B「ESP32 按键事件→PC 控制」固件侧代码 ✅ 已实现并编译通过（`idf.py build`，0 warning）；**Step 2C 实机联调 ✅ 已烧录并实测通过**（两次 PLAY→start→recording→stop→idle 双端取证，含一次瞬时连接失败的如实记录，详见上方 Step 2C 段） |
-| ASR 接入 (Step 3) | 🟡 **Step 3A/3B/3C/3D 按实测完成；Step 3E 栈溢出修复经 Step 3F 实机复核通过；但 Step 3F 端到端重测发现 STOP 传输层新失败**：Step 3A 本地 Whisper ASR 模块（`service/asr_whisper.py`）代码+自动测试 18/18，真实语音识别已执行（第 2 轮 PASS，base/zh/cpu 纯推理 0.68s；第 1 轮转录为空已如实记录；stdlib wave 解码不依赖 FFmpeg 经实测）；Step 3B 录音停止后自动提交后台本地 ASR ✅ 自动测试 58/58（回归 209 通过）；**Step 3C 真实端到端验证 ✅ 已实测（2026-10-11）**：PLAY→PC 录音→自动 Whisper base/zh/cpu 识别 success，START 双端取证；转录文本非空、中段语义对应、**前段未识别如实记录**；**发现 stop 响应超 ESP32 512B 缓冲导致固件侧 STOP 契约失败**（详见 Step 3C 段），**Step 3D 已修复**（控制/查询接口解耦，见 Step 3D 段）；**Step 3E 实机验证发现 `btn_scan` 任务栈溢出 → 已修复**（`BTN_TASK_STACK_SIZE` 2048→4096，见 Step 3E 段）；**Step 3F 烧录含修复固件实机复核 ✅：栈溢出未复现，START 双端成功、ASR success；但第 2 次 PLAY（STOP）在 ESP32 端 `ESP_ERR_HTTP_EAGAIN` 5s 超时失败、本地停留 RECORDING（与 3C 截断不同的传输层失败，未修，见 Step 3F 段）**；不同口音/噪声鲁棒性待后续验证；Step 4 LLM NL→JSON 未开始 |
+| ASR 接入 (Step 3) | 🟡 **Step 3A/3B/3C/3D 按实测完成；Step 3E 栈溢出修复经 Step 3F 实机复核通过；但 Step 3F 端到端重测发现 STOP 传输层新失败**：Step 3A 本地 Whisper ASR 模块（`service/asr_whisper.py`）代码+自动测试 18/18，真实语音识别已执行（第 2 轮 PASS，base/zh/cpu 纯推理 0.68s；第 1 轮转录为空已如实记录；stdlib wave 解码不依赖 FFmpeg 经实测）；Step 3B 录音停止后自动提交后台本地 ASR ✅ 自动测试 58/58（回归 209 通过）；**Step 3C 真实端到端验证 ✅ 已实测（2026-10-11）**：PLAY→PC 录音→自动 Whisper base/zh/cpu 识别 success，START 双端取证；转录文本非空、中段语义对应、**前段未识别如实记录**；**发现 stop 响应超 ESP32 512B 缓冲导致固件侧 STOP 契约失败**（详见 Step 3C 段），**Step 3D 已修复**（控制/查询接口解耦，见 Step 3D 段）；**Step 3E 实机验证发现 `btn_scan` 任务栈溢出 → 已修复**（`BTN_TASK_STACK_SIZE` 2048→4096，见 Step 3E 段）；**Step 3F 烧录含修复固件实机复核 ✅：栈溢出未复现，START 双端成功、ASR success；但第 2 次 PLAY（STOP）在 ESP32 端 `ESP_ERR_HTTP_EAGAIN` 5s 超时失败、本地停留 RECORDING（与 3C 截断不同的传输层失败，未修，见 Step 3F 段）；**Step 3G 重测被设备 Brownout 硬件复位中断（2026-10-11：START 双端成功、语音完成；STOP 阶段设备 `E BOD` 复位，STOP 未送达 PC，用户 STOP 按键复位后被误发 START（409）；经授权停录+ASR success+WAV 删除；栈溢出未复现、`ESP_ERR_HTTP_EAGAIN` 未再发生，详见 Step 3G 段）**；不同口音/噪声鲁棒性待后续验证；Step 4 LLM NL→JSON 未开始 |
 | 语言模型 NL→JSON (Step 4) | ⏳ 未开始 |
 | TTS 播报 (Step 5) | ⏳ 未开始 |
 | 全链路串联 (Step 6) | ⏳ 未开始 |
