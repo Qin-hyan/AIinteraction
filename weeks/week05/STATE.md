@@ -1,6 +1,6 @@
 # Week 05 State — 接通按键说话与语音播报
 
-**状态**: 🟢 **Step 1 完成（WAV 格式 PASS；真实麦克风有效语音第 3 轮 ✅ PASS）；Step 2A PC 端录音 HTTP 控制服务 ✅ 已实现并通过自动测试（39/39）；Step 2B ESP32 固件侧 PLAY→PC 控制代码 ✅ 已实现并 `idf.py build` 通过；Step 2C 实机联调 ✅ **已烧录并实测通过**（PLAY→start→recording→stop→idle 双端取证，含一次瞬时连接失败的如实记录）；Whisper ASR 未接入**
+**状态**: 🟢 **Step 1 完成（WAV 格式 PASS；真实麦克风有效语音第 3 轮 ✅ PASS）；Step 2A PC 端录音 HTTP 控制服务 ✅ 已实现并通过自动测试（39/39）；Step 2B ESP32 固件侧 PLAY→PC 控制代码 ✅ 已实现并 `idf.py build` 通过；Step 2C 实机联调 ✅ 已烧录并实测通过（PLAY→start→recording→stop→idle 双端取证，含一次瞬时连接失败的如实记录）；Step 3A 本地 Whisper ASR 模块（`service/asr_whisper.py`）✅ 已实现并通过自动测试（18/18，回归 190 通过）；真实语音识别 ⏳ 未执行（本机 FFmpeg 缺失——按任务约束停止真实推理并报告安装需求）**
 **分支**: `feature/week05-voice-interaction`（本地分支，无远端 upstream）
 **基线**: `7dd788b` — Merge pull request #4 (origin/main)
 
@@ -382,6 +382,59 @@ idf.py build
 - 首次瞬时 `ESP_ERR_HTTP_CONNECT` 的根因（可能为 AP/无线瞬时状态；重测即通过，未复现，不无限重试）
 - 文字入口回归测试（未被本次改动涉及）
 
+## Step 3A 状态 — 本地 Whisper ASR 模块（2026-10-11）
+
+**新增文件**（仅此三项加本 STATE.md，未改 `main/` 固件、未改 PC 服务、未改 Week 04 管道）:
+
+| 文件 | 作用 |
+|------|------|
+| `service/asr_whisper.py` | 本地 Whisper 语音识别：`asr_whisper.transcribe_wav(path)` / `Transcriber`；默认 `base` 多语言模型、语言固定 `zh`、任务 `transcribe`（转录非翻译）；本地推理无 API Key、不调用云端语音服务；可注入模型/模型加载器；明确异常类型（`AsrInputError` / `AsrDependencyError` / `AsrModelError` / `AsrInferenceError`）；标准 PCM WAV 用标准库 `wave` 解码 → float32 16kHz 数组交给 whisper（不依赖 ffmpeg），非 16k 输入 numpy 线性重采样、立体声按均值下混 |
+| `service/test_asr_whisper.py` | 18 项自动测试，全部使用假模型（`FakeModel`），不下载权重、不碰麦克风、不调网络服务 |
+| `requirements-asr.txt` | 版本固定：`openai-whisper==20250625`、`torch==2.6.0+cpu`（+ CPU wheel 索引）；见下方依赖表 |
+
+### 依赖安装（隔离虚拟环境 `D:\AIinteraction-venvs\week05-audio`，Python 3.11.7）
+
+| 包 | 版本 | 说明 |
+|----|------|------|
+| openai-whisper | 20250625 | PyPI 最新稳定（requires_python>=3.8，含 3.11） |
+| torch | 2.6.0+cpu | 官方 CPU wheel 索引；避免 PyPI 默认 torch 捆绑大型 CUDA 运行时 |
+| numpy | 1.26.4 | 与 numba/torch 组合验证 |
+| numba / llvmlite | 0.68.0 / 0.50.0 | whisper 依赖 |
+| tiktoken / more-itertools / tqdm | 0.14.0 / 11.1.0 / 4.70.1 | whisper 依赖 |
+| pytest | 9.1.1 | 已有 |
+
+安装说明：本机 pip 走清华镜像（`pypi.tuna.tsinghua.edu.cn`）+ 本地代理（127.0.0.1:7897），PyPI 直连偶发超时；按 **numpy → torch(CUDA 无关 CPU 构建) → openai-whisper** 分阶段安装成功。未修改系统 PATH / 全局环境。
+
+### 自动测试结果（假模型，无权重 / 无麦克风 / 无网络语音服务）
+
+| 验证项 | 结果 | 证据 |
+|--------|------|------|
+| 新模块测试 | ✅ PASS 18/18 | 隔离 venv `pytest service -q`（test_asr_whisper.py 单文件 3.49s） |
+| 全量回归 | ✅ PASS 190 + 6 subtests | 含 Week 04 / Step 1（audio_capture）/ Step 2A（voice_control_server）等既有测试，未改动既有模块 |
+| 覆盖场景 | ✅ 18 项 | 正常识别（文本+元数据+语言/任务/fp16 传参）、文件不存在、无效 WAV、空 WAV、不支持的采样宽度、超过支持声道数、立体声下混、48k→16k 重采样、空识别结果、模型加载失败、模型加载器参数透传、已注入模型跳过加载器、推理异常包装、numpy/whisper 依赖缺失、构造参数校验、默认值（base/zh/transcribe） |
+
+### 环境检查与真实语音识别（如实记录，不伪报通过）
+
+| 项 | 结果 | 证据 |
+|----|------|------|
+| FFmpeg | ❌ **未安装** | `ffmpeg -version` / `where.exe ffmpeg` 均无结果；ESP-IDF 工具目录递归扫描无 `ffmpeg.exe` |
+| GPU / CUDA | 驱动可用，PyTorch 侧未启用 CUDA | `nvidia-smi`：驱动 595.97 / CUDA 13.2；为控制依赖体积安装 CPU 构建 torch，`torch.cuda.is_available()=False`、`device_count=0`（不盲目安装大型 CUDA 依赖） |
+| PyTorch / whisper 导入 | ✅ | `torch 2.6.0+cpu`、`whisper 20250625`、`numpy 1.26.4` 均可导入 |
+| 真实语音识别 | ⏳ **未执行（阻塞）** | 任务约束：FFmpeg 缺失时「先停止真实推理并报告安装需求」。未录音、未下载 base 权重（~140MB）、未运行真实推理、**未伪报通过**。说明：本模块对标准 PCM WAV（audio_capture.py 产物）用标准库 wave 解码，技术上可不依赖 ffmpeg；下一步待用户确认后执行录音 + 真实推理 |
+
+### 清理与合规
+
+- ✅ 仓库内**无任何 WAV**（`git status` + 递归检查）；未创建本次临时 WAV / 录音脚本
+- ✅ 临时构建文件（`.asr_build_*.txt`）已删除
+- ✅ 未修改：系统 PATH / 全局环境 / 防火墙 / ESP32 固件 / PC Flask 服务 / Week 04 模块
+- ✅ 未读取或输出 `sdkconfig`；未验证未接入的项目均如实标记
+
+### 未验证（不得宣称已完成）
+
+- 真实语音识别（真人说话 → WAV → 中文文本）——FFmpeg 缺失按任务约束停止；待安装 FFmpeg 或用户确认 stdlib 解码路径后执行
+- `base` 模型首次权重下载与真实推理耗时
+- Step 4 LLM NL→JSON / Step 5 TTS / Step 6 全链路（未开始）
+
 ## 架构设计状态
 
 | 设计项 | 状态 |
@@ -403,7 +456,7 @@ idf.py build
 |------|------|
 | PC 音频采集验证 (Step 1) | 🟡 代码 + 自动测试完成；真实录音格式 PASS；有效语音采集（第 3 轮）**PASS**；ASR（Whisper）**未接入** |
 | 按键事件→PC 链路 (Step 2) | 🟡 **拆分**：Step 2A「PC 端录音 HTTP 控制服务」✅ 已实现并通过自动测试（39/39）；Step 2B「ESP32 按键事件 → PC + 局域网连通性」🟡 **固件侧代码已实现并编译通过**（`idf.py build`，0 warning）；**未烧录、未做真实网络联调**，局域网/防火墙连通性仍未验证 |
-| ASR 接入 (Step 3) | ⏳ 未开始 |
+| ASR 接入 (Step 3) | 🟡 **Step 3A 拆分完成**：本地 Whisper ASR 模块（`service/asr_whisper.py`）✅ 已实现并通过自动测试（18/18，回归 190 通过）；**真实语音识别 ⏳ 未执行**（本机 FFmpeg 缺失，按任务约束停止并报告安装需求；待安装 FFmpeg 或用户确认 stdlib 解码路径） |
 | 语言模型 NL→JSON (Step 4) | ⏳ 未开始 |
 | TTS 播报 (Step 5) | ⏳ 未开始 |
 | 全链路串联 (Step 6) | ⏳ 未开始 |
