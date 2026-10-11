@@ -1,12 +1,15 @@
 """
-test_voice_control_server.py — Week 05 Step 2A 语音录音 HTTP 控制服务自动测试
+test_voice_control_server.py — Week 05 Step 3B 语音录音 HTTP 控制 + 后台 ASR 自动测试
 
 测试策略：
   - 使用 Flask test client（``app.test_client()``）：不启动真实 HTTP 服务、不占端口、
     不改动任何网络/防火墙设置
   - 使用假采集器 FakeAudioCapture 替换真实麦克风：不打开任何录音设备、不写任何 WAV
-  - 覆盖：start/stop/status、重复启动、未录音就停止、设备错误、录音模块抛错（含未预期
-    异常）、JSON 响应与错误码、请求体校验、404/405 JSON 映射、输出目录保护、CLI 默认值
+  - ASR 部分使用假 whisper 模型（经真实 asr_whisper.Transcriber 注入）与脚本转录器：
+    不下载模型权重、不调用外部语音服务、不打开真实麦克风
+  - 覆盖：start/stop/status、自动 ASR 提交、后台状态转换（pending/running/success/failed）、
+    识别成功/失败、重复请求与提交取代、轮询不重复推理、JSON 响应与错误码、请求体校验、
+    404/405 JSON 映射、输出目录保护、CLI 默认值
 
 运行（使用仓库外隔离虚拟环境，不向系统全局 Python 装包）::
 
@@ -15,13 +18,16 @@ test_voice_control_server.py — Week 05 Step 2A 语音录音 HTTP 控制服务�
 
 import contextlib
 import io
+import threading
+import time
 import unittest
+import wave
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Optional
 from unittest.mock import patch
 
-from . import audio_capture, voice_control_server
+from . import asr_whisper, audio_capture, voice_control_server
 from .audio_capture import (
     AudioCaptureError,
     AudioDeviceError,
@@ -54,6 +60,97 @@ def make_info(
         size_bytes=size_bytes,
         status_flags=tuple(flags),
     )
+
+
+# ──────────────────────────────────────────────
+# 假 whisper 模型 / 脚本转录器 / 轮询 helper（Week 05 Step 3B）
+# 全部不接触真实 whisper 权重、真实麦克风与外部服务。
+# ──────────────────────────────────────────────
+
+ASR_TEST_POLL_INTERVAL = 0.01
+ASR_TEST_POLL_TIMEOUT = 8.0
+ASR_TEST_GATE_TIMEOUT = 3.0
+
+
+def _poll_until(predicate, timeout=ASR_TEST_POLL_TIMEOUT):
+    """轮询直到 predicate() 返回真值（阻塞至多 timeout 秒）。"""
+    deadline = time.monotonic() + timeout
+    while True:
+        value = predicate()
+        if value or time.monotonic() >= deadline:
+            return value
+        time.sleep(ASR_TEST_POLL_INTERVAL)
+
+
+def _write_silent_wav(path, frames=8000, samplerate=16000) -> Path:
+    """标准库 wave 写极短静音 PCM16/mono WAV（无 numpy/FFmpeg 依赖）。"""
+    path = Path(path)
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(audio_capture.SAMPLE_WIDTH_BYTES["int16"])
+        wf.setframerate(samplerate)
+        wf.writeframes(b"\x00\x00" * frames)
+    return path
+
+
+class FakeWhisperModel:
+    """假 whisper 模型：记录调用、返回配置文本/异常，gate 可阻塞推理时机。
+
+    经 ``asr_whisper.Transcriber(model=fake, ...)`` 注入真实 Transcriber，
+    走真实 transcribe_wav → wave 解码 → model.transcribe 链路，但行为可控。
+    """
+
+    def __init__(self, text="查看最近的加速度数据", error=None, gate=None) -> None:
+        self.text = text
+        self.error = error
+        self.gate = gate
+        self.device = "cpu"
+        self.transcribe_calls = 0
+
+    def transcribe(self, audio, **kwargs):
+        self.transcribe_calls += 1
+        if self.gate is not None:
+            self.gate.wait(ASR_TEST_GATE_TIMEOUT)
+        if self.error is not None:
+            raise self.error
+        return {"text": self.text}
+
+    def release(self) -> None:
+        if self.gate is not None:
+            self.gate.set()
+
+
+class _ScriptedTranscriber:
+    """脚本转录器：按调用序返回 AsrResult 或抛异常（不经文件解码）。"""
+
+    def __init__(self, script) -> None:
+        self.script = list(script)
+        self.calls = 0
+        self.model_name = "base"
+        self.language = "zh"
+        self.task = "transcribe"
+        self.device = "cpu"
+
+    def transcribe_wav(self, path, language=None, task=None):
+        self.calls += 1
+        item = self.script.pop(0) if self.script else None
+        if isinstance(item, Exception):
+            raise item
+        if item is None:
+            return asr_whisper.AsrResult("", "zh", "transcribe", "base", "cpu", 0.0001)
+        return item
+
+
+class _GatedScriptedTranscriber(_ScriptedTranscriber):
+    """可被 gate 阻塞的脚本转录器（复现「任务被新提交取代」的时序）。"""
+
+    def __init__(self, script, gate) -> None:
+        super().__init__(script)
+        self.gate = gate
+
+    def transcribe_wav(self, path, language=None, task=None):
+        self.gate.wait(ASR_TEST_GATE_TIMEOUT)
+        return super().transcribe_wav(path, language=language)
 
 
 class FakeAudioCapture:
@@ -139,8 +236,12 @@ class VoiceServerTestBase(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.output_dir = Path(self._tmp.name)
         self.capture = FakeAudioCapture(self.output_dir)
-        self.app = voice_control_server.create_app(capture=self.capture)
+        self.app = self.create_server_app()
         self.client = self.app.test_client()
+
+    def create_server_app(self):
+        """子类可覆盖以注入额外依赖（Step 3B: 假 ASR 转录器）。"""
+        return voice_control_server.create_app(capture=self.capture)
 
     def post(self, path: str, payload: Optional[dict] = None, **kwargs):
         """POST 辅助：payload 为 None 时不带请求体（模拟 ESP32 极简请求）。"""
@@ -542,6 +643,410 @@ class VoiceConfigAndCliTest(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 voice_control_server.main([])
         run_mock.assert_called_once()
+
+
+# ──────────────────────────────────────────────
+# Week 05 Step 3B — 后台 ASR 集成测试
+# ──────────────────────────────────────────────
+
+
+class VoiceAsrServerTestBase(VoiceServerTestBase):
+    """服务级 ASR 测试基类：注入假模型包装的真实 Transcriber。"""
+
+    default_asr_text = "查看最近的加速度数据"
+
+    def make_model(self, text=None, error=None, gate=None) -> FakeWhisperModel:
+        return FakeWhisperModel(
+            text=text or self.default_asr_text, error=error, gate=gate
+        )
+
+    def build_transcriber(self, model) -> asr_whisper.Transcriber:
+        return asr_whisper.Transcriber(
+            model=model,
+            model_name=asr_whisper.DEFAULT_MODEL,
+            device="cpu",
+            language=asr_whisper.DEFAULT_LANGUAGE,
+            task=asr_whisper.DEFAULT_TASK,
+        )
+
+    def create_server_app(self):
+        self._asr_model = self.make_model()
+        return voice_control_server.create_app(
+            capture=self.capture, asr=self.build_transcriber(self._asr_model)
+        )
+
+    @property
+    def model(self) -> FakeWhisperModel:
+        return self._asr_model
+
+    def make_wav(self, name="rec.wav", frames=8000) -> Path:
+        return _write_silent_wav(self.output_dir / name, frames=frames)
+
+    def record_and_stop(self, wav_name="rec.wav", frames=8000):
+        """start → 模拟采集 → stop，返回 (wav_path, stop_payload)。"""
+        wav = self.make_wav(wav_name, frames=frames)
+        self.assert_json(self.post("/api/voice/start"), 200)
+        self.capture.simulate_frames(frames)
+        self.capture.stop_result = make_info(
+            wav, frames=frames, size_bytes=frames * 2 + 44
+        )
+        stop_data = self.assert_json(self.post("/api/voice/stop"), 200)
+        return wav, stop_data
+
+    def status(self) -> dict:
+        return self.assert_json(self.client.get("/api/voice/status"), 200)
+
+    def poll_asr(self, predicate=None, timeout=ASR_TEST_POLL_TIMEOUT):
+        """轮询 GET /status 的 asr 快照直到命中；返回快照 dict（超时返回 None）。"""
+        if predicate is None:
+            predicate = lambda a: True  # noqa: E731
+
+        last = [None]
+
+        def _probe():
+            last[0] = self.status()["asr"]
+            return last[0] if predicate(last[0]) else None
+
+        return _poll_until(_probe, timeout=timeout)
+
+
+class VoiceAsrAutoSubmitTest(VoiceAsrServerTestBase):
+    """自动提交 + 后台状态转换 + 成功路径。"""
+
+    def test_stop_auto_submits_and_status_reports_success(self):
+        wav, stop_data = self.record_and_stop("auto.wav")
+        self.assertTrue(stop_data["ok"])
+        self.assertEqual(stop_data["state"], "idle")
+        self.assertEqual(stop_data["recording"], False)
+        # stop 响应自带 asr 快照：任务已提交（接口不等待推理）
+        self.assertIn(stop_data["asr"]["status"], {"pending", "running", "success"})
+        self.assertEqual(Path(stop_data["asr"]["wav_path"]), wav)
+        self.assertLessEqual(self.model.transcribe_calls, 1)
+
+        asr = self.poll_asr(lambda a: a["status"] == "success")
+        self.assertIsNotNone(asr)
+        self.assertEqual(asr["text"], self.default_asr_text)
+        self.assertEqual(asr["model"], "base")
+        self.assertEqual(asr["language"], "zh")
+        self.assertEqual(asr["task"], "transcribe")
+        self.assertEqual(asr["device"], "cpu")
+        self.assertEqual(Path(asr["wav_path"]), wav)
+        self.assertIsNotNone(asr["duration_seconds"])
+        self.assertIsNone(asr["error"])
+        self.assertEqual(self.model.transcribe_calls, 1)
+        # 录音停止事实保持
+        data = self.status()
+        self.assertEqual(data["state"], "idle")
+        self.assertIsNotNone(data["last_recording"])
+
+    def test_stop_returns_immediately_while_model_is_blocked(self):
+        gate = threading.Event()
+        model = self.make_model(gate=gate)
+        app = voice_control_server.create_app(
+            capture=self.capture, asr=self.build_transcriber(model)
+        )
+        self.client = app.test_client()
+        wav = self.make_wav("blocked.wav")
+        self.assert_json(self.post("/api/voice/start"), 200)
+        self.capture.simulate_frames(8000)
+        self.capture.stop_result = make_info(wav, frames=8000)
+
+        started = time.monotonic()
+        stop_data = self.assert_json(self.post("/api/voice/stop"), 200)
+        elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 2.0, "POST /api/voice/stop 不得阻塞在模型加载/推理上")
+        self.assertIn(stop_data["asr"]["status"], {"pending", "running"})
+
+        # 模型阻塞在 gate 上：任务处于 running（后台线程持有），HTTP 已返回
+        running = self.poll_asr(lambda a: a["status"] == "running")
+        self.assertIsNotNone(running)
+        model.release()
+        final = self.poll_asr(lambda a: a["status"] == "success")
+        self.assertIsNotNone(final)
+        self.assertEqual(final["text"], self.default_asr_text)
+        self.assertEqual(model.transcribe_calls, 1)
+
+    def test_repeated_status_poll_does_not_trigger_reinference(self):
+        self.record_and_stop("poll.wav")
+        asr = self.poll_asr(lambda a: a["status"] == "success")
+        self.assertIsNotNone(asr)
+        for _ in range(5):
+            data = self.status()
+            self.assertEqual(data["asr"]["status"], "success")
+            self.assertEqual(data["asr"]["text"], asr["text"])
+        self.assertEqual(self.model.transcribe_calls, 1)
+
+
+class VoiceAsrFailureTest(VoiceAsrServerTestBase):
+    """识别失败时录音停止事实不受影响、如实报告 ASR 失败。"""
+
+    def test_inference_failure_keeps_recording_stopped(self):
+        model = self.make_model(error=RuntimeError("模拟推理异常"))
+        app = voice_control_server.create_app(
+            capture=self.capture, asr=self.build_transcriber(model)
+        )
+        self.client = app.test_client()
+
+        wav, stop_data = self.record_and_stop("fail.wav")
+        self.assertTrue(stop_data["ok"])
+        self.assertEqual(stop_data["state"], "idle")
+        self.assertEqual(Path(stop_data["asr"]["wav_path"]), wav)
+
+        asr = self.poll_asr(lambda a: a["status"] == "failed")
+        self.assertIsNotNone(asr)
+        self.assertIsNone(asr["text"])
+        self.assertIn("AsrInferenceError", asr["error"])
+        self.assertIn("模拟推理异常", asr["error"])
+        self.assertEqual(model.transcribe_calls, 1)
+        # 录音停止成功不受 ASR 失败影响
+        data = self.status()
+        self.assertEqual(data["state"], "idle")
+        self.assertFalse(data["recording"])
+        self.assertIsNotNone(data["last_recording"])
+
+    def test_model_load_failure_is_reported_as_failed(self):
+        def failing_loader(name, device):
+            raise asr_whisper.AsrModelError(f"模拟模型加载失败 {name}@{device}")
+
+        transcriber = asr_whisper.Transcriber(
+            model=None, model_name="base", device="cpu", model_loader=failing_loader
+        )
+        app = voice_control_server.create_app(capture=self.capture, asr=transcriber)
+        self.client = app.test_client()
+        self.record_and_stop("loadfail.wav")
+
+        asr = self.poll_asr(lambda a: a["status"] == "failed")
+        self.assertIsNotNone(asr)
+        self.assertIn("AsrModelError", asr["error"])
+        self.assertIn("模拟模型加载失败", asr["error"])
+        self.assertIsNone(asr["text"])
+        data = self.status()
+        self.assertEqual(data["state"], "idle")
+        self.assertIsNotNone(data["last_recording"])
+
+    def test_missing_wav_is_reported_as_failed_before_model_load(self):
+        # 真实默认 Transcriber：文件不存在在模型加载之前抛 AsrInputError，
+        # 证明缺失文件不会触发模型权重加载/下载（测试不下载任何权重）。
+        transcriber = asr_whisper.Transcriber()
+        app = voice_control_server.create_app(capture=self.capture, asr=transcriber)
+        self.client = app.test_client()
+        self.post("/api/voice/start")
+        self.capture.simulate_frames(8000)
+        self.capture.stop_result = make_info(
+            self.output_dir / "no_such.wav", frames=8000, size_bytes=16044
+        )
+        stop_data = self.assert_json(self.post("/api/voice/stop"), 200)
+        self.assertTrue(stop_data["ok"])
+
+        asr = self.poll_asr(lambda a: a["status"] == "failed")
+        self.assertIsNotNone(asr)
+        self.assertIn("AsrInputError", asr["error"])
+        self.assertIn("不存在", asr["error"])
+        self.assertIsNone(asr["text"])
+        self.assertEqual(self.status()["state"], "idle")
+
+
+class VoiceAsrDuplicateAndOrderTest(VoiceAsrServerTestBase):
+    """重复请求、空录音不提交、新提交取代在途任务。"""
+
+    def test_stop_without_recording_does_not_submit_asr(self):
+        data = self.assert_json(self.post("/api/voice/stop"), 409)
+        self.assertEqual(data["error"], "not_recording")
+        self.assertEqual(self.model.transcribe_calls, 0)
+        self.assertEqual(self.status()["asr"]["status"], "idle")
+
+    def test_empty_recording_does_not_submit_asr(self):
+        self.post("/api/voice/start")
+        self.capture.stop_error = EmptyRecordingError("录音为空（模拟）")
+        data = self.assert_json(self.post("/api/voice/stop"), 422)
+        self.assertEqual(data["error"], "empty_recording")
+        self.assertEqual(self.model.transcribe_calls, 0)
+        self.assertEqual(self.status()["asr"]["status"], "idle")
+
+    def test_second_stop_after_success_does_not_resubmit(self):
+        self.record_and_stop("dup.wav")
+        self.poll_asr(lambda a: a["status"] == "success")
+        data = self.assert_json(self.post("/api/voice/stop"), 409)
+        self.assertEqual(data["error"], "not_recording")
+        self.assertEqual(self.model.transcribe_calls, 1)
+
+    def test_new_stop_supersedes_previous_asr_task(self):
+        gate = threading.Event()
+        model = self.make_model(text="第二次录音的识别文本", gate=gate)
+        app = voice_control_server.create_app(
+            capture=self.capture, asr=self.build_transcriber(model)
+        )
+        self.client = app.test_client()
+
+        wav1, _ = self.record_and_stop("first.wav")
+        running = self.poll_asr(lambda a: a["status"] == "running")
+        self.assertIsNotNone(running, "第一次任务应阻塞在推理中")
+
+        wav2, stop2 = self.record_and_stop("second.wav")
+        # 新任务取代旧任务：状态回到 pending，wav_path 指向第二次录音
+        self.assertEqual(stop2["asr"]["status"], "pending")
+        self.assertEqual(Path(stop2["asr"]["wav_path"]), wav2)
+
+        gate.set()
+        final = self.poll_asr(lambda a: a["status"] == "success")
+        self.assertIsNotNone(final)
+        self.assertEqual(Path(final["wav_path"]), wav2)
+        self.assertEqual(final["text"], "第二次录音的识别文本")
+        self.assertEqual(model.transcribe_calls, 2)
+
+
+class VoiceAsrCompatibilityTest(VoiceAsrServerTestBase):
+    """ASR 字段与既有录音状态兼容性。"""
+
+    def test_idle_status_has_complete_asr_block(self):
+        data = self.status()
+        asr = data["asr"]
+        self.assertEqual(asr["status"], "idle")
+        for key in (
+            "text",
+            "wav_path",
+            "model",
+            "language",
+            "task",
+            "device",
+            "duration_seconds",
+            "error",
+        ):
+            self.assertIsNone(asr[key])
+        # 既有录音字段仍在
+        self.assertEqual(data["state"], "idle")
+        self.assertIsNotNone(data["config"])
+        self.assertIsNone(data["last_recording"])
+
+    def test_default_app_uses_base_zh_transcribe(self):
+        app = voice_control_server.create_app()
+        service = app.extensions["voice_control"]
+        tr = service.asr_runner.transcriber
+        self.assertEqual(tr.model_name, asr_whisper.DEFAULT_MODEL)
+        self.assertEqual(tr.language, asr_whisper.DEFAULT_LANGUAGE)
+        self.assertEqual(tr.task, asr_whisper.DEFAULT_TASK)
+
+    def test_asr_and_runner_are_mutually_exclusive(self):
+        runner = voice_control_server.AsrTaskRunner(transcriber=None)
+        with TemporaryDirectory() as tmp:
+            capture = FakeAudioCapture(tmp)
+            with self.assertRaises(voice_control_server.VoiceControlConfigError):
+                voice_control_server.VoiceControlService(
+                    capture=capture, asr=object(), asr_task_runner=runner
+                )
+
+
+class AsrTaskRunnerUnitTest(unittest.TestCase):
+    """AsrTaskRunner 纯单元测试：脚本转录器直接驱动，不经 HTTP。"""
+
+    def test_idle_snapshot_has_complete_shape(self):
+        runner = voice_control_server.AsrTaskRunner(transcriber=None)
+        snap = runner.snapshot()
+        self.assertEqual(snap["status"], "idle")
+        self.assertIsNone(snap["text"])
+        for key in (
+            "wav_path",
+            "model",
+            "language",
+            "task",
+            "device",
+            "duration_seconds",
+            "error",
+        ):
+            self.assertIsNone(snap[key])
+
+    def test_success_publishes_text_and_meta(self):
+        tr = _ScriptedTranscriber(
+            [asr_whisper.AsrResult("你好世界", "zh", "transcribe", "base", "cpu", 0.25)]
+        )
+        runner = voice_control_server.AsrTaskRunner(transcriber=tr)
+        runner.submit("dummy.wav")
+        final = _poll_until(
+            lambda: runner.snapshot()
+            if runner.snapshot()["status"] == "success"
+            else None
+        )
+        self.assertIsNotNone(final)
+        self.assertEqual(final["text"], "你好世界")
+        self.assertEqual(final["wav_path"], "dummy.wav")
+        self.assertEqual(final["model"], "base")
+        self.assertEqual(final["device"], "cpu")
+        self.assertEqual(final["duration_seconds"], 0.25)
+        self.assertIsNone(final["error"])
+        self.assertEqual(tr.calls, 1)
+
+    def test_failure_publishes_error_without_text(self):
+        tr = _ScriptedTranscriber([asr_whisper.AsrInferenceError("模拟推理异常")])
+        runner = voice_control_server.AsrTaskRunner(transcriber=tr)
+        runner.submit("bad.wav")
+        final = _poll_until(
+            lambda: runner.snapshot()
+            if runner.snapshot()["status"] == "failed"
+            else None
+        )
+        self.assertIsNotNone(final)
+        self.assertIsNone(final["text"])
+        self.assertIn("AsrInferenceError", final["error"])
+        self.assertEqual(tr.calls, 1)
+
+    def test_dependency_error_is_reported_as_failed(self):
+        tr = _ScriptedTranscriber([asr_whisper.AsrDependencyError("缺少 whisper 依赖")])
+        runner = voice_control_server.AsrTaskRunner(transcriber=tr)
+        runner.submit("dep.wav")
+        final = _poll_until(
+            lambda: runner.snapshot()
+            if runner.snapshot()["status"] == "failed"
+            else None
+        )
+        self.assertIsNotNone(final)
+        self.assertIn("AsrDependencyError", final["error"])
+
+    def test_latest_submit_wins_and_stale_result_is_discarded(self):
+        gate = threading.Event()
+        tr = _GatedScriptedTranscriber(
+            [
+                asr_whisper.AsrResult("旧任务文本", "zh", "transcribe", "base", "cpu", 0.1),
+                asr_whisper.AsrInferenceError("新任务失败"),
+            ],
+            gate,
+        )
+        runner = voice_control_server.AsrTaskRunner(transcriber=tr)
+        runner.submit("old.wav")
+        running = _poll_until(
+            lambda: runner.snapshot()
+            if runner.snapshot()["status"] == "running"
+            else None
+        )
+        self.assertIsNotNone(running, "旧任务应先进入 running 并被 gate 阻塞")
+
+        runner.submit("new.wav")
+        self.assertEqual(runner.snapshot()["status"], "pending")
+        self.assertEqual(runner.snapshot()["wav_path"], "new.wav")
+        gate.set()
+
+        def _observe():
+            snap = runner.snapshot()
+            self.assertNotEqual(
+                (snap["status"], snap["text"]),
+                ("success", "旧任务文本"),
+                "过期任务的成功结果不得被发布",
+            )
+            return snap if snap["status"] == "failed" else None
+
+        final = _poll_until(_observe)
+        self.assertIsNotNone(final)
+        self.assertEqual(final["wav_path"], "new.wav")
+        self.assertIn("新任务失败", final["error"])
+        self.assertIsNone(final["text"])
+        self.assertEqual(tr.calls, 2)
+
+    def test_fail_submit_sets_failed_without_touching_recording(self):
+        runner = voice_control_server.AsrTaskRunner(transcriber=None)
+        runner.fail_submit("提交路径异常")
+        snap = runner.snapshot()
+        self.assertEqual(snap["status"], "failed")
+        self.assertIsNone(snap["text"])
+        self.assertIn("提交路径异常", snap["error"])
 
 
 if __name__ == "__main__":

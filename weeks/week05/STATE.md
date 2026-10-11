@@ -1,6 +1,6 @@
 # Week 05 State — 接通按键说话与语音播报
 
-**状态**: 🟢 **Step 1 完成（WAV 格式 PASS；真实麦克风有效语音第 3 轮 ✅ PASS）；Step 2A PC 端录音 HTTP 控制服务 ✅ 已实现并通过自动测试（39/39）；Step 2B ESP32 固件侧 PLAY→PC 控制代码 ✅ 已实现并 `idf.py build` 通过；Step 2C 实机联调 ✅ 已烧录并实测通过（PLAY→start→recording→stop→idle 双端取证，含一次瞬时连接失败的如实记录）；Step 3A 本地 Whisper ASR 模块（`service/asr_whisper.py`）✅ 已实现并通过自动测试（18/18，回归 190 通过）；真实语音识别 ✅ 已执行（stdlib `wave` 解码路径经实测不依赖 FFmpeg；第 2 轮 PASS——base/zh/cpu 纯推理 0.68s，转录非空且语义对应；第 1 轮窗口内无有效语音、转录为空，已如实记录）**
+**状态**: 🟢 **Step 1 完成（WAV 格式 PASS；真实麦克风有效语音第 3 轮 ✅ PASS）；Step 2A PC 端录音 HTTP 控制服务 ✅ 已实现并通过自动测试（39/39）；Step 2B ESP32 固件侧 PLAY→PC 控制代码 ✅ 已实现并 `idf.py build` 通过；Step 2C 实机联调 ✅ 已烧录并实测通过（PLAY→start→recording→stop→idle 双端取证，含一次瞬时连接失败的如实记录）；Step 3A 本地 Whisper ASR 模块（`service/asr_whisper.py`）✅ 已实现并通过自动测试（18/18，回归 190 通过）；真实语音识别 ✅ 已执行（stdlib `wave` 解码路径经实测不依赖 FFmpeg；第 2 轮 PASS——base/zh/cpu 纯推理 0.68s，转录非空且语义对应；第 1 轮窗口内无有效语音、转录为空，已如实记录）；Step 3B 录音停止后自动提交后台本地 ASR ✅ 已实现并通过自动测试（`service/test_voice_control_server.py` 58/58，新增 19 项 ASR 相关；`pytest service/` 回归 209 passed + 6 subtests）；本阶段未做真实硬件联调（真实 PLAY→录音→Whisper 留给下一阶段）**
 **分支**: `feature/week05-voice-interaction`（本地分支，无远端 upstream）
 **基线**: `7dd788b` — Merge pull request #4 (origin/main)
 
@@ -456,6 +456,30 @@ idf.py build
 - 末段「语音识别」类常见词的误识率（base 小模型局限，不宣称 100% 字准）
 - Step 4 LLM NL→JSON / Step 5 TTS / Step 6 全链路（未开始）
 
+## Step 3B 状态 — 录音停止后自动提交后台本地 ASR（2026-10-11）
+
+**实现范围**（仅修改 `service/voice_control_server.py`、`service/test_voice_control_server.py`；未改 `asr_whisper.py`、依赖清单与 ESP32 固件）:
+
+| 项 | 说明 |
+|----|------|
+| 自动提交 | `POST /api/voice/stop` 成功保存 WAV 后自动向 `AsrTaskRunner.submit(path)` 入队一个本地 Whisper 识别任务；任务由后台工作线程 `voice-asr-worker` 执行 |
+| 快速返回 | `submit()` 只做登记 + 唤醒线程，立即返回；模型加载与推理全部在后台，**不阻塞 HTTP 响应**（避免 ESP32 默认约 5 秒 HTTP 超时） |
+| 模型复用 | 复用 `asr_whisper.Transcriber`（`base` / `zh` / `transcribe`，默认值一致）；模型实例在 Transcriber 内缓存，进程内重复识别不重复加载 |
+| 状态扩展 | `GET /api/voice/status` 与 `POST /api/voice/stop` 响应新增只读 `asr` 块：`status`（`idle|pending|running|success|failed`）、`text`、`wav_path`、`model`、`language`、`task`、`device`、`duration_seconds`、`error`；既有录音字段（`state/recording/frames_recorded/elapsed_seconds/target_path/last_recording/config`）全部保持兼容 |
+| 失败解耦 | ASR 失败（依赖缺失/模型加载失败/推理异常/输入异常）只把 `asr.status` 置为 `failed` 并给出 `error`；`stop` 仍返回 200、`state=idle`、`last_recording` 保留，**不把录音操作伪装成失败** |
+| 竞争与重复 | 单工作线程串行推理 + 单调递增 epoch；新提交取代在途任务，旧任务完成时因 epoch 不匹配被丢弃；重复轮询 `GET /status` 不触发重复推理；未录音 / 空录音不提交任务 |
+| 日志 | 不打印识别文本 / 语音内容日志 |
+
+**验证结果**（全部自动测试：注入假模型/脚本转录器 + 假采集器；不下载模型权重、不打开真实麦克风、不调用外部服务）:
+
+| 验证项 | 结果 | 证据 |
+|--------|------|------|
+| `service/test_voice_control_server.py` | ✅ PASS 58/58（原 39 + 新增 19） | 隔离虚拟环境 `D:\AIinteraction-venvs\week05-audio` |
+| 新增 ASR 用例（19 项） | ✅ PASS | 自动提交与成功元数据；gate 阻塞下 stop 仍快速返回；重复轮询不重复推理；推理/模型加载/输入异常失败路径；重复请求与提交取代；idle 快照/默认配置/参数互斥；AsrTaskRunner 单元测试（含 stale 结果丢弃） |
+| 回归 | ✅ PASS 209 passed + 6 subtests | `pytest service/ -q`，asr_whisper / audio_capture / Week 04 等未受影响 |
+
+**未做（如实记录）**：本阶段不做真实硬件联调；真实 PLAY→录音→Whisper 全流程验证与 ESP32 实测留给下一阶段。
+
 ## 架构设计状态
 
 | 设计项 | 状态 |
@@ -477,7 +501,7 @@ idf.py build
 |------|------|
 | PC 音频采集验证 (Step 1) | 🟡 代码 + 自动测试完成；真实录音格式 PASS；有效语音采集（第 3 轮）**PASS**；ASR（Whisper）**未接入** |
 | 按键事件→PC 链路 (Step 2) | 🟡 **拆分**：Step 2A「PC 端录音 HTTP 控制服务」✅ 已实现并通过自动测试（39/39）；Step 2B「ESP32 按键事件 → PC + 局域网连通性」🟡 **固件侧代码已实现并编译通过**（`idf.py build`，0 warning）；**未烧录、未做真实网络联调**，局域网/防火墙连通性仍未验证 |
-| ASR 接入 (Step 3) | 🟡 **Step 3A 完成**：本地 Whisper ASR 模块（`service/asr_whisper.py`）✅ 已实现并通过自动测试（18/18，回归 190 通过）；**真实语音识别 ✅ 已执行（2026-10-11 第 2 轮 PASS，base/zh/cpu 纯推理 0.68s；第 1 轮窗口内无有效语音转录为空已如实记录；stdlib wave 解码不依赖 FFmpeg 经实测验证）**；不同口音/噪声鲁棒性待后续验证；Step 4 未开始 |
+| ASR 接入 (Step 3) | 🟡 **Step 3A 完成**：本地 Whisper ASR 模块（`service/asr_whisper.py`）✅ 已实现并通过自动测试（18/18，回归 190 通过）；**真实语音识别 ✅ 已执行（2026-10-11 第 2 轮 PASS，base/zh/cpu 纯推理 0.68s；第 1 轮窗口内无有效语音转录为空已如实记录；stdlib wave 解码不依赖 FFmpeg 经实测验证）**；**Step 3B 完成**：录音停止后自动提交后台本地 ASR ✅ 已实现并通过自动测试（voice_control_server 58/58，回归 209 通过），**本阶段未做真实硬件联调**（真实 PLAY→录音→Whisper 留给下一阶段）；不同口音/噪声鲁棒性待后续验证；Step 4 未开始 |
 | 语言模型 NL→JSON (Step 4) | ⏳ 未开始 |
 | TTS 播报 (Step 5) | ⏳ 未开始 |
 | 全链路串联 (Step 6) | ⏳ 未开始 |

@@ -1,24 +1,31 @@
 """
-voice_control_server.py — Week 05 Step 2A: PC 端语音录音 HTTP 控制服务
+voice_control_server.py — Week 05 Step 3B: PC 端语音录音 HTTP 控制 + 后台本地 ASR
 
 职责
 ----
 1. 用 Flask 暴露三个 HTTP 接口，控制 service/audio_capture.py 的录音：
      POST /api/voice/start   → 开始录音（映射 AudioCapture.start_recording()）
-     POST /api/voice/stop    → 停止录音，返回 WAV 元数据（stop_recording()）
-     GET  /api/voice/status  → 当前录音状态
+     POST /api/voice/stop    → 停止录音，返回 WAV 元数据；**自动在后台提交
+                              本地 Whisper 识别任务并立即返回**（不等待推理）
+     GET  /api/voice/status  → 当前录音状态 + ASR 状态/识别文本
 2. 录音逻辑**完全复用** audio_capture.AudioCapture：本模块不碰 PCM、不写 WAV，
-   只做「状态编排 + 错误语义」。
-3. 明确错误语义：重复启动 / 未录音就停止 / 设备错误 / 内部异常
+   只做「状态编排 + 错误语义 + ASR 任务编排」。
+3. ASR 复用 service/asr_whisper.py 的 Transcriber/transcribe_wav 接口：
+   模型 `base` / 语言 `zh` / 任务 `transcribe`；模型实例在 Transcriber 内缓存，
+   模型加载与推理都发生在后台工作线程，**不阻塞 HTTP 响应**
+   （避免 ESP32 默认约 5 秒 HTTP 超时）。
+4. 明确错误语义：重复启动 / 未录音就停止 / 设备错误 / ASR 失败
    → 稳定的 HTTP 状态码 + JSON 错误对象（见下方接口约定）。
-4. 默认只监听 127.0.0.1（仅本机回环），避免未经验证就把录音控制暴露到局域网；
-   监听地址可用 create_app()/CLI 参数显式配置，为后续 ESP32 局域网接入（Step 2B）
-   预留接口。
+   录音停止成功与 ASR 失败**完全解耦**：ASR 失败只把 ASR 状态置为 failed，
+   绝不把录音操作伪装成失败。
+5. 默认只监听 127.0.0.1（仅本机回环），避免未经验证就把录音控制暴露到局域网；
+   监听地址可用 create_app()/CLI 参数显式配置，为后续 ESP32 局域网接入预留。
 
-范围约束（Step 2A）
+范围约束（Step 3B）
 -------------------
-- 不接入 ESP32 固件，不做 ESP32 ↔ PC 真实网络测试（属于后续任务）
-- 不调用 ASR / LLM / TTS
+- 不接入 ESP32 固件，不做 ESP32 ↔ PC 真实网络测试（真实 PLAY→录音→ASR
+  联调属于下一阶段）
+- 不调用 LLM / TTS
 - 不修改防火墙、不做任何端口暴露操作
 - 录音只写本机 audio_capture.DEFAULT_OUTPUT_DIR（%TEMP%/voice_task/）；
   显式覆盖输出目录时拒绝指向仓库内（见 ensure_output_outside_repo）
@@ -36,7 +43,9 @@ POST /api/voice/start   请求体可省略；若带 body 必须是 JSON 对象�
 POST /api/voice/stop
   200 {"ok":true,"state":"idle","recording":false,"message":...,
        "wav":{path,samplerate,channels,sample_width_bytes,frames,
-              duration_seconds,size_bytes,status_flags}}
+              duration_seconds,size_bytes,status_flags},
+       "asr":{...ASR 状态只读快照，字段见 GET /status...}}
+      —— 录音停止成功；ASR 任务已自动提交并在后台执行，本接口不等待模型加载/推理
   409 not_recording       当前没有进行中的录音
   422 empty_recording     未采集到任何帧（audio_capture 不生成空 WAV）
   503 / 500               同上
@@ -44,7 +53,18 @@ POST /api/voice/stop
 GET /api/voice/status
   200 {"ok":true,"state":"idle"|"recording","recording":bool,
        "frames_recorded":int,"elapsed_seconds":float,"target_path":str|null,
-       "last_recording":{...}|null,"config":{...}}
+       "last_recording":{...}|null,"config":{...},
+       "asr":{
+         "status": "idle"|"pending"|"running"|"success"|"failed",
+         "text":             str|null,  # 识别文本；仅 success 后非空，失败为 null
+         "wav_path":         str|null,  # 与本次 ASR 任务关联的录音文件路径
+         "model":            str|null,  # Whisper 模型名（如 "base"）
+         "language":         str|null,  # 固定 "zh"
+         "task":             str|null,  # 固定 "transcribe"
+         "device":           str|null,  # 推理设备（如 "cpu"）
+         "duration_seconds": float|null, # 纯推理耗时（秒）
+         "error":            str|null}   # 仅 failed 时有值；不含完整语音内容
+      —— asr 是只读快照：重复轮询不会触发重复推理
 
 404 / 405 也返回 JSON（而不是 Flask 默认 HTML），便于设备端解析。
 
@@ -70,6 +90,11 @@ try:  # 正常以包模块方式导入（pytest / python -m service.voice_contro
     from . import audio_capture
 except ImportError:  # pragma: no cover — 兼容 `python service/voice_control_server.py` 直接运行
     import audio_capture  # type: ignore[no-redef]
+
+try:  # 正常以包模块方式导入（pytest / python -m service.voice_control_server）
+    from . import asr_whisper
+except ImportError:  # pragma: no cover — 兼容直接运行
+    import asr_whisper  # type: ignore[no-redef]
 
 # Flask 是运行本服务的最小依赖；允许在未安装时导入本模块（便于静态检查），
 # 真正创建应用时再抛出带安装提示的明确错误（保持与 audio_capture 一致的风格）。
@@ -99,6 +124,18 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 """仓库根目录（service/ 的上一级）；用于拒绝把录音写入仓库。"""
+
+# ASR 状态常量（JSON 中暴露的稳定英文编码；中文语义见 docstring 接口约定）
+ASR_STATUS_IDLE = "idle"
+"""尚无任何识别任务。"""
+ASR_STATUS_PENDING = "pending"
+"""识别任务已提交，等待后台工作线程执行。"""
+ASR_STATUS_RUNNING = "running"
+"""正在加载模型 / 执行推理（后台线程占用）。"""
+ASR_STATUS_SUCCESS = "success"
+"""识别成功，识别文本有效。"""
+ASR_STATUS_FAILED = "failed"
+"""识别失败（含依赖缺失/模型加载失败/推理异常等），录音停止事实不受影响。"""
 
 # ──────────────────────────────────────────────
 # 异常体系（每个异常自带稳定错误码与 HTTP 状态码）
@@ -235,6 +272,157 @@ def optional_json_object() -> Optional[Dict[str, Any]]:
 
 
 # ──────────────────────────────────────────────
+# ASR 后台任务编排（Week 05 Step 3B）
+# ──────────────────────────────────────────────
+
+
+class AsrTaskRunner:
+    """后台 ASR 任务执行器：录音停止后自动入队，模型加载与推理都在工作线程。
+
+    设计约束（Week 05 Step 3B）：
+    * ``submit()`` 只做「登记任务 + 唤醒工作线程」，立即返回——POST /api/voice/stop
+      不会等待模型加载或推理结束（避免 ESP32 默认约 5 秒 HTTP 超时）。
+    * 同一时刻最多一个识别任务在跑（单工作线程）；若识别期间又提交了新任务，
+      旧任务完成时因 epoch 不匹配被丢弃，只有最新一次提交会发布到状态。
+    * 状态轮询（GET /api/voice/status 的 snapshot）是只读快照，绝不触发推理。
+    * 录音停止成功与 ASR 状态解耦：识别失败只把状态置为 failed，不回去改写
+      录音结果。
+    * 不打印识别文本/语音内容日志（不把完整语音内容写入日志）。
+    """
+
+    def __init__(self, transcriber: Optional[Any] = None) -> None:
+        self._transcriber = transcriber
+        self._cond = threading.Condition()
+        self._epoch = 0  # 最新任务编号（单调递增，用于丢弃过期任务的结果）
+        self._job: Optional[Tuple[int, str, Dict[str, Any]]] = None
+        self._thread: Optional[threading.Thread] = None
+        self._status = ASR_STATUS_IDLE
+        self._text: Optional[str] = None
+        self._meta: Dict[str, Any] = {}
+
+    # ── 只读视图 ─────────────────────────────
+
+    @property
+    def transcriber(self) -> Any:
+        """被注入的转录器（asr_whisper.Transcriber 或兼容对象）。"""
+        return self._transcriber
+
+    def _base_meta(self) -> Dict[str, Any]:
+        tr = self._transcriber
+        return {
+            "wav_path": None,
+            "model": getattr(tr, "model_name", None),
+            "language": getattr(tr, "language", None),
+            "task": getattr(tr, "task", None),
+            "device": getattr(tr, "device", None),
+            "duration_seconds": None,
+            "error": None,
+        }
+
+    # ── 任务提交 ─────────────────────────────
+
+    def submit(self, wav_path: Any) -> int:
+        """登记一个识别任务并唤醒工作线程；立即返回新任务的 epoch。
+
+        不执行任何模型加载/推理；真实工作由工作线程 ``_run`` 承担。
+        """
+        with self._cond:
+            self._epoch += 1
+            epoch = self._epoch
+            meta = self._base_meta()
+            meta["wav_path"] = str(wav_path)
+            self._job = (epoch, str(wav_path), meta)
+            self._status = ASR_STATUS_PENDING
+            self._text = None
+            self._meta = meta
+            self._cond.notify_all()
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(
+                    target=self._run, name="voice-asr-worker", daemon=True
+                )
+                self._thread.start()
+        return epoch
+
+    def fail_submit(self, message: str) -> None:
+        """登记路径出错时的兜底：把 ASR 状态直接置为 failed，并作废在途任务。
+
+        仅当 ``submit()`` 自身异常时由服务调用，保证「录音停止成功」的事实
+        绝不会因为 ASR 提交失败而被改写。
+        """
+        with self._cond:
+            self._epoch += 1  # 让任何在途任务过期
+            self._job = None
+            self._status = ASR_STATUS_FAILED
+            self._text = None
+            self._meta = {"error": message}
+
+    # ── 状态查询 ─────────────────────────────
+
+    def snapshot(self) -> Dict[str, Any]:
+        """返回 ASR 状态只读快照（无副作用，可安全反复轮询）。"""
+        with self._cond:
+            status = self._status
+            text = self._text
+            meta = dict(self._meta)
+        out: Dict[str, Any] = {"status": status, "text": text}
+        for key in (
+            "wav_path",
+            "model",
+            "language",
+            "task",
+            "device",
+            "duration_seconds",
+            "error",
+        ):
+            out[key] = meta.get(key)
+        return out
+
+    # ── 工作线程 ─────────────────────────────
+
+    def _run(self) -> None:
+        while True:
+            with self._cond:
+                if self._job is None:
+                    # 没有待处理任务：交还线程所有权，允许下次 submit 重建线程
+                    self._thread = None
+                    return
+                epoch, wav_path, pending_meta = self._job
+                self._job = None
+                self._status = ASR_STATUS_RUNNING
+                self._meta = dict(pending_meta)
+            # ── 推理阶段：不持有锁（模型加载/解码/推理耗时可能很长） ──
+            result_meta = dict(pending_meta)
+            text: Optional[str] = None
+            try:
+                result = self._transcriber.transcribe_wav(wav_path)
+            except Exception as exc:  # noqa: BLE001 — 统一收敛为失败状态
+                result_meta["error"] = f"{type(exc).__name__}: {exc}"
+            else:
+                text = getattr(result, "text", None)
+                result_meta.update(
+                    {
+                        "model": getattr(result, "model", None)
+                        or pending_meta["model"],
+                        "language": getattr(result, "language", None)
+                        or pending_meta["language"],
+                        "task": getattr(result, "task", None)
+                        or pending_meta["task"],
+                        "device": getattr(result, "device", None)
+                        or pending_meta["device"],
+                        "duration_seconds": getattr(result, "duration_seconds", None),
+                    }
+                )
+            with self._cond:
+                # 只有「最新一次提交」允许发布结果；旧任务被新提交取代时直接丢弃
+                if epoch == self._epoch:
+                    self._status = (
+                        ASR_STATUS_SUCCESS if text is not None else ASR_STATUS_FAILED
+                    )
+                    self._text = text
+                    self._meta = result_meta
+
+
+# ──────────────────────────────────────────────
 # 服务：录音状态编排
 # ──────────────────────────────────────────────
 
@@ -257,21 +445,32 @@ class VoiceControlService:
         self,
         capture: Optional[Any] = None,
         output_dir: Optional[Any] = None,
+        asr: Optional[Any] = None,
+        asr_task_runner: Optional[Any] = None,
     ) -> None:
         """构造服务。
 
         Args:
-            capture:    可注入的 AudioCapture 兼容对象（测试用假实现）；
-                        None 表示使用真实 ``audio_capture.AudioCapture``。
-            output_dir: 录音输出目录；仅当 capture=None 时可用。
-                        None → ``audio_capture.DEFAULT_OUTPUT_DIR``（%TEMP%/voice_task/）。
+            capture:         可注入的 AudioCapture 兼容对象（测试用假实现）；
+                            None 表示使用真实 ``audio_capture.AudioCapture``。
+            output_dir:      录音输出目录；仅当 capture=None 时可用。
+                            None → ``audio_capture.DEFAULT_OUTPUT_DIR``（%TEMP%/voice_task/）。
+            asr:             可注入的转录器（asr_whisper.Transcriber 或兼容对象；
+                            测试用假模型包装）。None → 真实 ``asr_whisper.Transcriber()``
+                            （base/zh/transcribe，模型惰性加载，首次推理才加载/下载权重）。
+            asr_task_runner: 可注入的替代 AsrTaskRunner（高级定制/测试用）；与 asr 互斥。
 
         Raises:
-            VoiceControlConfigError: capture 与 output_dir 同时指定；或输出目录在仓库内。
+            VoiceControlConfigError: capture 与 output_dir 同时指定；asr 与 asr_task_runner
+                            同时指定；或输出目录在仓库内。
         """
         if capture is not None and output_dir is not None:
             raise VoiceControlConfigError(
                 "capture 与 output_dir 不能同时指定：注入 capture 时以其自带 output_dir 为准"
+            )
+        if asr is not None and asr_task_runner is not None:
+            raise VoiceControlConfigError(
+                "asr 与 asr_task_runner 不能同时指定：注入 runner 时以其自带转录器为准"
             )
 
         if capture is None:
@@ -286,6 +485,12 @@ class VoiceControlService:
             if configured is not None:
                 ensure_output_outside_repo(configured)
 
+        if asr_task_runner is not None:
+            self._asr_runner = asr_task_runner
+        else:
+            transcriber = asr if asr is not None else asr_whisper.Transcriber()
+            self._asr_runner = AsrTaskRunner(transcriber=transcriber)
+
         self._capture = capture
         self._lock = threading.Lock()
         self._target_path: Optional[Path] = None
@@ -297,6 +502,11 @@ class VoiceControlService:
     def capture(self) -> Any:
         """底层采集器（真实 AudioCapture 或被注入的兼容对象）。"""
         return self._capture
+
+    @property
+    def asr_runner(self) -> AsrTaskRunner:
+        """后台 ASR 任务执行器（录音停止后自动提交识别任务）。"""
+        return self._asr_runner
 
     @property
     def last_recording(self) -> Optional[Any]:
@@ -332,6 +542,7 @@ class VoiceControlService:
             "target_path": str(target) if target is not None else None,
             "last_recording": last.as_dict() if last is not None else None,
             "config": self.config(),
+            "asr": self._asr_runner.snapshot(),
         }
 
     # ── 控制 ─────────────────────────────────
@@ -365,7 +576,10 @@ class VoiceControlService:
             }
 
     def stop(self) -> Dict[str, Any]:
-        """停止录音并返回 WAV 元数据。
+        """停止录音，返回 WAV 元数据，并自动在后台提交本地 ASR 任务。
+
+        录音停止成功后**立即返回**（不等待模型加载/推理）：ASR 任务入队后由
+        AsrTaskRunner 的工作线程执行；状态与识别文本通过 ``status()`` 查询。
 
         Raises:
             NotRecordingError:      当前没有进行中的录音。
@@ -380,12 +594,19 @@ class VoiceControlService:
                 # 无论成功或失败，本次的待写路径都作废（真实状态以采集器为准）
                 self._target_path = None
             self._last_recording = info
+            # 录音已成功保存：自动提交后台 ASR（入队即返回，不阻塞本接口）。
+            # 提交异常也绝不能把「录音停止成功」改写成失败——收敛为 ASR failed。
+            try:
+                self._asr_runner.submit(info.path)
+            except Exception as exc:  # noqa: BLE001 — 后台提交失败不影响录音事实
+                self._asr_runner.fail_submit(f"{type(exc).__name__}: {exc}")
             return {
                 "ok": True,
                 "state": "idle",
                 "recording": False,
-                "message": "录音已停止并写入 WAV",
+                "message": "录音已停止并写入 WAV，已提交后台 ASR 任务",
                 "wav": info.as_dict(),
+                "asr": self._asr_runner.snapshot(),
             }
 
 
@@ -397,18 +618,21 @@ class VoiceControlService:
 def create_app(
     capture: Optional[Any] = None,
     output_dir: Optional[Any] = None,
+    asr: Optional[Any] = None,
 ) -> Any:
-    """创建 Flask 应用（工厂函数，便于测试注入假采集器）。
+    """创建 Flask 应用（工厂函数，便于测试注入假采集器/假转录器）。
 
     Args:
         capture:    注入的采集器；None → 真实 ``AudioCapture``。
         output_dir: 录音输出目录；仅当 capture=None 时可用，默认 %TEMP%/voice_task/。
+        asr:        注入的转录器（测试用假模型包装）；None → 真实
+                    ``asr_whisper.Transcriber()``（base/zh/transcribe）。
 
     Returns:
         Flask app。服务实例挂在 ``app.extensions["voice_control"]``。
     """
     flask_cls = require_flask()
-    service = VoiceControlService(capture=capture, output_dir=output_dir)
+    service = VoiceControlService(capture=capture, output_dir=output_dir, asr=asr)
 
     app = flask_cls(__name__)
     # 中文提示按 UTF-8 原样输出（不转成 \uXXXX），便于 ESP32/浏览器直接读取
