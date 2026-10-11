@@ -1,6 +1,6 @@
 # Week 05 State — 接通按键说话与语音播报
 
-**状态**: 🟢 **Step 1 完成（WAV 格式 PASS；真实麦克风有效语音第 3 轮 ✅ PASS）；Step 2A PC 端录音 HTTP 控制服务 ✅ 已实现并通过自动测试（39/39）；Step 2B ESP32 固件侧 PLAY→PC 控制代码 ✅ 已实现并 `idf.py build` 通过；Step 2C 实机联调 ✅ 已烧录并实测通过（PLAY→start→recording→stop→idle 双端取证，含一次瞬时连接失败的如实记录）；Step 3A 本地 Whisper ASR 模块（`service/asr_whisper.py`）✅ 已实现并通过自动测试（18/18，回归 190 通过）；真实语音识别 ⏳ 未执行（本机 FFmpeg 缺失——按任务约束停止真实推理并报告安装需求）**
+**状态**: 🟢 **Step 1 完成（WAV 格式 PASS；真实麦克风有效语音第 3 轮 ✅ PASS）；Step 2A PC 端录音 HTTP 控制服务 ✅ 已实现并通过自动测试（39/39）；Step 2B ESP32 固件侧 PLAY→PC 控制代码 ✅ 已实现并 `idf.py build` 通过；Step 2C 实机联调 ✅ 已烧录并实测通过（PLAY→start→recording→stop→idle 双端取证，含一次瞬时连接失败的如实记录）；Step 3A 本地 Whisper ASR 模块（`service/asr_whisper.py`）✅ 已实现并通过自动测试（18/18，回归 190 通过）；真实语音识别 ✅ 已执行（stdlib `wave` 解码路径经实测不依赖 FFmpeg；第 2 轮 PASS——base/zh/cpu 纯推理 0.68s，转录非空且语义对应；第 1 轮窗口内无有效语音、转录为空，已如实记录）**
 **分支**: `feature/week05-voice-interaction`（本地分支，无远端 upstream）
 **基线**: `7dd788b` — Merge pull request #4 (origin/main)
 
@@ -420,19 +420,40 @@ idf.py build
 | FFmpeg | ❌ **未安装** | `ffmpeg -version` / `where.exe ffmpeg` 均无结果；ESP-IDF 工具目录递归扫描无 `ffmpeg.exe` |
 | GPU / CUDA | 驱动可用，PyTorch 侧未启用 CUDA | `nvidia-smi`：驱动 595.97 / CUDA 13.2；为控制依赖体积安装 CPU 构建 torch，`torch.cuda.is_available()=False`、`device_count=0`（不盲目安装大型 CUDA 依赖） |
 | PyTorch / whisper 导入 | ✅ | `torch 2.6.0+cpu`、`whisper 20250625`、`numpy 1.26.4` 均可导入 |
-| 真实语音识别 | ⏳ **未执行（阻塞）** | 任务约束：FFmpeg 缺失时「先停止真实推理并报告安装需求」。未录音、未下载 base 权重（~140MB）、未运行真实推理、**未伪报通过**。说明：本模块对标准 PCM WAV（audio_capture.py 产物）用标准库 wave 解码，技术上可不依赖 ffmpeg；下一步待用户确认后执行录音 + 真实推理 |
+| 真实语音识别（前次记录） | ⏳ **当时未执行（阻塞）** | 当时任务约束：FFmpeg 缺失时「先停止真实推理并报告安装需求」。未录音、未下载 base 权重、未运行真实推理、**未伪报通过**。说明：标准库 wave 解码技术上可不依赖 ffmpeg（**该路径已于 2026-10-11 实测通过，见下方执行记录**） |
+
+### 真实语音识别执行记录（2026-10-11，Step 3A 实机验证）
+
+> 与上方的自动化测试（假模型）严格区分：本节为真人说话 → 真实麦克风 → WAV → 本地 Whisper 推理的实际证据。
+
+- 方式：`service/audio_capture.py` 默认输入设备（「麦克风阵列 (Realtek(R) Audio)」，device 1）16kHz/1ch/16bit 真实录音 8 s；`asr_whisper.transcribe_wav()` 默认 `base`/`zh`/`transcribe`、`device="auto"`→cpu。
+- **解码路径（实测确认）**：`transcribe_wav()` → `_decode_wav_to_float32()` 用标准库 `wave` 读 PCM → 校验采样宽度 2 B、声道 ≤2 → float32 数组（`/32768.0`）→ 必要时 16 kHz 线性重采样 → 把 float32 **数组**直接传入 `model.transcribe(audio, language=zh, task=transcribe, fp16=False)`。全程无 FFmpeg 调用，系统未安装 FFmpeg 不影响本链路。
+- 模型权重：首次下载成功一次（`~/.cache/whisper/base.pt`，145,262,807 B ≈ 139M，whisper 20250625 默认机制 `_download(url, root, in_memory=False)`）。
+- 运行环境：`D:\AIinteraction-venvs\week05-audio`（Python 3.11.7 / whisper 20250625 / torch 2.6.0+cpu 无 CUDA / numpy 1.26.4 / sounddevice 0.5.6）。
+
+| 轮次 | WAV 参数（RecordingInfo / 文件头 / read_wav_info 三源一致） | 录音能量 | 转录文本 | 判定 |
+|------|------------------------------------------------------------|----------|----------|------|
+| 第 1 轮 | 16kHz / 1ch / 16bit / 7.90 s（126400 帧）/ 252,844 B / status_flags 空 | rms=0.013、peak=0.066、近静音 55.5% → 窗口内无有效语音 | **空字符串** | ❌ FAIL（如实记录，未虚报通过） |
+| 第 2 轮 | 16kHz / 1ch / 16bit / 7.90 s（126400 帧）/ 252,844 B / status_flags 空 | rms=0.079、peak=0.625、近静音 26.7% → 有效语音 | 「查看最近的加速度數據,現在測試Whisper中文與音時別」 | ✅ PASS（语义对应，链路成立） |
+
+- 期望句：查看最近的加速度数据。现在测试 Whisper 中文语音识别。
+- 结果分析（如实）：前段「查看最近的加速度数据」、中段「现在测试 Whisper 中文」识别正确（`数据`→`數據`、`现在`→`現在` 为 base 模型常见繁体输出）；**末段「语音识别」误识为音近「與音時別」——base 小模型局部误识，如实记录，不宣称 100% 字准**；整体语义可懂，WAV→中文文本链路成立。
+- 推理元数据：model=`base` / language=`zh` / task=`transcribe` / device=`cpu` / 纯推理 `0.68 s`（含模型加载 wall `1.48 s`）。
+- 运行位置：Windows PC（`C:\Users\Qin`）；录音与临时脚本存放于仓库外 `%TEMP%\week05_step3a_real`，完成后已删除，仓库内无 WAV、无录音脚本。
+- 结论：**真实中文语音识别验证通过（第 2 轮）**，并实测证明 stdlib `wave` 解码路径不依赖 FFmpeg；本轮未接入 LLM / TTS / ESP32，未修改任何业务代码或依赖清单。
 
 ### 清理与合规
 
 - ✅ 仓库内**无任何 WAV**（`git status` + 递归检查）；未创建本次临时 WAV / 录音脚本
+- ✅ 2026-10-11 真实识别：仓库外 `%TEMP%\week05_step3a_real`（录音 WAV / 录音与下载脚本 / report.json）推理后已整体删除，仓库内无 WAV、无录音脚本
 - ✅ 临时构建文件（`.asr_build_*.txt`）已删除
 - ✅ 未修改：系统 PATH / 全局环境 / 防火墙 / ESP32 固件 / PC Flask 服务 / Week 04 模块
 - ✅ 未读取或输出 `sdkconfig`；未验证未接入的项目均如实标记
 
 ### 未验证（不得宣称已完成）
 
-- 真实语音识别（真人说话 → WAV → 中文文本）——FFmpeg 缺失按任务约束停止；待安装 FFmpeg 或用户确认 stdlib 解码路径后执行
-- `base` 模型首次权重下载与真实推理耗时
+- `base` 模型在其他口音 / 语速 / 噪声环境下的中文识别鲁棒性（本次仅验证单句、正常语速、安静环境）
+- 末段「语音识别」类常见词的误识率（base 小模型局限，不宣称 100% 字准）
 - Step 4 LLM NL→JSON / Step 5 TTS / Step 6 全链路（未开始）
 
 ## 架构设计状态
@@ -456,7 +477,7 @@ idf.py build
 |------|------|
 | PC 音频采集验证 (Step 1) | 🟡 代码 + 自动测试完成；真实录音格式 PASS；有效语音采集（第 3 轮）**PASS**；ASR（Whisper）**未接入** |
 | 按键事件→PC 链路 (Step 2) | 🟡 **拆分**：Step 2A「PC 端录音 HTTP 控制服务」✅ 已实现并通过自动测试（39/39）；Step 2B「ESP32 按键事件 → PC + 局域网连通性」🟡 **固件侧代码已实现并编译通过**（`idf.py build`，0 warning）；**未烧录、未做真实网络联调**，局域网/防火墙连通性仍未验证 |
-| ASR 接入 (Step 3) | 🟡 **Step 3A 拆分完成**：本地 Whisper ASR 模块（`service/asr_whisper.py`）✅ 已实现并通过自动测试（18/18，回归 190 通过）；**真实语音识别 ⏳ 未执行**（本机 FFmpeg 缺失，按任务约束停止并报告安装需求；待安装 FFmpeg 或用户确认 stdlib 解码路径） |
+| ASR 接入 (Step 3) | 🟡 **Step 3A 完成**：本地 Whisper ASR 模块（`service/asr_whisper.py`）✅ 已实现并通过自动测试（18/18，回归 190 通过）；**真实语音识别 ✅ 已执行（2026-10-11 第 2 轮 PASS，base/zh/cpu 纯推理 0.68s；第 1 轮窗口内无有效语音转录为空已如实记录；stdlib wave 解码不依赖 FFmpeg 经实测验证）**；不同口音/噪声鲁棒性待后续验证；Step 4 未开始 |
 | 语言模型 NL→JSON (Step 4) | ⏳ 未开始 |
 | TTS 播报 (Step 5) | ⏳ 未开始 |
 | 全链路串联 (Step 6) | ⏳ 未开始 |
