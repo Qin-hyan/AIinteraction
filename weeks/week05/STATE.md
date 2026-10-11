@@ -1,6 +1,6 @@
 # Week 05 State — 接通按键说话与语音播报
 
-**状态**: 🟢 **Step 1 完成（WAV 格式 PASS；真实麦克风有效语音第 3 轮 ✅ PASS）；Step 2A PC 端录音 HTTP 控制服务 ✅ 已实现并通过自动测试（39/39）；Step 2B ESP32 固件侧 PLAY→PC 控制代码 ✅ 已实现并 `idf.py build` 通过；Step 2C 实机联调 ✅ 已烧录并实测通过（PLAY→start→recording→stop→idle 双端取证，含一次瞬时连接失败的如实记录）；Step 3A 本地 Whisper ASR 模块（`service/asr_whisper.py`）✅ 已实现并通过自动测试（18/18，回归 190 通过）；真实语音识别 ✅ 已执行（stdlib `wave` 解码路径经实测不依赖 FFmpeg；第 2 轮 PASS——base/zh/cpu 纯推理 0.68s，转录非空且语义对应；第 1 轮窗口内无有效语音、转录为空，已如实记录）；Step 3B 录音停止后自动提交后台本地 ASR ✅ 已实现并通过自动测试（`service/test_voice_control_server.py` 58/58，新增 19 项 ASR 相关；`pytest service/` 回归 209 passed + 6 subtests）；Step 3C 真实端到端验证 ✅ 已实测（2026-10-11：ESP32 两次 PLAY→PC 录音→自动后台 Whisper base/zh/cpu 识别 success，START 双端取证成功；ASR 文本「現在測試Whisper本地與音識別」非空且中段语义对应、**前半句未识别，如实记录**；发现真实缺陷：Step 3B 的 stop 响应新增 asr 块后超 ESP32 512B 缓冲 → 固件侧 STOP 契约校验失败（RESPONSE_INVALID，HTTP=200；PC 实际已停录并完成 ASR），本地确认状态停留 RECORDING；**未擅自修改代码，缺陷待修**）；Step 3D 修复该契约缺陷 ✅（2026-10-11：控制接口与查询接口解耦——`POST /api/voice/stop` 改为**紧凑控制回执**（ok/state/recording/wav.frames/wav.duration_seconds/asr.status），完整 wav/asr 调试信息保留在 `GET /api/voice/status`；真实量级 619200 帧场景实测响应 **120B ≪ 512B**，不再截断；固件契约字段核对满足，**无需改 ESP32 固件**；`service/test_voice_control_server.py` 62/62，`pytest service/` 回归 213 passed + 6 subtests；改动仅限 `service/` 两个文件与本文档，未烧录、未真实联调）**
+**状态**: 🟢 **Step 1 完成（WAV 格式 PASS；真实麦克风有效语音第 3 轮 ✅ PASS）；Step 2A PC 端录音 HTTP 控制服务 ✅ 已实现并通过自动测试（39/39）；Step 2B ESP32 固件侧 PLAY→PC 控制代码 ✅ 已实现并 `idf.py build` 通过；Step 2C 实机联调 ✅ 已烧录并实测通过（PLAY→start→recording→stop→idle 双端取证，含一次瞬时连接失败的如实记录）；Step 3A 本地 Whisper ASR 模块（`service/asr_whisper.py`）✅ 已实现并通过自动测试（18/18，回归 190 通过）；真实语音识别 ✅ 已执行（stdlib `wave` 解码路径经实测不依赖 FFmpeg；第 2 轮 PASS——base/zh/cpu 纯推理 0.68s，转录非空且语义对应；第 1 轮窗口内无有效语音、转录为空，已如实记录）；Step 3B 录音停止后自动提交后台本地 ASR ✅ 已实现并通过自动测试（`service/test_voice_control_server.py` 58/58，新增 19 项 ASR 相关；`pytest service/` 回归 209 passed + 6 subtests）；Step 3C 真实端到端验证 ✅ 已实测（2026-10-11：ESP32 两次 PLAY→PC 录音→自动后台 Whisper base/zh/cpu 识别 success，START 双端取证成功；ASR 文本「現在測試Whisper本地與音識別」非空且中段语义对应、**前半句未识别，如实记录**；发现真实缺陷：Step 3B 的 stop 响应新增 asr 块后超 ESP32 512B 缓冲 → 固件侧 STOP 契约校验失败（RESPONSE_INVALID，HTTP=200；PC 实际已停录并完成 ASR），本地确认状态停留 RECORDING；**未擅自修改代码，缺陷待修**）；Step 3D 修复该契约缺陷 ✅（2026-10-11：控制接口与查询接口解耦——`POST /api/voice/stop` 改为**紧凑控制回执**（ok/state/recording/wav.frames/wav.duration_seconds/asr.status），完整 wav/asr 调试信息保留在 `GET /api/voice/status`；真实量级 619200 帧场景实测响应 **120B ≪ 512B**，不再截断；固件契约字段核对满足，**无需改 ESP32 固件**；`service/test_voice_control_server.py` 62/62，`pytest service/` 回归 213 passed + 6 subtests；改动仅限 `service/` 两个文件与本文档，未烧录、未真实联调）；**Step 3E 实机验证发现 `btn_scan` 任务栈溢出 → 已修复**（`BTN_TASK_STACK_SIZE` 2048→4096，`idf.py build` 通过，未烧录复核，详见下方 Step 3E 段）**
 **分支**: `feature/week05-voice-interaction`（本地分支，无远端 upstream）
 **基线**: `7dd788b` — Merge pull request #4 (origin/main)
 
@@ -599,6 +599,54 @@ ESP32 固件**（`main/voice_button.c/h` 无改动）。
   满足（契约字段逐一核对），但真实 PLAY→STOP 双端取证属于后续实测步骤，本步不做
   （遵循本步范围约束）。
 
+## Step 3E 状态 — ESP32 btn_scan 任务栈溢出修复（2026-10-11）
+
+> 背景：Step 3E 实机验证失败项 → FreeRTOS 报
+> `A stack overflow in task btn_scan has been detected.`
+
+### 定位
+
+- 任务创建与栈定义均在 `main/help_event.c`：
+  - `#define BTN_TASK_STACK_SIZE 2048`（原值，全固件最小任务栈）
+  - `xTaskCreate(button_scan_task, "btn_scan", BTN_TASK_STACK_SIZE, …)`
+- 任务循环内调用 `adc_button_read()`（→ `adc_oneshot_read()` + `adc_cali_raw_to_voltage()`
+  校准路径）+ `ESP_LOGI` 格式化打印；2048B 栈在实机被 FreeRTOS CANARY 检测击穿
+  （`sdkconfig`: `CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y`）。
+- 同固件任务栈对比：`uplink=4096`、`cam_task=4096`、主任务=4096、`voice_ctl=5120`，
+  `btn_scan` 的 2048 是最小且唯一触发溢出者。
+
+### 修复（最小改动，仅一处宏配置）
+
+| 文件 | 改动 |
+|------|------|
+| `main/help_event.c` | `BTN_TASK_STACK_SIZE` **2048 → 4096**，并加注释说明原因；**未改按键 FSM 逻辑**、任务结构、优先级与事件状态机 |
+
+- 取 4096 而非 3072：与本固件 `uplink`/`cam_task` 任务栈一致，为 esp_adc 校准路径 +
+  日志格式化留出稳定余量；任务栈仅增加 2KB（内部 DRAM），无资源压力。
+- **未修改** `voice_button.c/h`、PC 服务（Step 2A/3B/3D）、ASR（Step 3A）、LLM/TTS。
+
+### 验证结果
+
+| 验证项 | 结果 | 证据 |
+|--------|------|------|
+| `idf.py build`（ESP-IDF v5.4.3） | ✅ PASS | 退出码 0；`Project build complete.` |
+| 编译告警 / 错误 | ✅ 0 warning / 0 error | 构建日志中 `warning:` / `error:` 出现次数 = 0 |
+| `git diff --check` | ✅ 通过 | 退出码 0，无空白错误 |
+| 烧录复核「不再溢出」 | ⛔ **未做** | 本步骤明确不烧录、不实机验证 |
+
+### 范围与合规（Step 3E）
+
+- ✅ 修改仅限 `main/help_event.c`、`weeks/week05/STATE.md` 两个文件
+- ✅ 未烧录、未实机验证、未进入 LLM/TTS、未读取/输出 `sdkconfig` 与 Wi-Fi 凭据
+- ✅ 一次本地 commit，未 push
+
+### 结论
+
+- 栈溢出根因是任务栈过小（2048B）叠加 esp_adc 校准与日志格式化调用路径；
+  增大到 4096B 后与同固件其他任务栈一致，预期不再触发栈溢出检测。
+- 该结论基于代码静态分析与编译验证；**是否符合实机仍需后续烧录复核**
+  （未实机验证，不得标记为已通过）。
+
 ## 架构设计状态
 
 | 设计项 | 状态 |
@@ -620,7 +668,7 @@ ESP32 固件**（`main/voice_button.c/h` 无改动）。
 |------|------|
 | PC 音频采集验证 (Step 1) | 🟡 代码 + 自动测试完成；真实录音格式 PASS；有效语音采集（第 3 轮）**PASS**；ASR（Whisper）**未接入** |
 | 按键事件→PC 链路 (Step 2) | 🟢 **完成**：Step 2A「PC 端录音 HTTP 控制服务」✅ 自动测试 39/39；Step 2B「ESP32 按键事件→PC 控制」固件侧代码 ✅ 已实现并编译通过（`idf.py build`，0 warning）；**Step 2C 实机联调 ✅ 已烧录并实测通过**（两次 PLAY→start→recording→stop→idle 双端取证，含一次瞬时连接失败的如实记录，详见上方 Step 2C 段） |
-| ASR 接入 (Step 3) | 🟢 **Step 3A/3B/3C 均按实测完成，Step 3D 契约缺陷已修复**：Step 3A 本地 Whisper ASR 模块（`service/asr_whisper.py`）代码+自动测试 18/18，真实语音识别已执行（第 2 轮 PASS，base/zh/cpu 纯推理 0.68s；第 1 轮转录为空已如实记录；stdlib wave 解码不依赖 FFmpeg 经实测）；Step 3B 录音停止后自动提交后台本地 ASR ✅ 自动测试 58/58（回归 209 通过）；**Step 3C 真实端到端验证 ✅ 已实测（2026-10-11）**：PLAY→PC 录音→自动 Whisper base/zh/cpu 识别 success，START 双端取证；转录文本非空、中段语义对应、**前段未识别如实记录**；**发现 stop 响应超 ESP32 512B 缓冲导致固件侧 STOP 契约失败**（详见 Step 3C 段），**Step 3D 已修复**（控制/查询接口解耦，见 Step 3D 段）；不同口音/噪声鲁棒性待后续验证；Step 4 LLM NL→JSON 未开始 |
+| ASR 接入 (Step 3) | 🟢 **Step 3A/3B/3C 均按实测完成，Step 3D 契约缺陷已修复**：Step 3A 本地 Whisper ASR 模块（`service/asr_whisper.py`）代码+自动测试 18/18，真实语音识别已执行（第 2 轮 PASS，base/zh/cpu 纯推理 0.68s；第 1 轮转录为空已如实记录；stdlib wave 解码不依赖 FFmpeg 经实测）；Step 3B 录音停止后自动提交后台本地 ASR ✅ 自动测试 58/58（回归 209 通过）；**Step 3C 真实端到端验证 ✅ 已实测（2026-10-11）**：PLAY→PC 录音→自动 Whisper base/zh/cpu 识别 success，START 双端取证；转录文本非空、中段语义对应、**前段未识别如实记录**；**发现 stop 响应超 ESP32 512B 缓冲导致固件侧 STOP 契约失败**（详见 Step 3C 段），**Step 3D 已修复**（控制/查询接口解耦，见 Step 3D 段）；**Step 3E 实机验证发现 `btn_scan` 任务栈溢出 → 已修复**（`BTN_TASK_STACK_SIZE` 2048→4096，`idf.py build` 通过，未烧录复核，见 Step 3E 段）；不同口音/噪声鲁棒性待后续验证；Step 4 LLM NL→JSON 未开始 |
 | 语言模型 NL→JSON (Step 4) | ⏳ 未开始 |
 | TTS 播报 (Step 5) | ⏳ 未开始 |
 | 全链路串联 (Step 6) | ⏳ 未开始 |

@@ -95,7 +95,10 @@ static void help_button_fsm_update(help_button_fsm_t *fsm, adc_button_t btn)
  * 按键扫描 FreeRTOS 任务（~30 Hz）
  * ================================================================ */
 
-#define BTN_TASK_STACK_SIZE   2048
+/* 栈大小 4096：2048 在 esp_adc 校准/读取 + ESP_LOG 格式化路径下触发
+ * FreeRTOS 栈溢出（"A stack overflow in task btn_scan has been detected."，Step 3E 实机反馈）。
+ * 与同固件 uplink/cam_task 任务栈（4096）一致；按键 FSM/事件逻辑不变。 */
+#define BTN_TASK_STACK_SIZE   4096
 #define BTN_TASK_PRIORITY     5
 #define BTN_SCAN_MS           33       /* ~30 Hz */
 
