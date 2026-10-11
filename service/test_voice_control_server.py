@@ -10,6 +10,10 @@ test_voice_control_server.py — Week 05 Step 3B 语音录音 HTTP 控制 + 后�
   - 覆盖：start/stop/status、自动 ASR 提交、后台状态转换（pending/running/success/failed）、
     识别成功/失败、重复请求与提交取代、轮询不重复推理、JSON 响应与错误码、请求体校验、
     404/405 JSON 映射、输出目录保护、CLI 默认值
+  - **Step 3D（控制/查询接口解耦）**：断言 stop 是「紧凑控制回执」——UTF-8 字节数不超
+    ESP32 固件 512B 响应缓冲（ESP32_RESP_BUFFER_BYTES）、不携带完整 wav/asr 调试信息；
+    完整元数据与 ASR 文本仍由 GET /status 提供；stop 成功仍触发后台 ASR；失败响应同样
+    保持小体积与既有错误兼容
 
 运行（使用仓库外隔离虚拟环境，不向系统全局 Python 装包）::
 
@@ -307,7 +311,13 @@ class VoiceStartStopStatusTest(VoiceServerTestBase):
         self.assertEqual(Path(data["target_path"]), self.output_dir / "fake.wav")
         self.assertIsNone(data["last_recording"])
 
-    def test_stop_returns_wav_metadata(self):
+    def test_stop_returns_compact_ack(self):
+        """Step 3D：stop 是「控制回执」，只含 ESP32 契约所需的最小关联信息。
+
+        - 保留：ok / state / recording / wav.frames / wav.duration_seconds / asr.status
+        - 不返回：完整 wav 元数据（path/samplerate/size_bytes/status_flags/...）、
+          ASR 完整快照（text/wav_path/...）、message 长说明——调试信息由 GET /status 提供。
+        """
         self.post("/api/voice/start")
         self.capture.stop_result = make_info(
             self.output_dir / "fake.wav",
@@ -321,15 +331,38 @@ class VoiceStartStopStatusTest(VoiceServerTestBase):
         self.assertFalse(data["recording"])
         self.assertEqual(self.capture.stop_calls, 1)
 
-        wav = data["wav"]
-        self.assertEqual(Path(wav["path"]), self.output_dir / "fake.wav")
-        self.assertEqual(wav["samplerate"], 16000)
-        self.assertEqual(wav["channels"], 1)
-        self.assertEqual(wav["sample_width_bytes"], 2)
-        self.assertEqual(wav["frames"], 16000)
-        self.assertEqual(wav["duration_seconds"], 1.0)
-        self.assertEqual(wav["size_bytes"], 32044)
-        self.assertEqual(wav["status_flags"], ["input overflow"])
+        # 极简关联信息：wav 只含固件契约需要的 frames / duration_seconds
+        self.assertEqual(data["wav"], {"frames": 16000, "duration_seconds": 1.0})
+        self.assertEqual(list(data["asr"].keys()), ["status"])
+        self.assertIn(data["asr"]["status"], {"pending", "running", "success"})
+
+        # 控制接口不得携带完整调试信息
+        self.assertNotIn("message", data)
+        for heavy_key in (
+            "path",
+            "samplerate",
+            "channels",
+            "sample_width_bytes",
+            "size_bytes",
+            "status_flags",
+        ):
+            self.assertNotIn(heavy_key, data["wav"])
+        for heavy_key in (
+            "text",
+            "wav_path",
+            "model",
+            "language",
+            "task",
+            "device",
+            "duration_seconds",
+            "error",
+        ):
+            self.assertNotIn(heavy_key, data["asr"])
+
+        # 完整元数据并未丢失：仍由 GET /status 的 last_recording 提供
+        status = self.assert_json(self.client.get("/api/voice/status"), 200)
+        self.assertEqual(status["last_recording"]["status_flags"], ["input overflow"])
+        self.assertEqual(Path(status["last_recording"]["path"]), self.output_dir / "fake.wav")
 
     def test_status_after_stop_exposes_last_recording(self):
         self.post("/api/voice/start")
@@ -718,9 +751,11 @@ class VoiceAsrAutoSubmitTest(VoiceAsrServerTestBase):
         self.assertTrue(stop_data["ok"])
         self.assertEqual(stop_data["state"], "idle")
         self.assertEqual(stop_data["recording"], False)
-        # stop 响应自带 asr 快照：任务已提交（接口不等待推理）
+        # Step 3D：stop 回执只含 asr.status（不携带识别文本 / wav 路径）；
+        # 任务与录音的关联（wav_path）改由 GET /status 的 asr 块查询
         self.assertIn(stop_data["asr"]["status"], {"pending", "running", "success"})
-        self.assertEqual(Path(stop_data["asr"]["wav_path"]), wav)
+        self.assertEqual(list(stop_data["asr"].keys()), ["status"])
+        self.assertEqual(self.status()["asr"]["wav_path"], str(wav))
         self.assertLessEqual(self.model.transcribe_calls, 1)
 
         asr = self.poll_asr(lambda a: a["status"] == "success")
@@ -790,7 +825,9 @@ class VoiceAsrFailureTest(VoiceAsrServerTestBase):
         wav, stop_data = self.record_and_stop("fail.wav")
         self.assertTrue(stop_data["ok"])
         self.assertEqual(stop_data["state"], "idle")
-        self.assertEqual(Path(stop_data["asr"]["wav_path"]), wav)
+        # Step 3D：stop 回执不含 wav_path；关联信息由 status 的 asr 块提供
+        self.assertEqual(list(stop_data["asr"].keys()), ["status"])
+        self.assertEqual(self.status()["asr"]["wav_path"], str(wav))
 
         asr = self.poll_asr(lambda a: a["status"] == "failed")
         self.assertIsNotNone(asr)
@@ -883,9 +920,9 @@ class VoiceAsrDuplicateAndOrderTest(VoiceAsrServerTestBase):
         self.assertIsNotNone(running, "第一次任务应阻塞在推理中")
 
         wav2, stop2 = self.record_and_stop("second.wav")
-        # 新任务取代旧任务：状态回到 pending，wav_path 指向第二次录音
+        # 新任务取代旧任务：状态回到 pending；wav_path 改为查询 status（Step 3D）
         self.assertEqual(stop2["asr"]["status"], "pending")
-        self.assertEqual(Path(stop2["asr"]["wav_path"]), wav2)
+        self.assertEqual(self.status()["asr"]["wav_path"], str(wav2))
 
         gate.set()
         final = self.poll_asr(lambda a: a["status"] == "success")
@@ -934,6 +971,96 @@ class VoiceAsrCompatibilityTest(VoiceAsrServerTestBase):
                 voice_control_server.VoiceControlService(
                     capture=capture, asr=object(), asr_task_runner=runner
                 )
+
+
+class VoiceStopContractTest(VoiceAsrServerTestBase):
+    """Step 3D — 控制/查询接口解耦：stop 是紧凑回执，完整信息由 status 提供。
+
+    - 成功与失败响应的 UTF-8 字节数都不得超过 ESP32 固件 512B 响应缓冲
+      （``voice_button.c`` 的 ``VOICE_RESP_BUF_SIZE``；Step 3C 实测 stop 携带完整
+      asr 块后被截断为 ``len=511, truncated=1`` → 固件判定 RESPONSE_INVALID）。
+    - stop 依旧触发后台 ASR；ASR 结果（text 等）通过 GET /status 查询。
+    """
+
+    @staticmethod
+    def _raw_bytes(resp) -> bytes:
+        """Flask test client 响应体的原始 UTF-8 字节（不含 HTTP 头）。"""
+        return resp.get_data(as_text=False)
+
+    def assert_fits_esp32_buffer(self, resp) -> None:
+        self.assertLessEqual(
+            len(self._raw_bytes(resp)),
+            voice_control_server.ESP32_RESP_BUFFER_BYTES,
+            f"响应 {len(self._raw_bytes(resp))}B 超过 ESP32 "
+            f"{voice_control_server.ESP32_RESP_BUFFER_BYTES}B 响应缓冲",
+        )
+
+    def test_stop_success_response_fits_esp32_buffer(self):
+        # 用真实联调量级（38.7s @16kHz ≈ 619200 帧）验证字节数上限
+        wav = self.make_wav("size.wav", frames=619200)
+        self.assert_json(self.post("/api/voice/start"), 200)
+        self.capture.simulate_frames(619200)
+        self.capture.stop_result = make_info(
+            wav, frames=619200, size_bytes=619200 * 2 + 44
+        )
+        resp = self.post("/api/voice/stop")
+        data = self.assert_json(resp, 200)
+        self.assertEqual(data["state"], "idle")
+        self.assertEqual(data["wav"]["frames"], 619200)
+        self.assert_fits_esp32_buffer(resp)
+        # 等后台 ASR 读完该 WAV 再结束测试，避免 Windows 下临时目录清理竞争占用
+        final = self.poll_asr(lambda a: a["status"] == "success")
+        self.assertIsNotNone(final, "stop 后后台 ASR 应正常执行完成")
+
+    def test_stop_failure_responses_fit_esp32_buffer(self):
+        # 409 not_recording：失败契约与旧版一致，且体积同样受控
+        resp = self.post("/api/voice/stop")
+        data = self.assert_json(resp, 409)
+        self.assertEqual(data["error"], "not_recording")
+        self.assert_fits_esp32_buffer(resp)
+
+        # 422 empty_recording
+        self.assert_json(self.post("/api/voice/start"), 200)
+        self.capture.stop_error = EmptyRecordingError("录音为空（模拟）")
+        resp = self.post("/api/voice/stop")
+        data = self.assert_json(resp, 422)
+        self.assertEqual(data["error"], "empty_recording")
+        self.assert_fits_esp32_buffer(resp)
+
+    def test_stop_success_still_triggers_background_asr(self):
+        # 解耦后 stop 仍触发后台 ASR；识别结果通过 GET /status 查询
+        wav, stop_data = self.record_and_stop("trigger.wav")
+        self.assertTrue(stop_data["ok"])
+        self.assertIn(stop_data["asr"]["status"], {"pending", "running", "success"})
+        self.assertEqual(list(stop_data["asr"].keys()), ["status"])
+
+        asr = self.poll_asr(lambda a: a["status"] == "success")
+        self.assertIsNotNone(asr)
+        self.assertEqual(asr["text"], self.default_asr_text)
+        self.assertEqual(asr["wav_path"], str(wav))
+        self.assertEqual(asr["model"], "base")
+        self.assertEqual(asr["language"], "zh")
+        self.assertGreaterEqual(self.model.transcribe_calls, 1)
+
+    def test_status_after_stop_returns_full_debug_info(self):
+        # GET /status 继续提供完整调试信息（wav 元数据 + ASR 全字段），不受解耦影响
+        wav, stop_data = self.record_and_stop("full.wav", frames=16000)
+        self.assertNotIn("message", stop_data)
+
+        data = self.status()
+        self.assertEqual(data["state"], "idle")
+        lr = data["last_recording"]
+        self.assertIsNotNone(lr)
+        self.assertEqual(lr["frames"], 16000)
+        self.assertEqual(lr["samplerate"], 16000)
+        self.assertEqual(lr["channels"], 1)
+        self.assertEqual(lr["size_bytes"], 16000 * 2 + 44)
+        self.assertEqual(Path(lr["path"]), wav)
+
+        asr = self.poll_asr(lambda a: a["status"] == "success")
+        self.assertIsNotNone(asr)
+        self.assertEqual(asr["text"], self.default_asr_text)
+        self.assertIsInstance(asr["duration_seconds"], float)
 
 
 class AsrTaskRunnerUnitTest(unittest.TestCase):

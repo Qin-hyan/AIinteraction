@@ -5,8 +5,10 @@ voice_control_server.py — Week 05 Step 3B: PC 端语音录音 HTTP 控制 + �
 ----
 1. 用 Flask 暴露三个 HTTP 接口，控制 service/audio_capture.py 的录音：
      POST /api/voice/start   → 开始录音（映射 AudioCapture.start_recording()）
-     POST /api/voice/stop    → 停止录音，返回 WAV 元数据；**自动在后台提交
-                              本地 Whisper 识别任务并立即返回**（不等待推理）
+     POST /api/voice/stop    → 停止录音，返回 **ESP32 友好的小响应**（ok/state/recording
+                              /wav.frames/wav.duration_seconds/asr.status，受固件 512B
+                              缓冲约束），并**自动在后台提交本地 Whisper 识别任务后
+                              立即返回**（不等待推理）；完整 WAV/ASR 信息由 GET /status 提供
      GET  /api/voice/status  → 当前录音状态 + ASR 状态/识别文本
 2. 录音逻辑**完全复用** audio_capture.AudioCapture：本模块不碰 PCM、不写 WAV，
    只做「状态编排 + 错误语义 + ASR 任务编排」。
@@ -40,12 +42,15 @@ POST /api/voice/start   请求体可省略；若带 body 必须是 JSON 对象�
   503 audio_device_error  设备或驱动不可用（如 sounddevice 缺失、设备打开失败）
   500 audio_capture_error / internal_error
 
-POST /api/voice/stop
-  200 {"ok":true,"state":"idle","recording":false,"message":...,
-       "wav":{path,samplerate,channels,sample_width_bytes,frames,
-              duration_seconds,size_bytes,status_flags},
-       "asr":{...ASR 状态只读快照，字段见 GET /status...}}
-      —— 录音停止成功；ASR 任务已自动提交并在后台执行，本接口不等待模型加载/推理
+POST /api/voice/stop   （Step 3D 起为「控制回执」：小响应，与查询接口解耦）
+  200 {"ok":true,"state":"idle","recording":false,
+       "wav": {"frames":int,"duration_seconds":float},   # 极简关联：能定位本次录音
+       "asr": {"status":"pending"|...}}                  # 回执 = 后台 ASR 已提交
+      —— 录音停止成功；ASR 任务已自动提交并在后台执行，本接口不等待模型加载/推理。
+      —— **不返回**完整 wav 元数据、asr 文本、长错误说明——这些调试信息一律由
+         GET /api/voice/status 提供（完整 last_recording 与 asr 快照）。
+      —— 响应体 UTF-8 字节数 = ESP32_RESP_BUFFER_BYTES=512 上限，防止 ESP32 固件
+         512B 响应缓冲截断（voice_button.c VOICE_RESP_BUF_SIZE，Step 3C 实测回归）。
   409 not_recording       当前没有进行中的录音
   422 empty_recording     未采集到任何帧（audio_capture 不生成空 WAV）
   503 / 500               同上
@@ -124,6 +129,15 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 """仓库根目录（service/ 的上一级）；用于拒绝把录音写入仓库。"""
+
+ESP32_RESP_BUFFER_BYTES = 512
+"""ESP32 固件 voice_button.c 的响应体缓冲上限（``VOICE_RESP_BUF_SIZE = 512``）。
+
+Step 3D 起，控制接口 ``POST /api/voice/stop`` 成功响应的 UTF-8 字节数**必须**不超过
+本上限（否则固件截断并判定 `RESPONSE_INVALID`，见 Step 3C 实测缺陷）。因此 stop 只
+返回 ESP32 契约所需的最小关联字段；完整 WAV/ASR 调试信息统一由 ``GET /status`` 提供。
+未来若给该接口加字段，须在此约束下评估，或把新信息放到查询接口。
+"""
 
 # ASR 状态常量（JSON 中暴露的稳定英文编码；中文语义见 docstring 接口约定）
 ASR_STATUS_IDLE = "idle"
@@ -576,7 +590,16 @@ class VoiceControlService:
             }
 
     def stop(self) -> Dict[str, Any]:
-        """停止录音，返回 WAV 元数据，并自动在后台提交本地 ASR 任务。
+        """停止录音，返回 **ESP32 友好的小响应**，并自动在后台提交本地 ASR 任务。
+
+        控制接口与查询接口解耦（Step 3D）：
+        - 本接口只返回固件契约与「必要关联信息」所需的最小字段
+          （``ok`` / ``state`` / ``recording`` / ``wav.frames`` /
+          ``wav.duration_seconds`` / ``asr.status``），保证响应体 UTF-8 字节数
+          远小于 ESP32 固件 ``voice_button.c`` 的 512B 响应缓冲
+          （``VOICE_RESP_BUF_SIZE``）——避免 Step 3C 实测的截断回归。
+        - 完整 WAV 元数据（``last_recording``）与 ASR 文本/耗时等调试信息一律由
+          ``GET /api/voice/status`` 提供，本接口**不返回**。
 
         录音停止成功后**立即返回**（不等待模型加载/推理）：ASR 任务入队后由
         AsrTaskRunner 的工作线程执行；状态与识别文本通过 ``status()`` 查询。
@@ -600,13 +623,20 @@ class VoiceControlService:
                 self._asr_runner.submit(info.path)
             except Exception as exc:  # noqa: BLE001 — 后台提交失败不影响录音事实
                 self._asr_runner.fail_submit(f"{type(exc).__name__}: {exc}")
+            # 紧凑回执：只含 ESP32 契约必需字段 + 极简关联信息。
+            # wav 只取 frames/duration_seconds（固件用于日志关联；见
+            # voice_button.c voice_post_action），asr 只取 status（回执 = 已提交）。
             return {
                 "ok": True,
                 "state": "idle",
                 "recording": False,
-                "message": "录音已停止并写入 WAV，已提交后台 ASR 任务",
-                "wav": info.as_dict(),
-                "asr": self._asr_runner.snapshot(),
+                "wav": {
+                    "frames": int(info.frames),
+                    "duration_seconds": round(float(info.duration_seconds), 4),
+                },
+                "asr": {
+                    "status": self._asr_runner.snapshot()["status"],
+                },
             }
 
 

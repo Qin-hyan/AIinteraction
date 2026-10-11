@@ -1,6 +1,6 @@
 # Week 05 State — 接通按键说话与语音播报
 
-**状态**: 🟢 **Step 1 完成（WAV 格式 PASS；真实麦克风有效语音第 3 轮 ✅ PASS）；Step 2A PC 端录音 HTTP 控制服务 ✅ 已实现并通过自动测试（39/39）；Step 2B ESP32 固件侧 PLAY→PC 控制代码 ✅ 已实现并 `idf.py build` 通过；Step 2C 实机联调 ✅ 已烧录并实测通过（PLAY→start→recording→stop→idle 双端取证，含一次瞬时连接失败的如实记录）；Step 3A 本地 Whisper ASR 模块（`service/asr_whisper.py`）✅ 已实现并通过自动测试（18/18，回归 190 通过）；真实语音识别 ✅ 已执行（stdlib `wave` 解码路径经实测不依赖 FFmpeg；第 2 轮 PASS——base/zh/cpu 纯推理 0.68s，转录非空且语义对应；第 1 轮窗口内无有效语音、转录为空，已如实记录）；Step 3B 录音停止后自动提交后台本地 ASR ✅ 已实现并通过自动测试（`service/test_voice_control_server.py` 58/58，新增 19 项 ASR 相关；`pytest service/` 回归 209 passed + 6 subtests）；Step 3C 真实端到端验证 ✅ 已实测（2026-10-11：ESP32 两次 PLAY→PC 录音→自动后台 Whisper base/zh/cpu 识别 success，START 双端取证成功；ASR 文本「現在測試Whisper本地與音識別」非空且中段语义对应、**前半句未识别，如实记录**；发现真实缺陷：Step 3B 的 stop 响应新增 asr 块后超 ESP32 512B 缓冲 → 固件侧 STOP 契约校验失败（RESPONSE_INVALID，HTTP=200；PC 实际已停录并完成 ASR），本地确认状态停留 RECORDING；**未擅自修改代码，缺陷待修**）**
+**状态**: 🟢 **Step 1 完成（WAV 格式 PASS；真实麦克风有效语音第 3 轮 ✅ PASS）；Step 2A PC 端录音 HTTP 控制服务 ✅ 已实现并通过自动测试（39/39）；Step 2B ESP32 固件侧 PLAY→PC 控制代码 ✅ 已实现并 `idf.py build` 通过；Step 2C 实机联调 ✅ 已烧录并实测通过（PLAY→start→recording→stop→idle 双端取证，含一次瞬时连接失败的如实记录）；Step 3A 本地 Whisper ASR 模块（`service/asr_whisper.py`）✅ 已实现并通过自动测试（18/18，回归 190 通过）；真实语音识别 ✅ 已执行（stdlib `wave` 解码路径经实测不依赖 FFmpeg；第 2 轮 PASS——base/zh/cpu 纯推理 0.68s，转录非空且语义对应；第 1 轮窗口内无有效语音、转录为空，已如实记录）；Step 3B 录音停止后自动提交后台本地 ASR ✅ 已实现并通过自动测试（`service/test_voice_control_server.py` 58/58，新增 19 项 ASR 相关；`pytest service/` 回归 209 passed + 6 subtests）；Step 3C 真实端到端验证 ✅ 已实测（2026-10-11：ESP32 两次 PLAY→PC 录音→自动后台 Whisper base/zh/cpu 识别 success，START 双端取证成功；ASR 文本「現在測試Whisper本地與音識別」非空且中段语义对应、**前半句未识别，如实记录**；发现真实缺陷：Step 3B 的 stop 响应新增 asr 块后超 ESP32 512B 缓冲 → 固件侧 STOP 契约校验失败（RESPONSE_INVALID，HTTP=200；PC 实际已停录并完成 ASR），本地确认状态停留 RECORDING；**未擅自修改代码，缺陷待修**）；Step 3D 修复该契约缺陷 ✅（2026-10-11：控制接口与查询接口解耦——`POST /api/voice/stop` 改为**紧凑控制回执**（ok/state/recording/wav.frames/wav.duration_seconds/asr.status），完整 wav/asr 调试信息保留在 `GET /api/voice/status`；真实量级 619200 帧场景实测响应 **120B ≪ 512B**，不再截断；固件契约字段核对满足，**无需改 ESP32 固件**；`service/test_voice_control_server.py` 62/62，`pytest service/` 回归 213 passed + 6 subtests；改动仅限 `service/` 两个文件与本文档，未烧录、未真实联调）**
 **分支**: `feature/week05-voice-interaction`（本地分支，无远端 upstream）
 **基线**: `7dd788b` — Merge pull request #4 (origin/main)
 
@@ -528,7 +528,76 @@ idf.py build
 
 - **端到端链路（PLAY → PC 录音 → 自动后台 Whisper 中文识别）成立并实测通过**：START 双端取证成功 + ASR `success` + 转录文本非空。
 - **ASR 文本与期望句的不一致如实记录**（前段漏识、末段音近误识），不宣称 100% 整句通过。
-- **1 个真实缺陷待处理**：stop 响应超 ESP32 512B 缓冲 → 固件侧 STOP 契约确认失败、本地状态停留 RECORDING（见上，Step 3B 引入的契约回归，后续步骤处理）。
+- **Step 3C 发现的真实缺陷（stop 响应超 ESP32 512B 缓冲 → 固件侧 STOP 契约失败）已在 Step 3D 修复**：控制/查询接口解耦，见下方 Step 3D 段。
+
+## Step 3D 状态 — 修复 stop 响应超 ESP32 512B 缓冲的契约缺陷（2026-10-11）
+
+> 目标：把「控制接口」与「查询接口」解耦，使 `POST /api/voice/stop` 的响应适配
+> ESP32 固件 `voice_button.c` 的 512B 响应缓冲（`VOICE_RESP_BUF_SIZE`），修复
+> Step 3C 实测的固件侧 STOP 契约确认失败（PC 已停录并完成 ASR，但 ESP32 因响应
+> 截断判定 `RESPONSE_INVALID`、本地确认状态停留 RECORDING）。
+
+### 根因
+
+Step 3B 让 `POST /api/voice/stop` 返回完整 `wav` 元数据（path/samplerate/channels/
+sample_width_bytes/size_bytes/status_flags/…）+ 完整 `asr` 快照（status/text/wav_path/
+model/language/task/device/duration_seconds/error）+ 中文 message。响应体超过
+511B（ESP32 报告 `len=511, truncated=1`），超出 512B 缓冲即被截断，cJSON 解析出
+「非合法 JSON 对象」→ 判定契约不符。
+
+### 修改（Step 3D）
+
+| 文件 | 改动 |
+|------|------|
+| `service/voice_control_server.py` | `POST /api/voice/stop` 改为**紧凑控制回执**：只返回 `ok` / `state` / `recording` / `wav.frames` / `wav.duration_seconds` / `asr.status`；**不再返回** `message`、完整 `wav` 元数据（`info.as_dict()`）、完整 `asr` 快照（`runner.snapshot()`）。新增常量 `ESP32_RESP_BUFFER_BYTES = 512`（对齐固件 `VOICE_RESP_BUF_SIZE`，未来加字段须在此约束下评估）。`GET /api/voice/status` **不变**，继续提供完整 `last_recording` / `asr`（含 text、duration 等调试信息） |
+| `service/test_voice_control_server.py` | 更新 stop 契约相关断言到紧凑回执（`test_stop_returns_wav_metadata`→`test_stop_returns_compact_ack`，3 处依赖 stop 响应 `asr.wav_path` 的断言改由 `GET /status` 查询）；新增 `VoiceStopContractTest`（4 项）：成功/失败响应字节数 ≤ 512B（成功用真实量级 619200 帧）、stop 仍触发后台 ASR、status 仍返回完整调试信息；顶层 docstring 记录 Step 3D 覆盖 |
+| `weeks/week05/STATE.md` | 本文档记录本步 |
+
+### 新旧 stop 成功响应对比
+
+| 项 | 旧（Step 3B） | 新（Step 3D） |
+|----|---------------|---------------|
+| `ok` / `state` / `recording` | ✅ | ✅（不变） |
+| `message`（中文长说明） | ✅ | ❌ 移除 |
+| `wav` | 完整 8 字段元数据（path 等） | 仅 `frames` + `duration_seconds` |
+| `asr` | 完整 9 字段快照（含 text/wav_path/error） | 仅 `status` |
+| 实测字节数 | >511（ESP32 报告 `len=511, truncated=1`） | **120 B**（38.7s 真实量级场景实测） |
+| ESP32 契约必需字段（JSON 对象/ok/state/wav 对象/frames/duration_seconds） | 满足但被截断 | 满足 ✓（无截断） |
+
+新响应实测（Flask test client 原始 UTF-8 字节，真实量级 619200 帧）：
+`{"asr":{"status":"running"},"ok":true,"recording":false,"state":"idle","wav":{"duration_seconds":38.7,"frames":619200}}` → **120 bytes**。
+
+固件契约兼容性核对（`voice_button.c voice_post_action`）：stop 成功路径只要求
+响应是 JSON 对象、`ok==true`、`state=="idle"`、`wav` 为对象且读取
+`wav.frames` / `wav.duration_seconds`（用于日志关联）——新响应**全部满足，无需修改
+ESP32 固件**（`main/voice_button.c/h` 无改动）。
+
+### 验证结果（自动测试，未实机联调）
+
+| 验证项 | 结果 | 证据 |
+|--------|------|------|
+| `service/test_voice_control_server.py` | ✅ PASS 62/62 | 隔离虚拟环境 `D:\AIinteraction-venvs\week05-audio`（flask 3.1.3 / pytest 9.1.1） |
+| `pytest service/` 回归 | ✅ 213 passed + 6 subtests | 同上 |
+| stop 成功响应字节数 ≤ 512B | ✅ 120 B（真实量级 619200 帧） | `VoiceStopContractTest::test_stop_success_response_fits_esp32_buffer` |
+| stop 失败响应字节数 ≤ 512B（409 / 422） | ✅ | `VoiceStopContractTest::test_stop_failure_responses_fit_esp32_buffer` |
+| stop 成功仍触发后台 ASR、status 可查 text | ✅ | `VoiceStopContractTest::test_stop_success_still_triggers_background_asr` |
+| status 仍返回完整 last_recording / asr 调试信息 | ✅ | `test_stop_returns_compact_ack` + `test_status_after_stop_returns_full_debug_info` |
+
+### 范围与合规（Step 3D）
+
+- ✅ 未修改 Whisper（`service/asr_whisper.py` 不动）、未修改 ESP32 固件（契约核对满足，
+  无需固件变更）、未烧录、未真实联调、未进入 LLM/TTS
+- ✅ 修改仅限 `service/voice_control_server.py`、`service/test_voice_control_server.py`、
+  `weeks/week05/STATE.md` 三个文件
+- ✅ 一次本地 commit，未 push；未读取/输出 `sdkconfig` 与 Wi-Fi 凭据
+
+### 结论
+
+- Stop 响应在真实量级下从「>511B 被截断」降为 **120B**，留出约 3.3 倍余量给契约字段
+  演进；完整调试信息由 `GET /api/voice/status` 保留，控制/查询职责清晰分离。
+- 本次为 **PC 侧契约预防性修复**，**尚未在实机重新联调**：固件解析逻辑对新响应预期
+  满足（契约字段逐一核对），但真实 PLAY→STOP 双端取证属于后续实测步骤，本步不做
+  （遵循本步范围约束）。
 
 ## 架构设计状态
 
@@ -551,7 +620,7 @@ idf.py build
 |------|------|
 | PC 音频采集验证 (Step 1) | 🟡 代码 + 自动测试完成；真实录音格式 PASS；有效语音采集（第 3 轮）**PASS**；ASR（Whisper）**未接入** |
 | 按键事件→PC 链路 (Step 2) | 🟢 **完成**：Step 2A「PC 端录音 HTTP 控制服务」✅ 自动测试 39/39；Step 2B「ESP32 按键事件→PC 控制」固件侧代码 ✅ 已实现并编译通过（`idf.py build`，0 warning）；**Step 2C 实机联调 ✅ 已烧录并实测通过**（两次 PLAY→start→recording→stop→idle 双端取证，含一次瞬时连接失败的如实记录，详见上方 Step 2C 段） |
-| ASR 接入 (Step 3) | 🟢 **Step 3A/3B/3C 均按实测完成**：Step 3A 本地 Whisper ASR 模块（`service/asr_whisper.py`）代码+自动测试 18/18，真实语音识别已执行（第 2 轮 PASS，base/zh/cpu 纯推理 0.68s；第 1 轮转录为空已如实记录；stdlib wave 解码不依赖 FFmpeg 经实测）；Step 3B 录音停止后自动提交后台本地 ASR ✅ 自动测试 58/58（回归 209 通过）；**Step 3C 真实端到端验证 ✅ 已实测（2026-10-11）**：PLAY→PC 录音→自动 Whisper base/zh/cpu 识别 success，START 双端取证；转录文本非空、中段语义对应、**前段未识别如实记录**；**发现 stop 响应超 ESP32 512B 缓冲导致固件侧 STOP 契约失败，待修**（详见 Step 3C 段）；不同口音/噪声鲁棒性待后续验证；Step 4 LLM NL→JSON 未开始 |
+| ASR 接入 (Step 3) | 🟢 **Step 3A/3B/3C 均按实测完成，Step 3D 契约缺陷已修复**：Step 3A 本地 Whisper ASR 模块（`service/asr_whisper.py`）代码+自动测试 18/18，真实语音识别已执行（第 2 轮 PASS，base/zh/cpu 纯推理 0.68s；第 1 轮转录为空已如实记录；stdlib wave 解码不依赖 FFmpeg 经实测）；Step 3B 录音停止后自动提交后台本地 ASR ✅ 自动测试 58/58（回归 209 通过）；**Step 3C 真实端到端验证 ✅ 已实测（2026-10-11）**：PLAY→PC 录音→自动 Whisper base/zh/cpu 识别 success，START 双端取证；转录文本非空、中段语义对应、**前段未识别如实记录**；**发现 stop 响应超 ESP32 512B 缓冲导致固件侧 STOP 契约失败**（详见 Step 3C 段），**Step 3D 已修复**（控制/查询接口解耦，见 Step 3D 段）；不同口音/噪声鲁棒性待后续验证；Step 4 LLM NL→JSON 未开始 |
 | 语言模型 NL→JSON (Step 4) | ⏳ 未开始 |
 | TTS 播报 (Step 5) | ⏳ 未开始 |
 | 全链路串联 (Step 6) | ⏳ 未开始 |
