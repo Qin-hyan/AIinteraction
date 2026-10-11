@@ -198,6 +198,25 @@ idf.py -p COM端口 flash monitor
 | **CSV 导出** | ✅ **人工验证通过** | 导出 29 条、12 列、全部为 `cadence`，字段完整 |
 
 
+#### Week 05 — 按键说话（语音输入链路）✅（开发分支 `feature/week05-voice-interaction`，2026-10-11 收尾）
+
+| 模块 | 状态 | 验证方式 |
+|------|------|---------|
+| PC 音频采集（`service/audio_capture.py`） | ✅ 代码 + 自动测试 31/31 + 真实麦克风录音格式 PASS | 模拟流 + 真实设备实测 |
+| PC 录音 HTTP 控制服务（`service/voice_control_server.py`） | ✅ Step 2A 自动测试 39/39；Step 3B 追加 ASR 相关 58/58；Step 3D 62/62 | Python 自动测试（pytest 回归 213 passed） |
+| ESP32 PLAY 按键→PC 控制（`main/voice_button.c/h`） | ✅ 已实现并 `idf.py build` 通过，Step 2C 实机联调通过 | 实机双端取证 |
+| 本地 Whisper ASR（`service/asr_whisper.py`） | ✅ 18/18 自动测试；真实中文语音识别 PASS（stdlib `wave` 解码不依赖 FFmpeg） | 假模型 + 真实语音 |
+| 录音停止自动后台 ASR（Step 3B） | ✅ 已实现并通过自动测试 | Python 自动测试 |
+| **完整链路（Step 3I 最终实机验证）** | ✅ **PLAY→PC 录音→自动后台 Whisper→STOP→ESP32 回 IDLE 双端闭环验证 PASS**（2026-10-11：START 200 + STOP 200 + 本地 IDLE，无截断/无传输层超时/无栈溢出/无 Brownout） | 实机（ESP32 × PC 双端日志取证） |
+
+**Week 05 处理的关键问题（记录在 [weeks/week05/STATE.md](weeks/week05/STATE.md)）**：
+- Step 3C→3D：stop 响应超 ESP32 512B 缓冲 → 控制/查询接口解耦，紧凑回执 ≤120B
+- Step 3E→3F：`btn_scan` 任务栈溢出（2048→4096）实机复核通过
+- Step 3F/G→3I：传输层超时与 Brownout 均未在最终验证中复现
+
+⚠️ **Week 05 未完成能力（如实标注，不得声称已完成）**：Step 4 语言模型 NL→JSON、Step 5 TTS 播报、Step 6 全链路串联、Step 7 状态显示与 LED 反馈、Step 8 异常处理与文字对照测试均**未开始**；语音仅实现「按钮开始/结束录音 → 音频 → 任务文本（ASR）」输入侧，输出侧语音播报（TTS）尚未实现。
+
+
 ### 仍待补验
 
 | 项目 | 说明 |
@@ -234,16 +253,21 @@ AIinteraction/
 │   ├── http_server.c/h       # HTTP 服务器 + Web 仪表盘 + REST API
 │   ├── camera_app.c/h        # OV2640 摄像头驱动
 │   ├── help_event.c/h        # Week 03：按键→LED→Web 物理反馈闭环
-│   └── help_uplink.c/h       # Week 03：事件 VPS 上行推送（已集成至 main.c；真实 VPS 验收待完成）
-├── service/                  # Python 工具链（Week 04，纯标准库）
-│   ├── task_schema.py        # IntentEnum / TaskContract / JSON Schema
-│   ├── validator.py          # 三步校验：JSON 解析 → Schema → 意图契约
-│   ├── query_last.py         # 读取 ESP32 设备最近一次观测
-│   ├── trigger_collect.py    # 下发采集指令并轮询结果
-│   ├── task_dispatcher.py    # 受限任务分发入口
-│   ├── result_formatter.py   # 工具结果格式化为可读文本
-│   ├── task_pipeline.py      # 任务处理入口（串联 dispatch → format）
-│   └── test_*.py             # 单元/集成测试（共 102 项）
+│   ├── help_uplink.c/h       # Week 03：事件 VPS 上行推送（已集成至 main.c；真实 VPS 验收待完成）
+│   └── voice_button.c/h      # Week 05：PLAY 按键 → PC 录音 HTTP 控制（按键式半双工）
+├── service/                  # Python 工具链
+│   ├── task_schema.py        # Week 04：IntentEnum / TaskContract / JSON Schema
+│   ├── validator.py          # Week 04：三步校验：JSON 解析 → Schema → 意图契约
+│   ├── query_last.py         # Week 04：读取 ESP32 设备最近一次观测
+│   ├── trigger_collect.py    # Week 04：下发采集指令并轮询结果
+│   ├── task_dispatcher.py    # Week 04：受限任务分发入口
+│   ├── result_formatter.py   # Week 04：工具结果格式化为可读文本
+│   ├── task_pipeline.py      # Week 04：任务处理入口（串联 dispatch → format）
+│   ├── audio_capture.py      # Week 05：PC 音频采集（sounddevice + stdlib wave）
+│   ├── voice_control_server.py # Week 05：PC 录音 HTTP 控制服务 + 后台自动 Whisper ASR
+│   ├── asr_whisper.py        # Week 05：本地 Whisper ASR 模块（base/zh/transcribe）
+│   ├── requirements-*.txt    # Week 05：PC 端音频/ASR 依赖清单
+│   └── test_*.py             # 单元/集成测试（Week 04 共 102 项；Week 05 追加含 ASR/录音/服务测试）
 ├── partitions.csv            # 8MB Flash 分区表
 ├── CMakeLists.txt            # 顶层 CMake 项目
 ├── sdkconfig.defaults        # 公开配置模板（含 Wi-Fi 占位符）
@@ -267,11 +291,11 @@ AIinteraction/
 | 文档 | 内容 |
 |------|------|
 | [AGENT_MEMORY.md](AGENT_MEMORY.md) | 项目架构、已完成模块、已确认硬件事实、关键接口、命名约定、Git 基线 |
-| [PROJECT_STATE.md](PROJECT_STATE.md) | 当前进度、Week 03/04 详细状态、已知问题（Brownout、编译修复） |
+| [PROJECT_STATE.md](PROJECT_STATE.md) | 当前进度、Week 03/04/05 详细状态、已知问题（Brownout、传输层超时等） |
 | [DECISIONS.md](DECISIONS.md) | 技术决策记录 |
 | [TEST_LOG.md](TEST_LOG.md) | 完整测试记录（版本、输入、预期、实际、PASS/FAIL） |
 | [weeks/week04/STATE.md](weeks/week04/STATE.md) | Week 04 详细设计、测试覆盖、验证结果 |
-| [weeks/week05/STATE.md](weeks/week05/STATE.md) | Week 05 详细状态（分支 `feature/week05-voice-interaction`，功能实现尚未开始） |
+| [weeks/week05/STATE.md](weeks/week05/STATE.md) | Week 05 详细状态（分支 `feature/week05-voice-interaction`；按键说话链路 PLAY→录音→Whisper ASR→STOP→回 IDLE 已完成实机双端闭环验证；TTS/LLM/全链路未完成） |
 | [每周计划/](每周计划/) | 18 周课程计划 HTML |
 
 ### HTTP API 速查
@@ -303,7 +327,7 @@ IDLE → SUBMITTED(已提交·已受理) → RECEIVED(设备已接收)
 | `main` | 最新合并版本 `7dd788b`（PR #4）— 已包含 Week 01–04 完整代码，与 `origin/main` 同步 |
 | `week02-stable` (tag) | **稳定基线** — 12 项实机验证全 PASS |
 | `feature/week04-natural-language` | 已合并的**历史分支**（PR #4 → `main` `7dd788b`；分支 HEAD `0b4b323` 保留） |
-| `feature/week05-voice-interaction` | **当前** — Week 05 开发分支（基线 `7dd788b`，无远端 upstream、**尚未推送**；仅有**文档提交**，尚无 Week 05 功能实现提交） |
+| `feature/week05-voice-interaction` | **当前** — Week 05 开发分支（基线 `7dd788b`）；含完整功能实现：PC 音频采集/录音 HTTP 控制服务/本地 Whisper ASR 模块 + ESP32 PLAY 按键语音控制；**2026-10-11 收尾推送至 `origin/feature/week05-voice-interaction`**；语音输入链路实机双端闭环验证通过（Step 3I）；TTS/LLM/全链路播报未完成 |
 
 ---
 

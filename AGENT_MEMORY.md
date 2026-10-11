@@ -44,7 +44,10 @@ AIinteraction/
 | 摄像头 OV2640 | `camera_app.c/h` | ✅ Week 02 | JPEG 抓拍, PSRAM 存储, 15 次连续验证 |
 | 物理反馈 | `help_event.c/h` | ✅ Week 03 | 按键→LED→Web 闭环, 去抖 FSM (30Hz), 快速连按抑制通过 |
 | VPS 上行推送 | `help_uplink.c/h` | 🔧 Week 03 | help_event_t 序列化为 JSON → HTTP POST；**异步接口已集成 main.c**（`29dd72d`：`help_uplink_start` / `request_send` / `poll`），**真实 ESP32→VPS 端到端实机验收未完成** |
-| 语音控制（PLAY→PC） | `voice_button.c/h` | 🟡 Week 05 | PLAY 按键 → `esp_http_client` POST `/api/voice/start` \| `/api/voice/stop`；独立任务+队列（非阻塞）；Kconfig `CONFIG_VOICE_PC_URL`（空 = 功能关闭）；**固件侧已编译通过（0 warning），未烧录、未做 ESP32→PC 真实请求** |
+| 语音控制（PLAY→PC） | `voice_button.c/h` | ✅ Week 05 | PLAY 按键 → `esp_http_client` POST `/api/voice/start` \| `/api/voice/stop`；独立任务+队列（非阻塞）；Kconfig `CONFIG_VOICE_PC_URL`（空 = 功能关闭）；**已烧录并经 Step 3I 真实双端闭环验证（START/STOP 双端 HTTP 200、ESP32 本地回 IDLE）** |
+| PC 录音控制服务 | `service/voice_control_server.py` | ✅ Week 05 | Flask HTTP 控制录音（start/stop/status）；stop 返回紧凑回执（≤120B）；停录后自动后台 Whisper ASR；自动测试 62/62（Step 3D 版） |
+| PC 音频采集 | `service/audio_capture.py` | ✅ Week 05 | sounddevice 采集 16000Hz/1ch/int16 → stdlib `wave` 写 WAV；自动测试 31/31 + 真实麦克风 PASS |
+| 本地 Whisper ASR | `service/asr_whisper.py` | ✅ Week 05 | 本地推理 `base/zh/transcribe/cpu`，stdlib `wave` 解码不依赖 FFmpeg；自动测试 18/18 + 真实中文语音 PASS |
 | 任务契约校验 | `service/` (Python) | ✅ Week 04 | IntentEnum, TaskContract, JSON Schema, 严格校验, 24 单元测试全部 PASS |
 | query_last 工具 | `service/query_last.py` | ✅ Week 04 | 读取 `ESP32_BASE_URL` 环境变量 → HTTP GET `/api/observation/last`，纯标准库，mock 测试 13 PASS |
 | trigger_collect 工具 | `service/trigger_collect.py` | ✅ Week 04 | POST `/api/collect` → 轮询 `/api/collect/status` 直至完成/失败/超时，
@@ -124,4 +127,4 @@ IDLE → SUBMITTED → RECEIVED → COMPLETED / FAILED
 | `feature/repo-cleanup` | 仓库清洁分支（已合并） |
 | `feature/week03-physical-feedback` | Week 03 开发分支（已合并，PR #3 → `ec9c94b`） |
 | `feature/week04-natural-language` | Week 04 开发分支（已合并，PR #4 → `7dd788b`；分支 HEAD `0b4b323` 保留） |
-| `feature/week05-voice-interaction` | **当前** Week 05 开发分支（基线 `7dd788b`，无远端 upstream；Week 05 已入仓提交涵盖：文档（`8a522b5`、`575aba4` 等）+ Step 1 PC 音频采集 + Step 2A PC 录音控制服务 + Step 2B ESP32 语音控制固件代码；最新提交以 `git log --oneline` 为准） |
+| `feature/week05-voice-interaction` | **当前** Week 05 开发分支（基线 `7dd788b`）；Week 05 功能（PC 音频采集/录音 HTTP 控制服务/本地 Whisper ASR/ESP32 PLAY 语音控制）已实现并经 Step 3I 实机双端闭环验证（2026-10-11）；2026-10-11 收尾推送至 `origin/feature/week05-voice-interaction` |

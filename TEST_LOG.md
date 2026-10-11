@@ -634,3 +634,37 @@ if (help_button_get_pending(&btn)) {
 | 时间字段语义 | 相对运行时间（ms），`time_quality: "relative"`，无日历时间伪装 |
 | 字段缺失 | 无数据缺失，每行 12 列完整 |
 | 核验结论 | ✅ 导出格式规范，数据字段完整，结构无异常 |
+
+---
+
+## Week 05 — 语音输入链路最终实机验证 (2026-10-11)
+
+**分支**: `feature/week05-voice-interaction`
+**版本**: 收尾前 HEAD `e44eff3`（Step 3I 验证明细见下方；版本以 `State.md` 与 `README.md` 收尾记录为准）
+**验证方式**: 实机（ESP32-S3-EYE COM10 ↔ PC 语音服务 10.132.124.130:8080）双端日志取证
+**结果**: ✅ **双端闭环 PASS / 0 FAIL / 无崩溃**
+
+| # | 测试项 | 预期 | 实际 | 结果 |
+|---|--------|------|------|------|
+| 1 | ESP32 PLAY① → PC `POST /api/voice/start` | HTTP 200 | `10.132.124.63 POST /api/voice/start 200`；ESP32 `PC 已受理：HTTP 200, state=recording` → 本地 RECORDING | ✅ PASS |
+| 2 | PC 录音 WAV 落盘 | 真实音频帧 | wav `frames=294400, 18.40 s`（ESP32 回执一致） | ✅ PASS |
+| 3 | ESP32 PLAY② → PC `POST /api/voice/stop` | HTTP 200 | `10.132.124.63 POST /api/voice/stop 200`；ESP32 `PC 已受理：HTTP 200, state=idle` | ✅ PASS |
+| 4 | ESP32 本地确认状态回 IDLE | IDLE | ESP32 `本地确认状态 IDLE（wav: frames=294400, 18.40 s）` | ✅ PASS |
+| 5 | 无截断 / 无传输层超时 / 无栈溢出 / 无 Brownout | 均不出现 | 全程 0 次 `RESPONSE_INVALID` / `ESP_ERR_HTTP_EAGAIN` / `stack overflow` / `BOD` / `Brownout` | ✅ PASS |
+| 6 | ASR 自动后台提交（Step 3B 机制） | STOP 后触发 | STOP 200 后服务继续响应；ASR 转写文本证据以 Step 3C/3F/3G 已取证记录为准（本轮日志未保留 asr 响应体） | ✅ 机制已实现（Step 3B 自动测试 58/58） |
+
+**关键证据来源**（仓库外，验后保留目录 `%TEMP%\week05_step3i\`）:
+- PC 服务日志 `server.err.log`：`10.132.124.63 POST /api/voice/start 200`（16:10:33）、`10.132.124.63 POST /api/voice/stop 200`（16:10:55）
+- ESP32 串口日志 `serial.log`（UTF-8）：`W3-EVENT: btn pressed: PLAY` → `voice-193710-0001 START` → `PC 已受理 HTTP 200 state=recording` → 本地 RECORDING → `voice-213071-0002 STOP` → `PC 已受理 HTTP 200 state=idle` → 本地 IDLE
+
+**对比既往失败项（当日处理链，详见 `weeks/week05/STATE.md`）**:
+| 既往失败项 | Step 3I 是否复现 | 说明 |
+|-----------|-----------------|------|
+| Step 3C stop 响应截断（RESPONSE_INVALID） | ❌ 未复现 | Step 3D 控制/查询解耦后不再超 512B |
+| Step 3F `ESP_ERR_HTTP_EAGAIN` 传输层超时 | ❌ 未复现 | 本轮 STOP 在 5s 内收到完整 200（单次样本） |
+| Step 3G Brownout 硬件复位 | ❌ 未复现 | 全程无 BOD；供电问题仍留档 |
+| Step 3E btn_scan 栈溢出 | ❌ 未复现 | 4096B 栈经 3F/3I 两轮实机均未复现 |
+
+**合规**: 录音 WAV 已清理；仓库内无 WAV、无临时文件；未修改代码/依赖/固件；未读取 `sdkconfig` 与 Wi-Fi 凭据（详见 `weeks/week05/STATE.md` Step 3I 段）。
+
+> ⚠️ **Week 05 未完成能力（如实标注）**：Step 4 LLM NL→JSON、Step 5 TTS 播报、Step 6 全链路串联、Step 7 状态显示与 LED 反馈、Step 8 异常与文字对照测试均未开始。
