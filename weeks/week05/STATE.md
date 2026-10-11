@@ -1,6 +1,6 @@
 # Week 05 State — 接通按键说话与语音播报
 
-**状态**: 🟢 **Step 1 完成（WAV 格式 PASS；真实麦克风有效语音第 3 轮 ✅ PASS）；Step 2A PC 端录音 HTTP 控制服务 ✅ 已实现并通过自动测试（39/39）；Step 2B ESP32 固件侧 PLAY→PC 控制代码 ✅ 已实现并 `idf.py build` 通过；Step 2C 实机联调 ✅ 已烧录并实测通过（PLAY→start→recording→stop→idle 双端取证，含一次瞬时连接失败的如实记录）；Step 3A 本地 Whisper ASR 模块（`service/asr_whisper.py`）✅ 已实现并通过自动测试（18/18，回归 190 通过）；真实语音识别 ✅ 已执行（stdlib `wave` 解码路径经实测不依赖 FFmpeg；第 2 轮 PASS——base/zh/cpu 纯推理 0.68s，转录非空且语义对应；第 1 轮窗口内无有效语音、转录为空，已如实记录）；Step 3B 录音停止后自动提交后台本地 ASR ✅ 已实现并通过自动测试（`service/test_voice_control_server.py` 58/58，新增 19 项 ASR 相关；`pytest service/` 回归 209 passed + 6 subtests）；本阶段未做真实硬件联调（真实 PLAY→录音→Whisper 留给下一阶段）**
+**状态**: 🟢 **Step 1 完成（WAV 格式 PASS；真实麦克风有效语音第 3 轮 ✅ PASS）；Step 2A PC 端录音 HTTP 控制服务 ✅ 已实现并通过自动测试（39/39）；Step 2B ESP32 固件侧 PLAY→PC 控制代码 ✅ 已实现并 `idf.py build` 通过；Step 2C 实机联调 ✅ 已烧录并实测通过（PLAY→start→recording→stop→idle 双端取证，含一次瞬时连接失败的如实记录）；Step 3A 本地 Whisper ASR 模块（`service/asr_whisper.py`）✅ 已实现并通过自动测试（18/18，回归 190 通过）；真实语音识别 ✅ 已执行（stdlib `wave` 解码路径经实测不依赖 FFmpeg；第 2 轮 PASS——base/zh/cpu 纯推理 0.68s，转录非空且语义对应；第 1 轮窗口内无有效语音、转录为空，已如实记录）；Step 3B 录音停止后自动提交后台本地 ASR ✅ 已实现并通过自动测试（`service/test_voice_control_server.py` 58/58，新增 19 项 ASR 相关；`pytest service/` 回归 209 passed + 6 subtests）；Step 3C 真实端到端验证 ✅ 已实测（2026-10-11：ESP32 两次 PLAY→PC 录音→自动后台 Whisper base/zh/cpu 识别 success，START 双端取证成功；ASR 文本「現在測試Whisper本地與音識別」非空且中段语义对应、**前半句未识别，如实记录**；发现真实缺陷：Step 3B 的 stop 响应新增 asr 块后超 ESP32 512B 缓冲 → 固件侧 STOP 契约校验失败（RESPONSE_INVALID，HTTP=200；PC 实际已停录并完成 ASR），本地确认状态停留 RECORDING；**未擅自修改代码，缺陷待修**）**
 **分支**: `feature/week05-voice-interaction`（本地分支，无远端 upstream）
 **基线**: `7dd788b` — Merge pull request #4 (origin/main)
 
@@ -480,6 +480,56 @@ idf.py build
 
 **未做（如实记录）**：本阶段不做真实硬件联调；真实 PLAY→录音→Whisper 全流程验证与 ESP32 实测留给下一阶段。
 
+## Step 3C 状态 — 真实 ESP32→PC 录音→自动 Whisper 中文识别端到端验证（2026-10-11）
+
+> 本步只做实测与状态记录，**未新增/未修改任何业务代码、依赖或固件**。
+
+### 环境前提（均实证）
+
+| 项 | 结果 | 证据 |
+|----|------|------|
+| 分支 / HEAD / 工作区 | ✅ `feature/week05-voice-interaction` @ `fef3705`，工作区干净 | `git branch --show-current` / `git rev-parse HEAD` / `git status --porcelain` |
+| PC LAN 地址 | ✅ `10.132.124.130`（WLAN） | `ipconfig` |
+| 8080 端口占用 | ℹ️ `127.0.0.1:8080` = PlatformIO MCP Dashboard（node.exe PID 124036，**未终止**）；本次测试服务绑定 `10.132.124.130:8080` 与之共存 | `netstat -ano` + 进程命令行复核 |
+| PC 服务版本与运行方式 | ✅ 当前 HEAD（Step 3B 版）代码；venv `D:\AIinteraction-venvs\week05-audio`（flask 3.1.3 / whisper 20250625 / torch 2.6.0+cpu） | 启动命令 `python -m service.voice_control_server --host 10.132.124.130 --port 8080`（PID 94308→150168，Windows venv shim 机制）；`GET /api/voice/status` HTTP 200 且含 `asr` 块 |
+| ESP32 串口 | ✅ 唯一 `VID/PID 303A:1001` → **COM10** | PnP 枚举（其余为蓝牙串口，不相关） |
+| ESP32 固件 | ✅ 不重新构建/不烧录 | `main/` 自 Step 2C（`a6fa258`）至 HEAD **无任何改动** → 与已烧录固件匹配 |
+
+### 端到端实测流程图与双端证据
+
+录音由 12:49:46 开始、约 12:50:24 保存 WAV，ASR 于 12:50:54 完成。串口日志存于仓库外 `%TEMP%\week05_step3c_real\serial.log`（后随清理删除）。
+
+| 阶段 | PC HTTP 证据（`GET /api/voice/status`） | ESP32 串口证据（UTF-8） | 判定 |
+|------|----------------------------------------|------------------------|------|
+| 第 1 次 PLAY（START） | 12:49:46 `state=recording` | `W3-EVENT: btn pressed: PLAY` → `[voice-54298-0001] 执行 PLAY 语音请求：START（POST http://10.132.124.130:8080/api/voice/start）` → `[voice-54298-0001] PC 已受理：HTTP 200, state=recording` → `已确认：…本地确认状态 RECORDING` | ✅ 双端成功 |
+| 第 2 次 PLAY（STOP） | 12:50:26 `state=idle`、`asr.status=running`；WAV 已保存（LastWriteTime 12:50:24） | `btn pressed: PLAY` → `[voice-95023-0002] 执行 PLAY 语音请求：STOP（POST …/api/voice/stop）` → ⚠️ `E (98707) 2xx 但响应体不是合法 JSON 对象（len=511, truncated=1）→ 不更新本地状态` → `请求 STOP 失败：RESPONSE_INVALID（HTTP=200, pc_error=(无)）；本地确认状态保持 RECORDING` | 🟡 **PC 成功；ESP32 侧契约确认失败**（见下方缺陷） |
+| ASR 完成 | 12:50:54 `asr.status=success`；`text` / `model` / `device` 见下 | — | ✅ ASR success |
+
+> **实测发现的真实缺陷（记录待修，未擅自修改任何代码）**：Step 3B 使 `POST /api/voice/stop` 响应新增 `asr` 块后，响应体长度超过 ESP32 端 512 字节响应缓冲（`voice_button.c` 响应缓冲 512B；ESP32 报告 `len=511, truncated=1`）。**PC 实际已停止录音**（`state=idle`、WAV 已落盘、ASR 已自动提交并 success），但 **ESP32 因响应截断判定「响应不符合契约」→ 本地确认状态未更新（停留 RECORDING）**。即：服务器受理=成功、ASR 链路成功；**设备接收确认在 STOP 侧失败**。属 Step 3B 改动引入的固件/PC 响应契约回归，本步不修（本步仅实测与记录）。
+
+### ASR 结果与录音元数据
+
+- 期望句：**查看最近的加速度数据。现在测试 Whisper 本地语音识别。**
+- **真实转录文本**：`現在測試Whisper本地與音識別`
+- 结果分析（如实）：转录**非空**且**中段语义对应**（「现在测试 Whisper 本地[语音]识别」）；`语音识别`→`與音識別` 为 base 小模型常见音近误识（与 Step 3A 实测同类）；**前段「查看最近的加速度数据」未出现在转录中**（录音 38.7 s 含启动后等待/静音段，实际识别出窗口内的后半句）。**不宣称完成整句识别**。
+- 模型 / 语言 / 任务 / 设备：`base` / `zh` / `transcribe` / `cpu`
+- 推理耗时：`asr.duration_seconds = 6.825`（38.7 s 音频 CPU 纯推理）；含首次模型加载的整体 wall 时间 ≈ 28 s（12:50:26 running → 12:50:54 success）
+- WAV 元数据（PC `last_recording` 与 `wave` 模块双源一致）：`voice_20261011_124945_372.wav`；`1 ch / 16000 Hz / 16 bit（sampwidth=2）/ 619200 帧 / 38.7 s / 1,238,444 B / status_flags=[]`（文件头 RIFF/PCM fmt=1，未压缩；PC 返回 `frames=619200` 与文件头一致）
+
+### 清理与合规
+
+- ✅ 本次录音 WAV 已删除（`%TEMP%\voice_task` 测试前不存在，测试后整目录删除确认消失）
+- ✅ 串口捕获进程已停用（COM10 已释放）；本次测试启动的 PC 服务实例已停止（进程 94308/150168 均已退出）
+- ✅ 仓库外临时目录 `%TEMP%\week05_step3c_real`（服务日志 / 串口日志 / 临时脚本）已删除
+- ✅ 仓库内无 WAV、无临时探针文件（`git status` 干净；递归 `*.wav` 检查为空）
+- ✅ 未触碰 PlatformIO MCP Dashboard（PID 124036）等无关进程；未读取/输出 `sdkconfig` 与 Wi-Fi 凭据；未修改业务代码、依赖、ESP32 固件与防火墙
+
+### 结论
+
+- **端到端链路（PLAY → PC 录音 → 自动后台 Whisper 中文识别）成立并实测通过**：START 双端取证成功 + ASR `success` + 转录文本非空。
+- **ASR 文本与期望句的不一致如实记录**（前段漏识、末段音近误识），不宣称 100% 整句通过。
+- **1 个真实缺陷待处理**：stop 响应超 ESP32 512B 缓冲 → 固件侧 STOP 契约确认失败、本地状态停留 RECORDING（见上，Step 3B 引入的契约回归，后续步骤处理）。
+
 ## 架构设计状态
 
 | 设计项 | 状态 |
@@ -500,8 +550,8 @@ idf.py build
 | 项目 | 状态 |
 |------|------|
 | PC 音频采集验证 (Step 1) | 🟡 代码 + 自动测试完成；真实录音格式 PASS；有效语音采集（第 3 轮）**PASS**；ASR（Whisper）**未接入** |
-| 按键事件→PC 链路 (Step 2) | 🟡 **拆分**：Step 2A「PC 端录音 HTTP 控制服务」✅ 已实现并通过自动测试（39/39）；Step 2B「ESP32 按键事件 → PC + 局域网连通性」🟡 **固件侧代码已实现并编译通过**（`idf.py build`，0 warning）；**未烧录、未做真实网络联调**，局域网/防火墙连通性仍未验证 |
-| ASR 接入 (Step 3) | 🟡 **Step 3A 完成**：本地 Whisper ASR 模块（`service/asr_whisper.py`）✅ 已实现并通过自动测试（18/18，回归 190 通过）；**真实语音识别 ✅ 已执行（2026-10-11 第 2 轮 PASS，base/zh/cpu 纯推理 0.68s；第 1 轮窗口内无有效语音转录为空已如实记录；stdlib wave 解码不依赖 FFmpeg 经实测验证）**；**Step 3B 完成**：录音停止后自动提交后台本地 ASR ✅ 已实现并通过自动测试（voice_control_server 58/58，回归 209 通过），**本阶段未做真实硬件联调**（真实 PLAY→录音→Whisper 留给下一阶段）；不同口音/噪声鲁棒性待后续验证；Step 4 未开始 |
+| 按键事件→PC 链路 (Step 2) | 🟢 **完成**：Step 2A「PC 端录音 HTTP 控制服务」✅ 自动测试 39/39；Step 2B「ESP32 按键事件→PC 控制」固件侧代码 ✅ 已实现并编译通过（`idf.py build`，0 warning）；**Step 2C 实机联调 ✅ 已烧录并实测通过**（两次 PLAY→start→recording→stop→idle 双端取证，含一次瞬时连接失败的如实记录，详见上方 Step 2C 段） |
+| ASR 接入 (Step 3) | 🟢 **Step 3A/3B/3C 均按实测完成**：Step 3A 本地 Whisper ASR 模块（`service/asr_whisper.py`）代码+自动测试 18/18，真实语音识别已执行（第 2 轮 PASS，base/zh/cpu 纯推理 0.68s；第 1 轮转录为空已如实记录；stdlib wave 解码不依赖 FFmpeg 经实测）；Step 3B 录音停止后自动提交后台本地 ASR ✅ 自动测试 58/58（回归 209 通过）；**Step 3C 真实端到端验证 ✅ 已实测（2026-10-11）**：PLAY→PC 录音→自动 Whisper base/zh/cpu 识别 success，START 双端取证；转录文本非空、中段语义对应、**前段未识别如实记录**；**发现 stop 响应超 ESP32 512B 缓冲导致固件侧 STOP 契约失败，待修**（详见 Step 3C 段）；不同口音/噪声鲁棒性待后续验证；Step 4 LLM NL→JSON 未开始 |
 | 语言模型 NL→JSON (Step 4) | ⏳ 未开始 |
 | TTS 播报 (Step 5) | ⏳ 未开始 |
 | 全链路串联 (Step 6) | ⏳ 未开始 |
