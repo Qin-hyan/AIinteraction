@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESP32-S3-EYE 设备仪表盘 · 统一入口</title>
+<style>
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif; background:#0d1117; color:#c9d1d9; }
+  header { border-bottom:1px solid #30363d; padding:14px 20px; background:#0d1117; }
+  header h1 { margin:0; font-size:19px; color:#f0f6fc; }
+  header p { margin:4px 0 0; font-size:12px; color:#8b949e; }
+  .links { margin-top:8px; font-size:12px; display:flex; gap:16px; flex-wrap:wrap; align-items:center; }
+  .links a { color:#58a6ff; text-decoration:none; }
+  .links a:hover { text-decoration:underline; }
+  .links .hint { color:#8b949e; font-size:11px; }
+  main { max-width:1500px; margin:0 auto; padding:14px 16px 32px; }
+  .grid { display:grid; grid-template-columns:400px 1fr; gap:14px; align-items:start; }
+  @media (max-width:1100px){ .grid { grid-template-columns:1fr; } }
+  .card { background:#161b22; border:1px solid #30363d; border-radius:10px; overflow:hidden; }
+  .card h2 { margin:0; padding:10px 14px; font-size:13px; font-weight:600; color:#f0f6fc;
+             border-bottom:1px solid #30363d; background:#1a2230; display:flex; align-items:center; gap:8px; }
+  .card h2 .tag { margin-left:auto; font-size:11px; color:#8b949e; font-weight:400; }
+  iframe { display:block; width:100%; border:0; }
+  #voiceFrame { height:840px; background:#f5f7fa; }
+  #dashFrame { height:1500px; background:#0d1117; }
+  .notice { display:none; padding:12px 14px; font-size:13px; background:#2d1216; color:#f85149; border-bottom:1px solid #f85149; }
+  .notice.show { display:block; }
+  .notice code { background:#0d1117; padding:1px 5px; border-radius:4px; color:#ffa198; }
+  .hint { font-size:12px; color:#8b949e; padding:10px 14px; border-top:1px solid #30363d; }
+  .hint code { background:#0d1117; padding:1px 5px; border-radius:4px; color:#a5d6ff; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ESP32-S3-EYE 设备仪表盘 · 统一入口</h1>
+  <p>Week 01–04 设备 Web 仪表盘（嵌入式） + Week 05 语音控制台在同一网页 · 语音控制与 ESP32
+    PLAY 物理按键共用服务端唯一真实录音状态（网页不模拟数据）</p>
+  <div class="links">
+    <a id="dashLink" data-esp32-base="__ESP32_BASE_URL__" target="_blank" rel="noopener">↗ 打开原设备仪表盘（独立页面）</a>
+    <a href="/voice" target="_blank" rel="noopener">↗ 打开独立语音控制台（回退入口）</a>
+    <span class="hint" id="dashLinkHost"></span>
+  </div>
+</header>
+
+<main>
+  <div class="grid">
+    <div class="card">
+      <h2>🎙 Week 05 语音控制台<span class="tag">开始/停止 · 录音状态 · ASR 文本</span></h2>
+      <iframe id="voiceFrame" src="/voice" title="Week 05 语音控制台"></iframe>
+      <div class="hint">
+        与 ESP32 PLAY 物理按键共享 <code>/api/voice/status</code> 唯一状态：网页点击与物理按键
+        不会双开录音（重复 start 由服务端返回 409），请求失败会显示真实错误信息。
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>📡 原有设备仪表盘<span class="tag" id="dashStatusTag">嵌入加载中…</span></h2>
+      <div class="notice" id="esp32ConfigNotice">
+        未配置 <code>ESP32_BASE_URL</code> 环境变量：无法嵌入原设备仪表盘。请先设置它
+        （如 <code>http://10.132.124.63</code>）并重启语音服务；语音控制台不受影响。
+      </div>
+      <iframe id="dashFrame" data-esp32-base="__ESP32_BASE_URL__" title="原有 ESP32-S3-EYE 设备仪表盘"></iframe>
+      <div class="hint">
+        嵌入内容由 ESP32 固件 <code>GET /</code> 原样提供（传感器数据、采集控制、Week 04
+        本地持久化/CSV 导出等），本页只负责承载，不修改其布局与功能；也可通过上方链接直接访问。
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+"use strict";
+(function(){
+  function $(id){ return document.getElementById(id); }
+
+  // data-esp32-base 占位符由服务端在返回本页时替换（html.escape 后注入）
+  var base = ($("dashFrame").getAttribute("data-esp32-base") || "")
+      .trim().replace(/\/+$/, "");
+
+  if (base) {
+    var src = base + "/";
+    $("dashFrame").src = src;          // 原设备仪表盘 iframe 源
+    $("dashLink").href = src;          // 直连链接
+    $("dashLinkHost").textContent = "原仪表盘地址：" + src;
+    $("dashStatusTag").textContent = "嵌入式（iframe）· " + base;
+  } else {
+    $("esp32ConfigNotice").className = "notice show";
+    $("dashStatusTag").textContent = "未配置 ESP32_BASE_URL";
+    $("dashLinkHost").textContent = "（未配置地址，见卡片内提示）";
+  }
+})();
+</script>
+</body>
+</html>
