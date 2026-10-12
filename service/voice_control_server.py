@@ -88,7 +88,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 import threading
 
 try:  # 正常以包模块方式导入（pytest / python -m service.voice_control_server）
@@ -152,6 +152,33 @@ ASR_STATUS_FAILED = "failed"
 """识别失败（含依赖缺失/模型加载失败/推理异常等），录音停止事实不受影响。"""
 
 # ──────────────────────────────────────────────
+# Week 06: 任务状态常量
+# ──────────────────────────────────────────────
+
+TASK_STATE_IDLE = "idle"
+TASK_STATE_RECORDING = "recording"
+TASK_STATE_PROCESSING = "processing"
+TASK_STATE_CLARIFYING = "clarifying"
+TASK_STATE_COMPLETED = "completed"
+TASK_STATE_FAILED = "failed"
+TASK_STATE_CANCELLING = "cancelling"
+TASK_STATE_CANCELLED = "cancelled"
+
+_request_id_lock = threading.Lock()
+_request_id_counter = 0
+
+
+def _generate_request_id() -> str:
+    import time as _time
+    global _request_id_counter
+    ms = int(_time.time() * 1000) % 100000000
+    with _request_id_lock:
+        _request_id_counter += 1
+        ctr = _request_id_counter
+    return f"voice-{ms:08d}-{ctr:04d}"
+
+
+# ──────────────────────────────────────────────
 # 异常体系（每个异常自带稳定错误码与 HTTP 状态码）
 # ──────────────────────────────────────────────
 
@@ -189,6 +216,21 @@ class NotRecordingError(VoiceControlError):
 
     code = "not_recording"
     http_status = 409
+
+
+class NoActiveTaskError(VoiceControlError):
+    code = "no_active_task"
+    http_status = 409
+
+
+class TaskAlreadyCompletedError(VoiceControlError):
+    code = "task_already_completed"
+    http_status = 409
+
+
+class TaskCancelledError(VoiceControlError):
+    code = "task_cancelled"
+    http_status = 410
 
 
 _CAPTURE_ERROR_MAP: Tuple[Tuple[type, str, int], ...] = (
@@ -304,18 +346,16 @@ class AsrTaskRunner:
     * 不打印识别文本/语音内容日志（不把完整语音内容写入日志）。
     """
 
-    def __init__(self, transcriber: Optional[Any] = None) -> None:
+    def __init__(self, transcriber=None, on_complete=None) -> None:
         self._transcriber = transcriber
         self._cond = threading.Condition()
-        self._epoch = 0  # 最新任务编号（单调递增，用于丢弃过期任务的结果）
-        self._job: Optional[Tuple[int, str, Dict[str, Any]]] = None
-        self._thread: Optional[threading.Thread] = None
+        self._epoch = 0
+        self._job = None
+        self._thread = None
         self._status = ASR_STATUS_IDLE
-        self._text: Optional[str] = None
-        self._meta: Dict[str, Any] = {}
-
-    # ── 只读视图 ─────────────────────────────
-
+        self._text = None
+        self._meta = {}
+        self._on_complete = on_complete
     @property
     def transcriber(self) -> Any:
         """被注入的转录器（asr_whisper.Transcriber 或兼容对象）。"""
@@ -434,6 +474,15 @@ class AsrTaskRunner:
                     )
                     self._text = text
                     self._meta = result_meta
+            if self._on_complete is not None:
+                try:
+                    self._on_complete(
+                        epoch,
+                        text if epoch == self._epoch else None,
+                        result_meta.get("error") if (epoch == self._epoch and text is None) else None,
+                    )
+                except Exception:
+                    pass
 
 
 # ──────────────────────────────────────────────
@@ -503,12 +552,23 @@ class VoiceControlService:
             self._asr_runner = asr_task_runner
         else:
             transcriber = asr if asr is not None else asr_whisper.Transcriber()
-            self._asr_runner = AsrTaskRunner(transcriber=transcriber)
+            self._asr_runner = AsrTaskRunner(
+                transcriber=transcriber,
+                on_complete=self._on_asr_done,
+            )
 
         self._capture = capture
         self._lock = threading.Lock()
         self._target_path: Optional[Path] = None
         self._last_recording: Optional[Any] = None
+
+        self._task_state: str = TASK_STATE_IDLE
+        self._task_id: Optional[str] = None
+        self._task_generation: int = 0
+        self._task_context = {}
+        self._task_result = None
+        self._task_log = []
+        self._task_asr_epoch = None
 
     # ── 只读视图 ─────────────────────────────
 
@@ -542,11 +602,17 @@ class VoiceControlService:
         return "recording" if self._capture.is_recording else "idle"
 
     def status(self) -> Dict[str, Any]:
-        """返回当前状态的 JSON 可序列化表示（无副作用）。"""
+        """返回当前状态。Week 06: 新增 task 块。"""
         recording = bool(self._capture.is_recording)
         with self._lock:
             target = self._target_path
             last = self._last_recording
+            ts = self._task_state
+            tid = self._task_id
+            tr = self._task_result if isinstance(self._task_result, dict) else None
+            tc = dict(self._task_context)
+            tg = self._task_generation
+            tl = list(self._task_log[-10:])
         return {
             "ok": True,
             "state": "recording" if recording else "idle",
@@ -557,29 +623,32 @@ class VoiceControlService:
             "last_recording": last.as_dict() if last is not None else None,
             "config": self.config(),
             "asr": self._asr_runner.snapshot(),
+            "task": {"request_id": tid, "state": ts, "generation": tg,
+                     "result": tr, "context": tc if tc else None, "log": tl},
         }
 
     # ── 控制 ─────────────────────────────────
 
     def start(self) -> Dict[str, Any]:
-        """开始录音。
-
-        Raises:
-            AlreadyRecordingError: 已有进行中的录音（不重复调用底层采集器）。
-            audio_capture.*:       设备/依赖/参数错误，原样上抛（由 error_payload 映射）。
-        """
+        """开始录音。Week 06: 生成 request_id。"""
         with self._lock:
             if self._capture.is_recording:
-                raise AlreadyRecordingError(
-                    "已有进行中的录音，禁止重复启动（请先调用 /api/voice/stop）"
-                )
+                raise AlreadyRecordingError("已有进行中的录音，禁止重复启动")
             target = self._capture.start_recording()
             self._target_path = Path(target)
             self._last_recording = None
+            self._task_id = _generate_request_id()
+            self._task_generation += 1
+            self._task_context = {}
+            self._task_result = None
+            self._task_asr_epoch = None
+            self._transition_task_state(TASK_STATE_RECORDING)
             return {
                 "ok": True,
                 "state": "recording",
                 "recording": True,
+                "request_id": self._task_id,
+                "task_state": self._task_state,
                 "message": (
                     "录音已开始（device="
                     f"{self._capture.device!r}, {self._capture.samplerate}Hz/"
@@ -620,9 +689,13 @@ class VoiceControlService:
             # 录音已成功保存：自动提交后台 ASR（入队即返回，不阻塞本接口）。
             # 提交异常也绝不能把「录音停止成功」改写成失败——收敛为 ASR failed。
             try:
-                self._asr_runner.submit(info.path)
+                asr_epoch = self._asr_runner.submit(info.path)
+                self._task_asr_epoch = asr_epoch
             except Exception as exc:  # noqa: BLE001 — 后台提交失败不影响录音事实
                 self._asr_runner.fail_submit(f"{type(exc).__name__}: {exc}")
+                self._task_asr_epoch = None
+            if self._task_state not in (TASK_STATE_CANCELLING, TASK_STATE_CANCELLED):
+                self._transition_task_state(TASK_STATE_PROCESSING)
             # 紧凑回执：只含 ESP32 契约必需字段 + 极简关联信息。
             # wav 只取 frames/duration_seconds（固件用于日志关联；见
             # voice_button.c voice_post_action），asr 只取 status（回执 = 已提交）。
@@ -630,6 +703,8 @@ class VoiceControlService:
                 "ok": True,
                 "state": "idle",
                 "recording": False,
+                "request_id": self._task_id,
+                "task_state": self._task_state,
                 "wav": {
                     "frames": int(info.frames),
                     "duration_seconds": round(float(info.duration_seconds), 4),
@@ -644,6 +719,120 @@ class VoiceControlService:
 # Flask 应用工厂
 # ──────────────────────────────────────────────
 
+
+    def _transition_task_state(self, new_state: str) -> None:
+        import time as _time
+        prev = self._task_state
+        self._task_state = new_state
+        self._log_task_event("state_change", from_state=prev, to_state=new_state)
+
+    def _log_task_event(self, event_type: str, **extra):
+        import time as _time
+        entry = {"event": event_type, "request_id": self._task_id,
+                 "generation": self._task_generation, "ts": int(_time.time() * 1000)}
+        entry.update(extra)
+        self._task_log.append(entry)
+        if len(self._task_log) > 20:
+            self._task_log = self._task_log[-20:]
+
+    def _is_task_active(self):
+        return self._task_state in (TASK_STATE_RECORDING, TASK_STATE_PROCESSING, TASK_STATE_CLARIFYING)
+
+    def _check_stale(self, generation: int):
+        return (self._task_generation != generation
+                or self._task_state in (TASK_STATE_CANCELLING, TASK_STATE_CANCELLED))
+
+    def _on_asr_done(self, epoch, text, error):
+        with self._lock:
+            if epoch != self._task_asr_epoch:
+                self._log_task_event("asr_stale_discarded", reason="epoch_mismatch")
+                return
+            if self._task_state in (TASK_STATE_CANCELLING, TASK_STATE_CANCELLED):
+                self._log_task_event("asr_stale_discarded", reason="task_cancelled")
+                return
+            gen = self._task_generation
+            tid = self._task_id
+        self._process_task(gen, tid, text, error)
+
+    def _process_task(self, generation, task_id, text, error):
+        if error is not None or text is None:
+            with self._lock:
+                if self._check_stale(generation): return
+                self._task_result = {"ok": False, "error": "asr_failed"}
+                self._transition_task_state(TASK_STATE_FAILED)
+            return
+        t = text.strip()
+        if not t:
+            with self._lock:
+                if self._check_stale(generation): return
+                self._task_result = {"ok": False, "error": "empty_transcript"}
+                self._transition_task_state(TASK_STATE_FAILED)
+            return
+        with self._lock:
+            if self._check_stale(generation): return
+            self._task_context["asr_text"] = t
+            self._task_context.setdefault("round", 0)
+            self._task_context["round"] += 1
+        try:
+            from . import task_pipeline
+            result = task_pipeline.run_task(t)
+        except Exception as ex:
+            with self._lock:
+                if self._check_stale(generation): return
+                self._task_result = {"ok": False, "error": "pipeline_error"}
+                self._transition_task_state(TASK_STATE_FAILED)
+            return
+        with self._lock:
+            if self._check_stale(generation):
+                self._log_task_event("result_stale_discarded")
+                return
+            self._task_result = result if isinstance(result, dict) else {"ok": False, "error": "invalid_result", "message": str(result)}
+            if not result.get("ok") and result.get("intent") == "clarify":
+                self._task_context["clarify_question"] = result.get("data", {}).get("question", "")
+                self._transition_task_state(TASK_STATE_CLARIFYING)
+            elif not result.get("ok"):
+                self._transition_task_state(TASK_STATE_FAILED)
+            else:
+                self._transition_task_state(TASK_STATE_COMPLETED)
+
+    def cancel(self, request_id=None):
+        import time as _time
+        with self._lock:
+            if request_id is not None and request_id != self._task_id:
+                return {"ok": False, "error": "request_id_mismatch"}
+            if not self._is_task_active():
+                raise NoActiveTaskError("no active task")
+            prev_state = self._task_state
+            prev_id = self._task_id
+            self._transition_task_state(TASK_STATE_CANCELLING)
+            cr = False
+            if self._capture.is_recording:
+                try:
+                    self._capture.stop_recording()
+                    self._target_path = None
+                    cr = True
+                except Exception: pass
+            self._task_generation += 1
+            self._task_asr_epoch = None
+            self._transition_task_state(TASK_STATE_CANCELLED)
+            return {"ok": True, "state": "cancelled", "request_id": prev_id,
+                    "previous_state": prev_state, "cancelled_recording": cr}
+
+    def clarify_input(self, text):
+        t = (text or "").strip()
+        if not t: return {"ok": False, "error": "empty_input"}
+        with self._lock:
+            if self._task_state != TASK_STATE_CLARIFYING:
+                raise NoActiveTaskError("not in clarifying state")
+            self._task_context["clarify_input"] = t
+            self._task_context.setdefault("round", 0)
+            self._task_context["round"] += 1
+            gen = self._task_generation
+            tid = self._task_id
+            self._transition_task_state(TASK_STATE_PROCESSING)
+        self._process_task(gen, tid, t, None)
+        with self._lock:
+            return {"ok": True, "state": self._task_state, "request_id": tid}
 
 def create_app(
     capture: Optional[Any] = None,
@@ -698,6 +887,23 @@ def create_app(
         except Exception as exc:  # noqa: BLE001
             return _fail(exc)
         return jsonify(payload), 200
+
+    @app.post("/api/voice/cancel")
+    def voice_cancel():
+        try:
+            p = service.cancel()
+        except Exception as e:
+            return _fail(e)
+        return jsonify(p), 200 if p.get("ok") else 409
+
+    @app.post("/api/voice/clarify")
+    def voice_clarify():
+        try:
+            d = flask_cls.request.get_json(silent=True) or {}
+            p = service.clarify_input(d.get("text", ""))
+        except Exception as e:
+            return _fail(e)
+        return jsonify(p), 200 if p.get("ok") else 400
 
     @app.errorhandler(404)
     def _not_found(_exc):
