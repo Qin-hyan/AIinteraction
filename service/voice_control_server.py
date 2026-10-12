@@ -22,9 +22,6 @@ voice_control_server.py — Week 05 Step 3B: PC 端语音录音 HTTP 控制 + �
    绝不把录音操作伪装成失败。
 5. 默认只监听 127.0.0.1（仅本机回环），避免未经验证就把录音控制暴露到局域网；
    监听地址可用 create_app()/CLI 参数显式配置，为后续 ESP32 局域网接入预留。
-6. **Week 05 网页入口（整合，Step 4B）**：``GET /`` 返回统一仪表盘（``service/web/dashboard.html``），
-   - 同一页面经 iframe 内嵌「原设备仪表盘」（地址取 ``ESP32_BASE_URL`` 环境变量，复用 Week 04 ``query_last`` 约定）与「语音控制台」（本服务 ``GET /voice``）；
-   - 页面仅真实调用 /api/voice/{start,stop,status}，与 ESP32 PLAY 物理按键共用 ``VoiceControlService`` 唯一录音状态，不模拟数据；未配置 ``ESP32_BASE_URL`` 时仪表盘区显示配置提示（不生成坏链）。
 
 范围约束（Step 3B）
 -------------------
@@ -90,7 +87,6 @@ GET /api/voice/status
 from __future__ import annotations
 
 import argparse
-from html import escape
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import threading
@@ -104,11 +100,6 @@ try:  # 正常以包模块方式导入（pytest / python -m service.voice_contro
     from . import asr_whisper
 except ImportError:  # pragma: no cover — 兼容直接运行
     import asr_whisper  # type: ignore[no-redef]
-
-try:  # 正常以包模块方式导入（pytest / python -m service.voice_control_server）
-    from .query_last import get_base_url
-except ImportError:  # pragma: no cover — 兼容直接运行
-    from query_last import get_base_url  # type: ignore[no-redef]
 
 # Flask 是运行本服务的最小依赖；允许在未安装时导入本模块（便于静态检查），
 # 真正创建应用时再抛出带安装提示的明确错误（保持与 audio_capture 一致的风格）。
@@ -138,24 +129,6 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 """仓库根目录（service/ 的上一级）；用于拒绝把录音写入仓库。"""
-
-WEB_DIR = Path(__file__).resolve().parent / "web"
-"""网页目录：Week 05 语音控制台页面（``service/web/``）。"""
-
-WEB_INDEX_FILENAME = "index.html"
-"""原独立语音控制台文件名；Step 4B 起不再由 ``GET /`` 直接承载，
-改由保留路由 ``GET /voice`` 返回（兼容/回退入口，非主要入口）。"""
-
-WEB_DASHBOARD_FILENAME = "dashboard.html"
-"""统一仪表盘文件名；由 ``GET /`` 返回（Step 4B 整合：原设备仪表盘 + 语音控制台同页）。"""
-
-WEB_VOICE_ROUTE = "/voice"
-"""原独立语音控制台的保留路由（兼容/回退），不再是主要入口。"""
-
-ESP32_BASE_URL_PLACEHOLDER = "__ESP32_BASE_URL__"
-"""``dashboard.html`` 中的服务端替换占位符：统一页据此生成原设备仪表盘的
-iframe src 与直连链接；地址取 ``create_app(esp32_base_url=...)`` 或环境变量
-``ESP32_BASE_URL``（Week 04 ``query_last`` 约定）。空值 → 页面显示配置提示。"""
 
 ESP32_RESP_BUFFER_BYTES = 512
 """ESP32 固件 voice_button.c 的响应体缓冲上限（``VOICE_RESP_BUF_SIZE = 512``）。
@@ -259,21 +232,6 @@ def ensure_output_outside_repo(output_dir: Any) -> Path:
             f"（仓库根 {_REPO_ROOT}）；请使用仓库外目录，默认 %TEMP%/voice_task/"
         )
     return target
-
-
-def _resolve_esp32_base_url(esp32_base_url: Optional[str] = None) -> str:
-    """解析原设备仪表盘基础地址（统一页 iframe 引用，Week 05 Step 4B）。
-
-    优先级：``create_app(esp32_base_url=...)`` 显式参数 → 环境变量
-    ``ESP32_BASE_URL``（复用 Week 04 ``query_last.get_base_url()`` 约定）→ 空串。
-
-    Returns:
-        规范化基础地址（去掉首尾空白与末尾斜杠），未配置时返回空串。
-        空串时统一页不生成坏链，而是显示「未配置 ESP32_BASE_URL」的提示。
-    """
-    if esp32_base_url is None:
-        esp32_base_url = get_base_url()
-    return (esp32_base_url or "").strip().rstrip("/")
 
 
 def error_payload(
@@ -691,21 +649,17 @@ def create_app(
     capture: Optional[Any] = None,
     output_dir: Optional[Any] = None,
     asr: Optional[Any] = None,
-    esp32_base_url: Optional[str] = None,
 ) -> Any:
     """创建 Flask 应用（工厂函数，便于测试注入假采集器/假转录器）。
 
     Args:
-        capture:       注入的采集器；None → 真实 ``AudioCapture``。
-        output_dir:    录音输出目录；仅当 capture=None 时可用，默认 %TEMP%/voice_task/。
-        asr:           注入的转录器（测试用假模型包装）；None → 真实
-                       ``asr_whisper.Transcriber()``（base/zh/transcribe）。
-        esp32_base_url:原设备仪表盘基础地址（统一页 iframe 引用）；None → 读取
-                       环境变量 ``ESP32_BASE_URL``（Week 04 ``query_last`` 约定）。
+        capture:    注入的采集器；None → 真实 ``AudioCapture``。
+        output_dir: 录音输出目录；仅当 capture=None 时可用，默认 %TEMP%/voice_task/。
+        asr:        注入的转录器（测试用假模型包装）；None → 真实
+                    ``asr_whisper.Transcriber()``（base/zh/transcribe）。
 
     Returns:
-        Flask app。服务实例挂在 ``app.extensions["voice_control"]``；
-        解析后的基础地址挂在 ``app.config["ESP32_BASE_URL"]``。
+        Flask app。服务实例挂在 ``app.extensions["voice_control"]``。
     """
     flask_cls = require_flask()
     service = VoiceControlService(capture=capture, output_dir=output_dir, asr=asr)
@@ -714,7 +668,6 @@ def create_app(
     # 中文提示按 UTF-8 原样输出（不转成 \uXXXX），便于 ESP32/浏览器直接读取
     app.json.ensure_ascii = False
     app.extensions["voice_control"] = service
-    app.config["ESP32_BASE_URL"] = _resolve_esp32_base_url(esp32_base_url)
 
     def _fail(exc: BaseException):
         payload, status = error_payload(exc, service)
@@ -745,66 +698,6 @@ def create_app(
         except Exception as exc:  # noqa: BLE001
             return _fail(exc)
         return jsonify(payload), 200
-
-    @app.get("/")
-    def web_dashboard():
-        """Week 05 统一入口：返回 service/web/dashboard.html（Step 4B 整合）。
-
-        同一页面内展示：
-        * 「原设备仪表盘」——iframe 直嵌 ESP32 ``GET /``，地址取自环境变量
-          ``ESP32_BASE_URL``（解析结果存于 ``app.config["ESP32_BASE_URL"]``）；
-          替换占位符时对地址做 ``html.escape``，防止特殊字符破坏页面结构。
-        * 「语音控制台」——iframe 指向保留路由 ``GET /voice``（原 index.html）。
-        页面只通过真实调用 /api/voice/{start,stop,status} 驱动录音与展示 ASR，
-        不持有模拟数据；文件缺失/不可读时返回统一 JSON 错误，不静默降级。
-        """
-        dashboard = WEB_DIR / WEB_DASHBOARD_FILENAME
-        try:
-            raw = dashboard.read_text(encoding="utf-8")
-        except OSError as exc:  # noqa: BLE001 — 页面缺失按服务端错误报告
-            return (
-                jsonify(
-                    {
-                        "ok": False,
-                        "error": "internal_error",
-                        "message": f"网页文件缺失或不可读: {dashboard}",
-                        "exception": type(exc).__name__,
-                        "state": service.state_name(),
-                    }
-                ),
-                500,
-            )
-        html_out = raw.replace(
-            ESP32_BASE_URL_PLACEHOLDER, escape(app.config["ESP32_BASE_URL"])
-        )
-        return html_out, 200, {"Content-Type": "text/html; charset=utf-8"}
-
-    @app.get(WEB_VOICE_ROUTE)
-    def web_voice_console():
-        """原独立语音控制台（service/web/index.html）的保留路由（兼容/回退）。
-
-        Step 4B 起主要入口为 ``GET /``（统一仪表盘）；本路由保留原页面，
-        既是统一页里语音控制台卡片的 iframe 源，也保留独立访问路径，
-        避免误删仍在使用的资源。页面只真实调用 /api/voice/{start,stop,status}，
-        缺失/不可读时返回统一 JSON 错误，不静默降级。
-        """
-        index_path = WEB_DIR / WEB_INDEX_FILENAME
-        try:
-            html = index_path.read_text(encoding="utf-8")
-        except OSError as exc:  # noqa: BLE001 — 页面缺失按服务端错误报告
-            return (
-                jsonify(
-                    {
-                        "ok": False,
-                        "error": "internal_error",
-                        "message": f"网页文件缺失或不可读: {index_path}",
-                        "exception": type(exc).__name__,
-                        "state": service.state_name(),
-                    }
-                ),
-                500,
-            )
-        return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
     @app.errorhandler(404)
     def _not_found(_exc):
