@@ -1,0 +1,19 @@
+# requirements-asr.txt - Week 05 Step 3A: PC local Whisper ASR dependencies
+#
+# Target env: isolated venv Python 3.11.7 (D:\AIinteraction-venvs\week05-audio)
+#
+# Version selection:
+#   - openai-whisper==20250625: latest stable on PyPI (requires_python>=3.8,
+#     compatible with Python 3.11) - official openai-whisper package.
+#   - torch==2.6.0+cpu: pinned CPU build from official PyTorch CPU wheel index,
+#     to avoid the huge CUDA runtime bundled with the default PyPI torch;
+#     switch to a CUDA build later only if GPU acceleration is really needed.
+#     (A local NVIDIA GPU is present via nvidia-smi, but we keep deps small.)
+#
+# Install:  python -m pip install -r requirements-asr.txt
+# Real ASR additionally needs: system ffmpeg (this module decodes standard PCM
+#   WAV with the stdlib `wave` module and does NOT require ffmpeg for those;
+#   first inference downloads whisper "base" weights ~140 MB over the network).
+openai-whisper==20250625
+torch==2.6.0+cpu
+--extra-index-url https://download.pytorch.org/whl/cpu

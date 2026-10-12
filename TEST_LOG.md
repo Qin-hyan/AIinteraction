@@ -230,7 +230,7 @@ if (help_button_get_pending(&btn)) {
 | `idf.py build` 编译通过 | ✅ **PASS** | `idf.py build` 实际运行通过（版本 `week02-stable-19-g5fe738a-dirty`），新增 `help_uplink.c/h` 无编译错误 |
 | 模块注册 | ✅ **PASS** | `help_uplink.c` 已加入 CMakeLists.txt 源文件列表 |
 | Kconfig 配置项 | ✅ **PASS** | `CONFIG_HELP_VPS_URL`（string）、`CONFIG_HELP_UPLINK_TIMEOUT_MS`（int，默认 10000）已定义 |
-| 公开 API | ✅ **PASS** | `help_uplink_is_configured()`、`help_uplink_send_event()` 签名完整 |
+| 公开 API（`ae89be8` 时点，同步） | ✅ **PASS** | `help_uplink_is_configured()`、`help_uplink_send_event()` 签名完整；异步 API（`29dd72d`）见下节 |
 
 ### 提交 `5fe738a` — fix(help_uplink): correct protocol semantics for JSON timestamps and config
 
@@ -240,16 +240,54 @@ if (help_button_get_pending(&btn)) {
 | 时间戳语义正确性 | ✅ **PASS** | `sent_at_us` 注明为设备端 HTTP POST 完成时刻（非 VPS 上传时间），0 值序列化为 JSON `null` |
 | 代码审查无新 WARNING | ✅ **PASS** | 构建日志无新增编译警告 |
 
-### ⚠️ 未验证项目（诚实记录）
+### ⚠️ 未验证项目（诚实记录，`ae89be8`/`5fe738a` 时点）
 
 | 项目 | 原因 |
 |------|------|
 | **实机 HTTP POST 测试** | 未配置真实 VPS URL，未烧录验证实际网络行为 |
-| **`help_uplink` 接入 `main.c`** | 当前模块未被 main.c 调用，尚未集成到事件发送路径 |
+| ~~**`help_uplink` 接入 `main.c`**~~ → **已解决（软件集成）** | ~~当前模块未被 main.c 调用，尚未集成到事件发送路径~~；该集成已由后续提交 `29dd72d` 完成（见下节），但**实机网络验证仍未进行** |
 | **超时路径测试** | 需实机验证 `CONFIG_HELP_UPLINK_TIMEOUT_MS` 超时行为 |
 | **非 2xx 响应处理** | 需实机 mock VPS 验证 HTTP 500/404 等错误路径 |
 
-**结论**: `ae89be8` + `5fe738a` 构建验证通过，模块代码完整、无编译错误。但 **help_uplink 尚未集成到 main.c 的事件发送路径**，且未经过任何实机网络验证。闭环链路（按键 → HTTP POST → 远端确认）尚未完成。
+**结论（`ae89be8` + `5fe738a` 时点）**: 构建验证通过，模块代码完整、无编译错误。**当时** help_uplink 尚未集成到 `main.c` 的事件发送路径；该软件集成已由后续提交 `29dd72d` 完成（见下节）。**但真实 ESP32→VPS 端到端实机验收仍未完成（HTTP POST 成功/失败/超时路径均未验证）**，闭环链路（按键 → HTTP POST → 远端确认）**不得声称已通过**。
+
+---
+
+## Week 03 — help_uplink 异步接口集成（`29dd72d`，2026-10-10 文档事实核对）
+
+**提交**: `29dd72d` feat(week03): integrate help_uplink async task into event state machine
+（`main/help_uplink.c` +110 行、`main/help_uplink.h` +42 行、`main/main.c` +49 行；该提交位于 PR #3 合并 `ec9c94b` 的历史中，并随 PR #4 进入 `main` `7dd788b`）
+
+### 集成后的公开 API 清单（覆盖同步 + 异步）
+
+| API | 类型 | 说明 | 验证状态 |
+|-----|------|------|---------|
+| `help_uplink_is_configured()` | 同步 | 检查 `CONFIG_HELP_VPS_URL` 是否非空 | 签名 ✅（`ae89be8`）；集成 ⛔ 未验证 |
+| `help_uplink_send_event()` | 同步（阻塞） | 构造 JSON → HTTP POST；**不能在 1 Hz 主循环直接调用** | 编译 ✅ PASS（`ae89be8`/`5fe738a`）；实机 ⛔ 未验证 |
+| `help_uplink_start()` | 异步 | 创建后台 FreeRTOS 上行推送任务 | ⛔ 未验证（`29dd72d` 无构建条目） |
+| `help_uplink_request_send()` | 异步 | 主循环请求一次上行 | ⛔ 未验证（`29dd72d` 无构建条目） |
+| `help_uplink_poll()` | 异步 | 轮询异步上行结果 | ⛔ 未验证（`29dd72d` 无构建条目） |
+
+### 源码集成证据（`main/main.c`，当前代码）
+
+| 位置 | 调用 |
+|------|------|
+| `main/main.c:34` | `#include "help_uplink.h"` |
+| `main/main.c:364` | `help_uplink_start();`（启动异步 VPS 上行推送任务） |
+| `main/main.c:595` | `help_uplink_is_configured()`（未配置则 `help_event_fail()`） |
+| `main/main.c:601` | `help_uplink_request_send(&help_event)`（未被接受则 `help_event_fail()`） |
+| `main/main.c:612` | `help_uplink_poll(&uplink_res)`（`ESP_OK` → `help_event_mark_sent()`，否则 `help_event_fail()`） |
+
+### ⚠️ 未验证项目（不新增无证据结论）
+
+| 项目 | 原因 |
+|------|------|
+| **`29dd72d` 编译验证** | `TEST_LOG.md` 无该提交的构建条目；本次仅做文档事实核对，**未运行固件构建**，故不新增构建结论 |
+| **真实 ESP32→VPS HTTP POST（成功/失败/超时）** | 未配置真实 `CONFIG_HELP_VPS_URL`，无实机网络证据 |
+| **非 2xx 响应 / 超时路径实机验证** | 需实机 mock VPS 验证 HTTP 500/404 等错误路径 |
+
+**结论**: 异步接口已在**源码层**集成至 `main.c` 事件状态机（软件集成完成），但编译与实机网络路径**均无验证证据**，不得标记为 PASS。真实 ESP32→VPS 端到端验收**仍未完成**。
+
 ---
 
 ## Week 04 — 结构化任务契约校验模块 (2026-10-09)
@@ -596,3 +634,80 @@ if (help_button_get_pending(&btn)) {
 | 时间字段语义 | 相对运行时间（ms），`time_quality: "relative"`，无日历时间伪装 |
 | 字段缺失 | 无数据缺失，每行 12 列完整 |
 | 核验结论 | ✅ 导出格式规范，数据字段完整，结构无异常 |
+
+---
+
+## Week 05 — 语音输入链路最终实机验证 (2026-10-11)
+
+**分支**: `feature/week05-voice-interaction`
+**版本**: 收尾前 HEAD `e44eff3`（Step 3I 验证明细见下方；版本以 `State.md` 与 `README.md` 收尾记录为准）
+**验证方式**: 实机（ESP32-S3-EYE COM10 ↔ PC 语音服务 10.132.124.130:8080）双端日志取证
+**结果**: ✅ **双端闭环 PASS / 0 FAIL / 无崩溃**
+
+| # | 测试项 | 预期 | 实际 | 结果 |
+|---|--------|------|------|------|
+| 1 | ESP32 PLAY① → PC `POST /api/voice/start` | HTTP 200 | `10.132.124.63 POST /api/voice/start 200`；ESP32 `PC 已受理：HTTP 200, state=recording` → 本地 RECORDING | ✅ PASS |
+| 2 | PC 录音 WAV 落盘 | 真实音频帧 | wav `frames=294400, 18.40 s`（ESP32 回执一致） | ✅ PASS |
+| 3 | ESP32 PLAY② → PC `POST /api/voice/stop` | HTTP 200 | `10.132.124.63 POST /api/voice/stop 200`；ESP32 `PC 已受理：HTTP 200, state=idle` | ✅ PASS |
+| 4 | ESP32 本地确认状态回 IDLE | IDLE | ESP32 `本地确认状态 IDLE（wav: frames=294400, 18.40 s）` | ✅ PASS |
+| 5 | 无截断 / 无传输层超时 / 无栈溢出 / 无 Brownout | 均不出现 | 全程 0 次 `RESPONSE_INVALID` / `ESP_ERR_HTTP_EAGAIN` / `stack overflow` / `BOD` / `Brownout` | ✅ PASS |
+| 6 | ASR 自动后台提交（Step 3B 机制） | STOP 后触发 | STOP 200 后服务继续响应；ASR 转写文本证据以 Step 3C/3F/3G 已取证记录为准（本轮日志未保留 asr 响应体） | ✅ 机制已实现（Step 3B 自动测试 58/58） |
+
+**关键证据来源**（仓库外，验后保留目录 `%TEMP%\week05_step3i\`）:
+- PC 服务日志 `server.err.log`：`10.132.124.63 POST /api/voice/start 200`（16:10:33）、`10.132.124.63 POST /api/voice/stop 200`（16:10:55）
+- ESP32 串口日志 `serial.log`（UTF-8）：`W3-EVENT: btn pressed: PLAY` → `voice-193710-0001 START` → `PC 已受理 HTTP 200 state=recording` → 本地 RECORDING → `voice-213071-0002 STOP` → `PC 已受理 HTTP 200 state=idle` → 本地 IDLE
+
+**对比既往失败项（当日处理链，详见 `weeks/week05/STATE.md`）**:
+| 既往失败项 | Step 3I 是否复现 | 说明 |
+|-----------|-----------------|------|
+| Step 3C stop 响应截断（RESPONSE_INVALID） | ❌ 未复现 | Step 3D 控制/查询解耦后不再超 512B |
+| Step 3F `ESP_ERR_HTTP_EAGAIN` 传输层超时 | ❌ 未复现 | 本轮 STOP 在 5s 内收到完整 200（单次样本） |
+| Step 3G Brownout 硬件复位 | ❌ 未复现 | 全程无 BOD；供电问题仍留档 |
+| Step 3E btn_scan 栈溢出 | ❌ 未复现 | 4096B 栈经 3F/3I 两轮实机均未复现 |
+
+**合规**: 录音 WAV 已清理；仓库内无 WAV、无临时文件；未修改代码/依赖/固件；未读取 `sdkconfig` 与 Wi-Fi 凭据（详见 `weeks/week05/STATE.md` Step 3I 段）。
+
+> ⚠️ **Week 05 未完成能力（如实标注）**：Step 4 LLM NL→JSON、Step 5 TTS 播报、Step 6 全链路串联、Step 7 状态显示与 LED 反馈、Step 8 异常与文字对照测试均未开始。
+
+---
+
+## Week 05 收尾 — 最终测试回归 (2026-10-13)
+
+**分支**: `feature/week05-voice-interaction`
+**版本**: HEAD `91959fb` feat(week05): add voice interaction buttons to ESP32 dashboard
+**验证方式**: Python 自动测试（pytest，虚拟环境 `D:\AIinteraction-venvs\week05-audio`）
+**结果**: **212 PASS / 1 FAIL（历史已知，非本次引入）**
+
+| # | 测试项 | 结果 | 备注 |
+|---|--------|------|------|
+| 1 | `pytest service/` 全量回归 | **212 passed, 1 failed** | Week 04 + Week 05 全部 Python 测试 |
+| 2 | `test_asr_whisper.py` | 18/18 ✅ PASS | 本地 Whisper ASR 模块 |
+| 3 | `test_audio_capture.py` | 30/31 PASS | 1 FAIL = 历史已知（见下方） |
+| 4 | `test_query_last.py` | 13/13 ✅ PASS | Week 04 查询工具 |
+| 5 | `test_result_formatter.py` | 20/20 ✅ PASS | Week 04 格式化器 |
+| 6 | `test_task_dispatcher.py` | 16/16 ✅ PASS | Week 04 任务分发 |
+| 7 | `test_task_pipeline.py` | 7/7 ✅ PASS | Week 04 任务管道 |
+| 8 | `test_task_pipeline_integration.py` | 10/10 ✅ PASS | Week 04 集成测试 |
+| 9 | `test_trigger_collect.py` | 12/12 ✅ PASS | Week 04 采集触发器 |
+| 10 | `test_validator.py` | 24/24 ✅ PASS | Week 04 schema 校验 |
+| 11 | `test_voice_control_server.py` | 62/62 ✅ PASS | Week 05 录音 HTTP 控制 + 后台 ASR |
+
+### 已知历史失败（非本次引入，不修）
+
+| 测试 | 失败模式 | 状态 |
+|------|---------|------|
+| `test_audio_capture.py::TestStartStopRecording::test_state_transitions_allow_repeated_recordings` | `AssertionError: 2 != 3` — 预期 3 次反复录音各产生独立 WAV 文件，实际仅输出 2 个。模拟音频流 `FakeSoundDevice` 在多轮 start/stop 中 WAV 文件计数偏差。 | **已知，非本次引入**（已存在于 `.pytest_cache/v/cache/lastfailed`） |
+
+### 固件编译（未重编，以历史记录为准）
+
+| 项 | 结果 | 备注 |
+|----|------|------|
+| `idf.py build`（ESP-IDF v5.4.3） | ✅ 历史 PASS（Step 2B `37773bf`） | 0 warning / 0 error |
+| 产物名称 | `week02-sensor-collect.bin` | **Week 02 遗留项目名**，仅影响固件文件名，无功能影响 |
+| 烧录与实机验证 | ✅ 历史 PASS（Step 3I `7dc2d08`） | 双端闭环验证通过 |
+
+### ⚠️ 待次日人工验收（不属本次收尾范围）
+
+1. **真实中文语音识别准确率**：以真人普通话口语输入（非预录音、非静音），人工判断 Whisper `base/zh` 转写结果是否语义正确
+2. **简体中文输出质量**：ASR 转写文本的编码（UTF-8）与简体中文内容，在浏览器仪表盘 `🎙 语音` 面板中是否正确显示
+3. 验收标准：**不得**把静音导致的空转写记录为识别成功；**不得**在人工审阅前宣称识别准确率已通过

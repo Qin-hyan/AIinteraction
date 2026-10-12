@@ -4,10 +4,38 @@
 
 ---
 
-## 当前：Week 04 — 自然语言查询与请求采集（分支已建立）
+## 当前：Week 05 — 接通按键说话与语音播报（代码集成已完成，收尾中）
 
-**分支**: `feature/week04-natural-language`
+**分支**: `feature/week05-voice-interaction`（本地分支 HEAD `91959fb`，领先 `origin/feature/week05-voice-interaction` 4 提交；2026-10-13 收尾）
+**基线**: `7dd788b` — Merge pull request #4（= `main` = `origin/main`）
+**阶段**: 🟢 **语音输入链路已实现并通过真实双端闭环验证**（2026-10-11 Step 3I：PLAY→PC 录音→自动后台 Whisper ASR→STOP 回执→ESP32 恢复 IDLE，START/STOP 均 HTTP 200、0 崩溃）。含：PC 音频采集、录音 HTTP 控制服务、本地 Whisper ASR 模块、ESP32 PLAY 按键控制、录音停止自动后台 ASR、**ESP32 仪表盘 🎙 语音交互面板**（2026-10-13 提交 `91959fb`）。已处理 Step 3C 截断（3D 解耦）、Step 3E 栈溢出（2048→4096，实机复核通过）；Step 3F 传输层超时与 Step 3G Brownout 均未在 Step 3I 复现（留档）。
+
+> ⚠️ **Week 05 代码集成已完成；真实中文语音识别和简体中文输出待次日人工验收。** 不得把静音/背景噪声导致的空转录记录为识别成功，也不得宣称识别准确率已通过。
+
+**本周已完成（有证据）**:
+- Step 1 PC 音频采集：WAV 格式 + 真实麦克风有效语音 PASS
+- Step 2A/2B/2C：PC 录音 HTTP 控制服务 + ESP32 PLAY 按键控制 + 实机联调通过
+- Step 3A/3B/3C/3D/3E/3F/3G/3I：本地 Whisper ASR、自动后台 ASR、端到端验证、契约修复、栈修复与实机复核、最终双端闭环验证
+- **ESP32 仪表盘 🎙 语音交互面板**：浏览器端语音按钮（开始/停止录音）、实时状态/帧数/ASR 文本显示，提交 `91959fb`（2026-10-13）
+- **D008 决策草案**（`339c2ad`）：Week 05 语音链路 5 项决策点记录，待用户审阅
+- **Step 4A/4B PC 端语音控制台集成**（`fedd33c`）→ 已 revert（`adf123f`），当前代码不含独立 PC 语音控制台页面
+
+**本周未完成（如实标注，收尾不扩开发范围）**:
+- Step 4 语言模型 NL→JSON（未开始）
+- Step 5 TTS 播报（未开始）——课程目标「语音播报」输出侧未实现
+- Step 6 全链路串联 / Step 7 状态显示与 LED / Step 8 异常处理与文字对照测试（未开始）
+
+> ⚠️ 遗留待确认（不影响本周验收，留档后续）:
+> - **edge-tts**：调用微软**在线** TTS 服务，**不需要 API Key**，但**需要网络**且合成文本会外发给外部服务；课程许可与隐私范围**尚未获得确认授权**（待向教师/助教确认）
+> - **LLM API 凭据**：与 ASR 无关的**另一项独立配置**（仅在选用云服务时需要）；凭据不得写入仓库
+
+---
+
+## Week 04 汇总 — 自然语言查询与请求采集（已合并）
+
+**分支**: `feature/week04-natural-language`（HEAD `0b4b323`，已合并至 `main`）
 **阶段**: Step 1-6 全部完成 ✅（102 test PASS）+ **Web 仪表盘 localStorage 持久化 ✅** + **CSV 导出 ✅** + **浏览器持久化人工检查（4 项）✅** + **CSV 核验 ✅（29 条、12 列、全部 cadence）**
+**合并**: PR #4 → `main` `7dd788b`（2026-10-10）
 **仍待补验**: 真实 HTTP 调用（ESP32 设备）* 真实语言模型接入
 
 ---
@@ -18,8 +46,10 @@
 |------|-----|------|------|
 | 单元1 | Week 01 | 传感数据采集与 Web 展示 | ✅ 完成 |
 | | Week 02 | 远程采集指令与执行反馈 | ✅ 完成 (tag: week02-stable) |
-| | **Week 03** | **实体按键与物理反馈闭环** | ✅ 已合并至 main |
-| 单元2 | Week 04-06 | 自然语言与语音任务交互 | 🔧 分支已建立 |
+| | Week 03 | 实体按键与物理反馈闭环 | ✅ 已合并至 main (PR #3, `ec9c94b`) |
+| 单元2 | Week 04 | 自然语言查询与请求采集 | ✅ 已合并至 main (PR #4, `7dd788b`) |
+| | **Week 05** | **接通按键说话与语音播报** | 🟢 语音输入链路已完成实机双端闭环验证（Step 3I）；TTS 播报/LLM/全链路未完成（feature 分支） |
+| | Week 06 | 多轮语音对话与交互 | ⏳ 未开始 |
 | 单元3 | Week 07-09 | 视觉感知与事件反馈 | ⏳ 未开始 |
 | 单元4 | Week 10-12 | 多源上下文与状态推断 | ⏳ 未开始 |
 | 单元5 | Week 13-15 | 边云协作与韧性通信 | ⏳ 未开始 |
@@ -27,7 +57,7 @@
 
 ---
 
-## Week 03 当前任务
+## Week 03 历史记录 — 实体按键与物理反馈闭环（已合并至 main，PR #3 `ec9c94b`）
 
 **目标**: 实体按键触发 → 去抖 → 生成唯一 event_id → 本地 LED 反馈 → 发送教学测试消息 → Web 接收 → 远端证据返回 → 更新物理反馈 → 支持取消/回应
 
@@ -41,11 +71,12 @@
 - 👉 **Week 03 按键扫描解耦**：独立 FreeRTOS 任务 (30 Hz) + FreeRTOS Queue 通信，主循环不再负责按键采样
 - 👉 **help_uplink 模块**：独立 HTTP POST 模块 (`help_uplink.c/.h`)，将 `help_event_t` 构造为 JSON 推送到外部 VPS 端点（`ae89be8`）
 - 👉 **JSON 时间戳语义修正**：`sent_at_us` 标注为设备端 HTTP POST 完成时刻，0 值序列化为 `null`（`5fe738a`）
+- 👉 **help_uplink 异步接口集成至 `main.c`**（`29dd72d`）：新增异步接口 `help_uplink_start()` / `help_uplink_request_send()` / `help_uplink_poll()`，由后台 FreeRTOS 任务执行 HTTP POST；`main.c` 初始化阶段调用 `help_uplink_start()`，事件状态机接入 `help_uplink_is_configured()` / `help_uplink_request_send()` / `help_uplink_poll()`（源码位置 `main.c:364` / `:595` / `:601` / `:612`）
 
 **待完成**:
-- **`help_uplink` 接入 `main.c`**：目前模块已存在但未被调用，需要将 `help_uplink_send_event()` 接入事件发送路径
+- ~~**`help_uplink` 接入 `main.c`**~~ → **已完成（软件集成）**：异步接口已集成至 `main.c` 事件状态机（`29dd72d`），**「模块已存在但未被调用」的旧描述已作废**
 - **完整闭环链路测试**（按键 → 去抖 → event_id → LED 反馈 → HTTP 发送 → 远端确认/取消 → 物理反馈更新）
-- **实机网络验证**（需配置真实 VPS URL，验证 HTTP POST 成功/失败路径，检查远端接收状态及响应）
+- **真实 ESP32→VPS 端到端实机验收（仍未完成）**：软件集成已完成（`29dd72d`），但需配置真实 VPS URL，实测 HTTP POST 成功/失败/超时路径并检查远端接收状态及响应；**在取得实机证据前不得声称端到端链路已通过**
 
 ### ⚠️ 实机测试记录 (2026-10-09)
 

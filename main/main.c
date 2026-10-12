@@ -32,6 +32,7 @@
 #include "esp_heap_caps.h"
 #include "help_event.h"
 #include "help_uplink.h"
+#include "voice_button.h"
 
 static const char *TAG = "MAIN";
 
@@ -363,6 +364,16 @@ void app_main(void)
     help_button_service_start(btn_handle); /* 启动独立 30Hz 按键扫描任务 */
     help_uplink_start();                    /* 启动异步 VPS 上行推送任务 */
 
+    /* Week 05 Step 2B: 语音控制（PLAY 按键 → PC 录音控制接口）
+     * - 未配置 CONFIG_VOICE_PC_URL 时功能关闭（不创建任务/队列）并打印明确提示，
+     *   PLAY 按键保持 Week 03 教学测试事件行为；
+     * - 已配置时 PLAY 专用于开始/结束录音（按键路由见主循环按键处理段）。 */
+    esp_err_t voice_ret = voice_button_start();
+    if (voice_ret != ESP_OK) {
+        ESP_LOGW(TAG, "语音控制未启用 (voice_button_start=0x%X)：PLAY 按键保持 Week 03 行为",
+                 voice_ret);
+    }
+
     /* HTTP 服务器 — Week 2: 加入采集任务上下文 */
     static collect_task_t collect_task = {0};
     collect_task.auto_refresh = true;              /* 默认开启周期上报 */
@@ -578,7 +589,17 @@ void app_main(void)
         /* ---- Week 03: 按键事件 + 物理反馈 (扫描由独立 30Hz 任务完成) ---- */
         {
             adc_button_t btn;
-            if (help_button_get_pending(&btn) && help_event.status == HELP_IDLE) {
+            /* ---- Week 05 Step 2B: PLAY 按键 → PC 语音录音控制（Step 2B） ----
+             * 语音地址已配置时 PLAY 专用于开始/结束录音；未配置时
+             * voice_button_is_configured() 为 false，PLAY 行为与 Week 03 完全一致。
+             * PLAY 请求未被接受（在途请求/队列满）时不回退到 help_event，
+             * 避免同一次按键触发两个通道（原因由 voice_button 模块日志记录）。 */
+            bool btn_pressed = help_button_get_pending(&btn);
+            bool voice_play  = btn_pressed && (btn == BTN_PLAY) &&
+                               voice_button_is_configured();
+            if (voice_play) {
+                (void)voice_button_request_toggle();
+            } else if (btn_pressed && help_event.status == HELP_IDLE) {
                 help_event_trigger(&help_event, btn);
                 ESP_LOGI(TAG, "[W3-BTN] pressed %s → event %s",
                          adc_button_name(btn),

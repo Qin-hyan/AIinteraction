@@ -28,3 +28,11 @@ CONFIG_HTTPD_MAX_URI_LEN=512
 
 # Main task stack
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096
+
+# Week 05 语音控制（ESP32 PLAY 按键 → PC 录音控制接口，见 main/voice_button.c）
+# 留空（默认）= 关闭该功能：不创建任务/队列，启动时打印提示，PLAY 按键保持 Week 03 行为。
+# 启用时通过 idf.py menuconfig（Week 05 Voice Control）填写 PC 服务基地址，
+# 形如 http://192.168.x.x:8080（不含路径）；不要在仓库中提交真实电脑私有 IP 或任何凭据。
+CONFIG_VOICE_PC_URL=""
+# 单次请求超时（ms），仅限制后台任务的阻塞时长，不影响按键扫描与主循环。
+CONFIG_VOICE_HTTP_TIMEOUT_MS=5000
