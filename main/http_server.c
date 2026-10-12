@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file http_server.c
  * @brief HTTP Server - Web Dashboard + REST API
  * Week 1: Basic dashboard + sensor API
@@ -244,11 +244,24 @@ static const char INDEX_HTML[] =
 ".gal-empty{grid-column:1/-1;text-align:center;color:#8b949e;padding:40px;font-size:.9em}"
 "@media(max-width:820px){.gal-grid{grid-template-columns:repeat(2,1fr)}}"
 "@media(max-width:500px){.gal-grid{grid-template-columns:1fr}}"
+".voice-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0}"
+".voice-btn{display:inline-block;padding:12px 28px;border:none;border-radius:8px;font-size:1em;font-weight:bold;cursor:pointer;transition:background .2s;color:#fff}"
+".voice-btn.start{background:#238636}.voice-btn.start:hover{background:#2ea043}"
+".voice-btn.stop{background:#da3633}.voice-btn.stop:hover{background:#f85149}"
+".voice-btn:disabled{opacity:.45;cursor:not-allowed}"
+".voice-badge{font-size:.78em;padding:4px 14px;border-radius:12px;font-weight:600}"
+".voice-badge.idle{background:#21262d;color:#8b949e}"
+".voice-badge.recording{background:#2d1216;color:#f85149;animation:pulse 1.2s infinite}"
+".voice-badge.running{background:#1a2332;color:#a5d6ff;animation:pulse 1.2s infinite}"
+".voice-badge.success{background:#12261e;color:#7ee787}"
+".voice-badge.failed{background:#2d1216;color:#f85149}"
+".voice-asr{background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:10px 14px;margin-top:10px;min-height:38px;font-size:.85em;color:#c9d1d9;white-space:pre-wrap;word-break:break-all}"
+".voice-meta{font-size:.72em;color:#8b949e;margin-top:6px}"
 "</style><meta http-equiv=\"Cache-Control\" content=\"no-cache,no-store,must-revalidate\"><meta http-equiv=\"Pragma\" content=\"no-cache\"><meta http-equiv=\"Expires\" content=\"0\"></head><body>"
 "<div id=\"toast\" style=\"position:fixed;top:60px;left:50%;transform:translateX(-50%);background:#1a2332;color:#a5d6ff;padding:10px 24px;border-radius:8px;font-size:.88em;z-index:99;opacity:0;transition:opacity .3s;pointer-events:none;border:1px solid #1f6feb\"></div>"
 "<nav class=\"topnav\"><span class=\"brand\">ESP32-S3-EYE · WK2+3 v3</span>"
 "<a href=\"#live-monitor\">传感器示波器</a><a href=\"#evidence-log\">报文监视</a>"
-"<a class=\"act\" href=\"#collect-console\">控制中心</a><a href=\"#camera-console\">📷 抓拍</a>"
+"<a class=\"act\" href=\"#collect-console\">控制中心</a><a href=\"#camera-console\">📷 抓拍</a><a href=\"#voice-panel\">🎙 语音</a>"
 "<a href=\"#auto-cap-panel\">⏱ 自动</a><a href=\"#gallery-panel\">🖼 画廊</a>"
 "<a href=\"#\" onclick=\"toast('外场与导出 — 功能开发中');return false\">外场与导出</a></nav>"
 "<div class=\"card\" id=\"collect-console\"><h2>📡 远程采集控制台<span class=\"panel-badge\" id=\"taskBadge\">手动指令 v2.0</span></h2><div class=\"card-body\">"
@@ -338,6 +351,13 @@ static const char INDEX_HTML[] =
 "<div class=\"actions\"><button class=\"act-btn ghost\" onclick=\"loadGallery()\" style=\"min-width:160px\">🔄 刷新画廊</button></div>"
 "<div class=\"gal-grid\" id=\"galGrid\"><div class=\"gal-empty\">暂无照片：先点击\"📸 立即发送抓拍指令\"拍摄一张。</div></div>"
 "</div></div>"
+"<div class=\"card\" id=\"voice-panel\"><h2>🎙 语音交互<span class=\"panel-badge\" id=\"voiceBadge\">浏览器端</span></h2><div class=\"card-body\">"
+"<div class=\"voice-row\"><button class=\"voice-btn start\" id=\"voiceBtn\" onclick=\"voiceToggle()\">开始录音</button>"
+"<span class=\"voice-badge idle\" id=\"voiceState\">空闲</span></div>"
+"<div class=\"voice-meta\" id=\"voiceMeta\">准备就绪 — 点击按钮开始或停止录音</div>"
+"<div class=\"voice-asr\" id=\"voiceAsr\">（尚未识别语音）</div>"
+"</div></div>"
+
 "<script>"
 "function toast(msg){var t=document.getElementById('toast');t.textContent=msg;t.style.opacity='1';setTimeout(function(){t.style.opacity='0'},2000);}"
 "function switchNav(e){var as=document.querySelectorAll('.topnav a');as.forEach(function(a){a.classList.remove('act')});e.classList.add('act');}"
@@ -556,7 +576,35 @@ static const char INDEX_HTML[] =
 "n.textContent='定时抓拍运行中。板端每 '+d.interval_s+'s 自动调用摄像头拍摄 JPEG。';}"
 "else{b.textContent='已停用';b.style.color='#8b949e';e.style.display='';f.style.display='none';"
 "n.textContent='定时抓拍未启用。启用后板端将按周期自动调用摄像头拍摄 JPEG。';}}).catch(function(){});}"
-"function init(){startAuto();restoreLatest();refreshStored();loadRecords();loadGallery();refreshAutoCapStatus();ageTimer=setInterval(tick,1000);}"
+"var VOICE_URL=\"__VOICE_PC_URL__\";var voicePolling=null;var voiceBusy=false;"
+"function voiceToggle(){"
+"if(voiceBusy||!VOICE_URL||VOICE_URL.indexOf('__')===0)return;"
+"var btn=$('voiceBtn');var isRec=$('voiceState').classList.contains('recording');"
+"voiceBusy=true;btn.disabled=true;btn.textContent=isRec?'停止中…':'启动中…';"
+"fetch(VOICE_URL+'/api/voice/'+(isRec?'stop':'start'),{method:'POST'})"
+".then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})"
+".then(function(d){voiceRefresh();})"
+".catch(function(e){$('voiceMeta').textContent='请求失败：'+e.message;voiceBusy=false;voiceRefresh();});}"
+"function voiceRefresh(){"
+"if(!VOICE_URL||VOICE_URL.indexOf('__')===0)return;"
+"fetch(VOICE_URL+'/api/voice/status')"
+".then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})"
+".then(function(d){"
+"var st=$('voiceState'),btn=$('voiceBtn'),meta=$('voiceMeta'),asr=$('voiceAsr');"
+"if(d.state==='recording'){st.textContent='录音中';st.className='voice-badge recording';"
+"btn.textContent='停止录音';btn.className='voice-btn stop';btn.disabled=false;"
+"meta.textContent='已录 '+d.frames_recorded+' 帧 \\u00b7 '+d.elapsed_seconds.toFixed(1)+' 秒';}"
+"else{st.textContent='空闲';st.className='voice-badge idle';"
+"btn.textContent='开始录音';btn.className='voice-btn start';btn.disabled=false;"
+"meta.textContent='准备就绪';}"
+"if(d.asr&&d.asr.status==='running'){asr.textContent='识别中…';}"
+"else if(d.asr&&d.asr.status==='success'){asr.textContent=d.asr.text||'(空)';meta.textContent+=' \\u00b7 ASR '+d.asr.model+' '+d.asr.duration_seconds+'s';}"
+"else if(d.asr&&d.asr.status==='failed'){asr.textContent='识别失败：'+(d.asr.error||'未知');}"
+"voiceBusy=false;}).catch(function(e){"
+"var m=$('voiceMeta');if(m)m.textContent='无法连接语音服务 — PC 服务可能未运行';voiceBusy=false;});}"
+"function voicePollStart(){if(voicePolling)return;voiceRefresh();voicePolling=setInterval(voiceRefresh,1500);}"
+"function voicePollStop(){if(voicePolling){clearInterval(voicePolling);voicePolling=null;}}"
+"function init(){startAuto();restoreLatest();refreshStored();loadRecords();loadGallery();refreshAutoCapStatus();voicePollStart();ageTimer=setInterval(tick,1000);}"
 "init();</script></body></html>";
 /* ================================================================
  * HTTP Request Handlers
@@ -565,7 +613,20 @@ static const char INDEX_HTML[] =
 static esp_err_t root_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
-    httpd_resp_send(req, INDEX_HTML, strlen(INDEX_HTML));
+
+    const char *placeholder = "__VOICE_PC_URL__";
+    const char *pos = strstr(INDEX_HTML, placeholder);
+
+    if (pos == NULL || CONFIG_VOICE_PC_URL[0] == '\0') {
+        httpd_resp_send(req, INDEX_HTML, strlen(INDEX_HTML));
+        return ESP_OK;
+    }
+
+    httpd_resp_send_chunk(req, INDEX_HTML, pos - INDEX_HTML);
+    httpd_resp_send_chunk(req, CONFIG_VOICE_PC_URL, strlen(CONFIG_VOICE_PC_URL));
+    const char *rest = pos + strlen(placeholder);
+    httpd_resp_send_chunk(req, rest, strlen(rest));
+    httpd_resp_send_chunk(req, NULL, 0);
     return ESP_OK;
 }
 
