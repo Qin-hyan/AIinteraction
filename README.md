@@ -16,6 +16,7 @@
 - **请求记录表**：设备端最近 6 条请求与观测历史
 - **周期上报开关**：暂停后板端停止采样、页面停止刷新，但命令通道保持可用
 - **CSV 导出按钮**：将浏览器本地持久化的有效观测一键导出为 `esp32_obs_YYYY-MM-DD_hh-mm-ss.csv`
+- **🎙 语音交互面板**：仪表盘内置语音控制（开始/停止录音），实时显示录音帧数、时长、ASR 识别文本与状态；直接调用 PC 端语音服务 `/api/voice/{start,stop,status}`
 
 仪表盘使用深色主题，所有字段缺失或空值时显示 `—`，不会出现 `undefined` 或 `NaN`。
 
@@ -39,6 +40,9 @@
 | **localStorage 持久化** | 有效观测自动保存至浏览器本地（50 条上限，`record_id` 去重），刷新不丢 |
 | **CSV 导出** | 12 列字段，UTF-8+BOM 编码兼容 Excel，字段缺失留空，不伪造数值 |
 | **按键物理反馈** | Week 03：独立 FreeRTOS 按键扫描任务 (30 Hz)，事件驱动 LED 反馈与 HTTP 上行 |
+| **语音交互面板** | Week 05：ESP32 仪表盘内置 🎙 语音控制面板，通过 PC 语音服务实现录音/ASR 状态显示与按钮控制；语音输入链路（PLAY→PC 录音→Whisper ASR→STOP 回执→ESP32 回 IDLE）已实机双端闭环验证通过（Step 3I） |
+
+> ⚠️ **Week 05 语音识别待人工验收**：真实中文语音识别准确率和简体中文输出质量**尚未经人工审阅**，不得宣称已通过。静音/背景噪声导致的空转录不得记录为识别成功。
 
 ### 关键字段说明
 
@@ -309,6 +313,9 @@ AIinteraction/
 | `GET /api/collect/status?request_id=xxx` | 查询任务状态 |
 | `GET /api/collect/history` | 设备端最近 6 条记录 |
 | `POST /api/auto_refresh?on=0|1` | 周期上报开关 |
+| `POST /api/voice/start` | PC 语音服务：开始录音 |
+| `POST /api/voice/stop` | PC 语音服务：停止录音（返回紧凑回执 ≤120B；自动后台 Whisper ASR） |
+| `GET /api/voice/status` | PC 语音服务：查询录音状态、WAV 元数据、ASR 结果 |
 
 ### 采集任务状态机
 
@@ -327,7 +334,7 @@ IDLE → SUBMITTED(已提交·已受理) → RECEIVED(设备已接收)
 | `main` | 最新合并版本 `7dd788b`（PR #4）— 已包含 Week 01–04 完整代码，与 `origin/main` 同步 |
 | `week02-stable` (tag) | **稳定基线** — 12 项实机验证全 PASS |
 | `feature/week04-natural-language` | 已合并的**历史分支**（PR #4 → `main` `7dd788b`；分支 HEAD `0b4b323` 保留） |
-| `feature/week05-voice-interaction` | **当前** — Week 05 开发分支（基线 `7dd788b`）；含完整功能实现：PC 音频采集/录音 HTTP 控制服务/本地 Whisper ASR 模块 + ESP32 PLAY 按键语音控制；**2026-10-11 收尾推送至 `origin/feature/week05-voice-interaction`**；语音输入链路实机双端闭环验证通过（Step 3I）；TTS/LLM/全链路播报未完成 |
+| `feature/week05-voice-interaction` | **当前** — Week 05 开发分支（基线 `7dd788b`）；HEAD `91959fb`；含完整功能实现：PC 音频采集/录音 HTTP 控制服务/本地 Whisper ASR 模块 + ESP32 PLAY 按键语音控制 + **ESP32 仪表盘 🎙 语音交互面板**；语音输入链路实机双端闭环验证通过（Step 3I）；**2026-10-13 收尾：本地领先 `origin` 4 提交（D008 决策草案 → Step 4A/4B 集成 → revert → 仪表盘语音按钮）**；真实中文 ASR/简体中文输出待次日人工验收；TTS/LLM/全链路播报未完成 |
 
 ---
 

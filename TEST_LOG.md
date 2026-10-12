@@ -668,3 +668,46 @@ if (help_button_get_pending(&btn)) {
 **合规**: 录音 WAV 已清理；仓库内无 WAV、无临时文件；未修改代码/依赖/固件；未读取 `sdkconfig` 与 Wi-Fi 凭据（详见 `weeks/week05/STATE.md` Step 3I 段）。
 
 > ⚠️ **Week 05 未完成能力（如实标注）**：Step 4 LLM NL→JSON、Step 5 TTS 播报、Step 6 全链路串联、Step 7 状态显示与 LED 反馈、Step 8 异常与文字对照测试均未开始。
+
+---
+
+## Week 05 收尾 — 最终测试回归 (2026-10-13)
+
+**分支**: `feature/week05-voice-interaction`
+**版本**: HEAD `91959fb` feat(week05): add voice interaction buttons to ESP32 dashboard
+**验证方式**: Python 自动测试（pytest，虚拟环境 `D:\AIinteraction-venvs\week05-audio`）
+**结果**: **212 PASS / 1 FAIL（历史已知，非本次引入）**
+
+| # | 测试项 | 结果 | 备注 |
+|---|--------|------|------|
+| 1 | `pytest service/` 全量回归 | **212 passed, 1 failed** | Week 04 + Week 05 全部 Python 测试 |
+| 2 | `test_asr_whisper.py` | 18/18 ✅ PASS | 本地 Whisper ASR 模块 |
+| 3 | `test_audio_capture.py` | 30/31 PASS | 1 FAIL = 历史已知（见下方） |
+| 4 | `test_query_last.py` | 13/13 ✅ PASS | Week 04 查询工具 |
+| 5 | `test_result_formatter.py` | 20/20 ✅ PASS | Week 04 格式化器 |
+| 6 | `test_task_dispatcher.py` | 16/16 ✅ PASS | Week 04 任务分发 |
+| 7 | `test_task_pipeline.py` | 7/7 ✅ PASS | Week 04 任务管道 |
+| 8 | `test_task_pipeline_integration.py` | 10/10 ✅ PASS | Week 04 集成测试 |
+| 9 | `test_trigger_collect.py` | 12/12 ✅ PASS | Week 04 采集触发器 |
+| 10 | `test_validator.py` | 24/24 ✅ PASS | Week 04 schema 校验 |
+| 11 | `test_voice_control_server.py` | 62/62 ✅ PASS | Week 05 录音 HTTP 控制 + 后台 ASR |
+
+### 已知历史失败（非本次引入，不修）
+
+| 测试 | 失败模式 | 状态 |
+|------|---------|------|
+| `test_audio_capture.py::TestStartStopRecording::test_state_transitions_allow_repeated_recordings` | `AssertionError: 2 != 3` — 预期 3 次反复录音各产生独立 WAV 文件，实际仅输出 2 个。模拟音频流 `FakeSoundDevice` 在多轮 start/stop 中 WAV 文件计数偏差。 | **已知，非本次引入**（已存在于 `.pytest_cache/v/cache/lastfailed`） |
+
+### 固件编译（未重编，以历史记录为准）
+
+| 项 | 结果 | 备注 |
+|----|------|------|
+| `idf.py build`（ESP-IDF v5.4.3） | ✅ 历史 PASS（Step 2B `37773bf`） | 0 warning / 0 error |
+| 产物名称 | `week02-sensor-collect.bin` | **Week 02 遗留项目名**，仅影响固件文件名，无功能影响 |
+| 烧录与实机验证 | ✅ 历史 PASS（Step 3I `7dc2d08`） | 双端闭环验证通过 |
+
+### ⚠️ 待次日人工验收（不属本次收尾范围）
+
+1. **真实中文语音识别准确率**：以真人普通话口语输入（非预录音、非静音），人工判断 Whisper `base/zh` 转写结果是否语义正确
+2. **简体中文输出质量**：ASR 转写文本的编码（UTF-8）与简体中文内容，在浏览器仪表盘 `🎙 语音` 面板中是否正确显示
+3. 验收标准：**不得**把静音导致的空转写记录为识别成功；**不得**在人工审阅前宣称识别准确率已通过

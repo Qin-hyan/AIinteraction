@@ -19,10 +19,10 @@ AIinteraction/
 │   ├── http_server.c/h     # HTTP 服务器 + Web 仪表盘 + REST API
 │   ├── camera_app.c/h      # OV2640 摄像头驱动
 │   ├── help_event.c/h      # Week 03: 实体按键→物理反馈闭环
-│   ├── voice_button.c/h    # Week 05: PLAY 按键 → PC 录音控制（Step 2B；仅编译通过，未烧录/未联调）
+│   ├── voice_button.c/h    # Week 05: PLAY 按键 → PC 录音控制（已烧录/已实机验证 Step 3I）
 │   └── help_uplink.c/h     # Week 03: 求助事件 VPS 上行推送（已集成 main.c，真实 VPS 验收未完成）
 ├── partitions.csv          # 8MB Flash 分区表 (factory 3MB, storage ~5MB SPIFFS)
-├── CMakeLists.txt          # 顶层项目: week02-sensor-collect
+├── CMakeLists.txt          # 顶层项目: week02-sensor-collect（Week 02 遗留名称，仅影响固件文件名）
 ├── sdkconfig.defaults      # 公开配置模板
 ├── sdkconfig               # 本地配置（gitignored，含 Wi-Fi 凭据）
 ├── dependencies.lock
@@ -45,6 +45,7 @@ AIinteraction/
 | 物理反馈 | `help_event.c/h` | ✅ Week 03 | 按键→LED→Web 闭环, 去抖 FSM (30Hz), 快速连按抑制通过 |
 | VPS 上行推送 | `help_uplink.c/h` | 🔧 Week 03 | help_event_t 序列化为 JSON → HTTP POST；**异步接口已集成 main.c**（`29dd72d`：`help_uplink_start` / `request_send` / `poll`），**真实 ESP32→VPS 端到端实机验收未完成** |
 | 语音控制（PLAY→PC） | `voice_button.c/h` | ✅ Week 05 | PLAY 按键 → `esp_http_client` POST `/api/voice/start` \| `/api/voice/stop`；独立任务+队列（非阻塞）；Kconfig `CONFIG_VOICE_PC_URL`（空 = 功能关闭）；**已烧录并经 Step 3I 真实双端闭环验证（START/STOP 双端 HTTP 200、ESP32 本地回 IDLE）** |
+| ESP32 仪表盘语音面板 | `main/http_server.c` | ✅ Week 05 | 🎙 语音交互面板：开始/停止录音按钮 + 实时帧数/时长/ASR 文本显示；`__VOICE_PC_URL__` 模板注入（`CONFIG_VOICE_PC_URL` 空时自动隐藏）；提交 `91959fb` |
 | PC 录音控制服务 | `service/voice_control_server.py` | ✅ Week 05 | Flask HTTP 控制录音（start/stop/status）；stop 返回紧凑回执（≤120B）；停录后自动后台 Whisper ASR；自动测试 62/62（Step 3D 版） |
 | PC 音频采集 | `service/audio_capture.py` | ✅ Week 05 | sounddevice 采集 16000Hz/1ch/int16 → stdlib `wave` 写 WAV；自动测试 31/31 + 真实麦克风 PASS |
 | 本地 Whisper ASR | `service/asr_whisper.py` | ✅ Week 05 | 本地推理 `base/zh/transcribe/cpu`，stdlib `wave` 解码不依赖 FFmpeg；自动测试 18/18 + 真实中文语音 PASS |

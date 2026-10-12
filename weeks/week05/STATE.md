@@ -1,7 +1,9 @@
 # Week 05 State — 接通按键说话与语音播报
 
-**状态**: 🟢 **Step 1 完成（WAV 格式 PASS；真实麦克风有效语音第 3 轮 ✅ PASS）；Step 2A PC 端录音 HTTP 控制服务 ✅ 已实现并通过自动测试（39/39）；Step 2B ESP32 固件侧 PLAY→PC 控制代码 ✅ 已实现并 `idf.py build` 通过；Step 2C 实机联调 ✅ 已烧录并实测通过（PLAY→start→recording→stop→idle 双端取证，含一次瞬时连接失败的如实记录）；Step 3A 本地 Whisper ASR 模块（`service/asr_whisper.py`）✅ 已实现并通过自动测试（18/18，回归 190 通过）；真实语音识别 ✅ 已执行（stdlib `wave` 解码路径经实测不依赖 FFmpeg；第 2 轮 PASS——base/zh/cpu 纯推理 0.68s，转录非空且语义对应；第 1 轮窗口内无有效语音、转录为空，已如实记录）；Step 3B 录音停止后自动提交后台本地 ASR ✅ 已实现并通过自动测试（`service/test_voice_control_server.py` 58/58，新增 19 项 ASR 相关；`pytest service/` 回归 209 passed + 6 subtests）；Step 3C 真实端到端验证 ✅ 已实测（2026-10-11：ESP32 两次 PLAY→PC 录音→自动后台 Whisper base/zh/cpu 识别 success，START 双端取证成功；ASR 文本「現在測試Whisper本地與音識別」非空且中段语义对应、**前半句未识别，如实记录**；发现真实缺陷：Step 3B 的 stop 响应新增 asr 块后超 ESP32 512B 缓冲 → 固件侧 STOP 契约校验失败（RESPONSE_INVALID，HTTP=200；PC 实际已停录并完成 ASR），本地确认状态停留 RECORDING；**未擅自修改代码，缺陷待修**）；Step 3D 修复该契约缺陷 ✅（2026-10-11：控制接口与查询接口解耦——`POST /api/voice/stop` 改为**紧凑控制回执**（ok/state/recording/wav.frames/wav.duration_seconds/asr.status），完整 wav/asr 调试信息保留在 `GET /api/voice/status`；真实量级 619200 帧场景实测响应 **120B ≪ 512B**，不再截断；固件契约字段核对满足，**无需改 ESP32 固件**；`service/test_voice_control_server.py` 62/62，`pytest service/` 回归 213 passed + 6 subtests；改动仅限 `service/` 两个文件与本文档，未烧录、未真实联调）；**Step 3E 实机验证发现 `btn_scan` 任务栈溢出 → 已修复**（`BTN_TASK_STACK_SIZE` 2048→4096，`idf.py build` 通过，未烧录复核，详见下方 Step 3E 段）；**Step 3F 烧录含修复固件实机复核 ✅ + 端到端重测发现新失败项**（2026-10-11：烧录成功；设备连续运行 720+ 秒含两次真实 PLAY，`btn_scan` 栈溢出**未复现** ✅；START 双端成功；WHISPER ASR success；**但 STOP 在 ESP32 端因 `ESP_ERR_HTTP_EAGAIN (err=0x7007)` 5s 超时失败，本地状态停留 RECORDING**——与 Step 3C 截断不同的传输层失败模式，PC 已停录并完成 ASR；按规则未改代码未重试，详见下方 Step 3F 段）；**Step 3G 实机重测被设备 Brownout 复位中断**（2026-10-11：START 双端成功、ASR success、栈溢出未复现；但 STOP 阶段设备 `E BOD: Brownout detector was triggered` → `rst:0x3 (RTC_SW_SYS_RST)` 硬件复位，STOP 未送达 PC，用户 STOP 按键复位后被误发为 START（409）；经用户授权停录并删除 WAV；Step 3F 的 `ESP_ERR_HTTP_EAGAIN` 本轮未发生（无样本）；详见下方 Step 3G 段）；**Step 3I 真实语音双端闭环最终验证 ✅ PASS**（2026-10-11 16:08–16:15：ESP32 PLAY→PC START 200→录音 18.40s / 294400 帧→ESP32 PLAY→PC STOP 200→ESP32 本地确认状态回 IDLE，全程无截断/无传输层超时/无栈溢出/无 Brownout；双端取证完整，详见下方 Step 3I 段）**
-**分支**: `feature/week05-voice-interaction`（本地分支；2026-10-11 收尾时推送至 `origin/feature/week05-voice-interaction`）
+**状态**: 🟢 **代码集成已完成；真实中文语音识别和简体中文输出待次日人工验收。** 2026-10-13 收尾：HEAD `91959fb`（本地领先 `origin` 4 提交）。语音输入链路实机双端闭环验证通过（Step 3I）；ESP32 仪表盘 🎙 语音交互面板已集成（`91959fb`）；Step 4A/4B PC 端语音控制台集成已 revert（`adf123f`）。
+
+> ⚠️ **禁止宣称**：不得把静音/背景噪声导致的空转录记录为识别成功，也不得宣称识别准确率已通过。在取得人工审阅证据前，ASR 准确率与简体中文输出质量标记为「待验证」。
+**分支**: `feature/week05-voice-interaction`（本地分支 HEAD `91959fb`，领先 `origin/feature/week05-voice-interaction` 4 提交；2026-10-13 收尾）
 **基线**: `7dd788b` — Merge pull request #4 (origin/main)
 
 ## 方案文档
@@ -918,3 +920,50 @@ ESP32 固件**（`main/voice_button.c/h` 无改动）。
   - whisper 本地推理速度是否满足交互体验要求
   - edge-tts 网络连通性：PC 端调用微软在线 TTS 服务，**需要网络、不需要 API Key**，合成文本会发送给外部服务（隐私待确认）
   - 课程许可：教师确认 whisper 模型与微软在线 TTS 服务的使用权限（独立于 API Key，待确认）
+## Week 05 收尾 — 2026-10-13 最终状态
+
+> ⚠️ **代码集成已完成；真实中文语音识别和简体中文输出待次日人工验收。**
+
+### 本地未推送提交（领先 `origin/feature/week05-voice-interaction` 4 提交）
+
+| 提交 | 日期 | 说明 |
+|------|------|------|
+| `339c2ad` | 2026-10-12 | docs(week05): record voice pipeline decision draft D008 for review |
+| `fedd33c` | 2026-10-12 | feat(week05): integrate web dashboard with voice console (Step 4A/4B) |
+| `adf123f` | 2026-10-13 | Revert "feat(week05): integrate web dashboard with voice console (Step 4A/4B)" |
+| `91959fb` | **2026-10-13 HEAD** | **feat(week05): add voice interaction buttons to ESP32 dashboard** |
+
+### ESP32 仪表盘 🎙 语音交互面板（`91959fb`）
+
+- **位置**：`main/http_server.c` — 仪表盘 HTML 中新增「🎙 语音交互」卡片（`#voice-panel`）
+- **功能**：开始/停止录音按钮（`voice-btn start/stop`，绿色/红色切换）、状态标识（`voice-badge idle/recording`，空闲/录音中+脉冲动画）、录音帧数与时长显示、ASR 识别文本与模型/耗时元数据
+- **通信**：浏览器 `fetch()` → PC 语音服务 `POST /api/voice/{start,stop}`、轮询 `GET /api/voice/status`（每 1.5s）
+- **模板注入**：`__VOICE_PC_URL__` 占位符在 `root_handler()` 中以 `CONFIG_VOICE_PC_URL` 替换；`CONFIG_VOICE_PC_URL` 为空时原样输出，由 JS 端 `VOICE_URL.indexOf('__') === 0` 检测并静默隐藏功能
+- **修改文件**：`main/http_server.c`（+69/-4）、`service/voice_control_server.py`（+7）
+
+### Step 4A/4B revert 说明（`fedd33c` → `adf123f`）
+
+- `fedd33c` 新增 PC 端独立语音控制台页面（`service/web/dashboard.html`，95 行）与服务器端路由（`service/voice_control_server.py` +117 行）、测试（`service/test_voice_control_server.py` +119 行）
+- `adf123f` 完整回退上述改动——当前代码**不含**独立 PC 语音控制台页面；语音交互仅通过 ESP32 仪表盘内嵌面板提供
+- 回退原因：PC 端 Web 控制台未与 ESP32 仪表盘建立明确的职责边界，按「不猜测、不扩大范围」原则回退；**仪表盘内嵌方案（`91959fb`）已替代该功能需求**
+
+### 自动测试回归结果（2026-10-13）
+
+- **`pytest service/`**: **212 passed, 1 failed**（历史已知，非本次引入）
+- 历史失败：`test_audio_capture.py::TestStartStopRecording::test_state_transitions_allow_repeated_recordings`（`2 != 3`，FakeSoundDevice 多轮 WAV 计数偏差）
+- 详见 `TEST_LOG.md`「Week 05 收尾 — 最终测试回归 (2026-10-13)」段
+
+### 已知遗留项（如实记录，不属本次收尾范围）
+
+| 项 | 状态 | 说明 |
+|----|------|------|
+| `week02-sensor-collect` 固件名称 | 遗留 | `CMakeLists.txt:5` 项目名自 Week 02 未更新；仅影响 `*.bin` 文件名，无功能影响 |
+| `test_audio_capture` 历史失败 | 已知不修 | `test_state_transitions_allow_repeated_recordings` 2≠3，FakeSoundDevice 模拟层问题 |
+| Step 3F `ESP_ERR_HTTP_EAGAIN` | **留档** | Step 3I 未复现（单样本），传输层超时根因未排查 |
+| Step 3G Brownout | **留档** | Step 3I 未复现，供电波动类硬件问题 |
+
+### ⚠️ 明天唯一需要完成的人工验收项目
+
+1. **真实中文语音识别准确率**：真人普通话口语 → 浏览器仪表盘 🎙 面板 «开始录音» → 说话 → «停止录音» → 等待 ASR 完成 → 检查面板中显示的转写文本是否与口述语义一致
+2. **简体中文输出显示**：确认 ASR 结果在仪表盘面板中以简体中文正确渲染（UTF-8，无乱码）
+3. 验收标准：**禁止**把静音/背景噪声产生的空转写/乱码标记为识别成功；**禁止**在人工审阅前宣称识别准确率已通过

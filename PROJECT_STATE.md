@@ -4,16 +4,21 @@
 
 ---
 
-## 当前：Week 05 — 接通按键说话与语音播报（语音输入链路实现完成，收尾中）
+## 当前：Week 05 — 接通按键说话与语音播报（代码集成已完成，收尾中）
 
-**分支**: `feature/week05-voice-interaction`（本地分支；2026-10-11 收尾时推送至 `origin/feature/week05-voice-interaction`）
+**分支**: `feature/week05-voice-interaction`（本地分支 HEAD `91959fb`，领先 `origin/feature/week05-voice-interaction` 4 提交；2026-10-13 收尾）
 **基线**: `7dd788b` — Merge pull request #4（= `main` = `origin/main`）
-**阶段**: 🟢 **语音输入链路已实现并通过真实双端闭环验证**（2026-10-11 Step 3I：PLAY→PC 录音→自动后台 Whisper ASR→STOP 回执→ESP32 恢复 IDLE，START/STOP 均 HTTP 200、0 崩溃）。含：PC 音频采集、录音 HTTP 控制服务、本地 Whisper ASR 模块、ESP32 PLAY 按键控制、录音停止自动后台 ASR。已处理 Step 3C 截断（3D 解耦）、Step 3E 栈溢出（2048→4096，实机复核通过）；Step 3F 传输层超时与 Step 3G Brownout 均未在 Step 3I 复现（留档）。
+**阶段**: 🟢 **语音输入链路已实现并通过真实双端闭环验证**（2026-10-11 Step 3I：PLAY→PC 录音→自动后台 Whisper ASR→STOP 回执→ESP32 恢复 IDLE，START/STOP 均 HTTP 200、0 崩溃）。含：PC 音频采集、录音 HTTP 控制服务、本地 Whisper ASR 模块、ESP32 PLAY 按键控制、录音停止自动后台 ASR、**ESP32 仪表盘 🎙 语音交互面板**（2026-10-13 提交 `91959fb`）。已处理 Step 3C 截断（3D 解耦）、Step 3E 栈溢出（2048→4096，实机复核通过）；Step 3F 传输层超时与 Step 3G Brownout 均未在 Step 3I 复现（留档）。
+
+> ⚠️ **Week 05 代码集成已完成；真实中文语音识别和简体中文输出待次日人工验收。** 不得把静音/背景噪声导致的空转录记录为识别成功，也不得宣称识别准确率已通过。
 
 **本周已完成（有证据）**:
 - Step 1 PC 音频采集：WAV 格式 + 真实麦克风有效语音 PASS
 - Step 2A/2B/2C：PC 录音 HTTP 控制服务 + ESP32 PLAY 按键控制 + 实机联调通过
 - Step 3A/3B/3C/3D/3E/3F/3G/3I：本地 Whisper ASR、自动后台 ASR、端到端验证、契约修复、栈修复与实机复核、最终双端闭环验证
+- **ESP32 仪表盘 🎙 语音交互面板**：浏览器端语音按钮（开始/停止录音）、实时状态/帧数/ASR 文本显示，提交 `91959fb`（2026-10-13）
+- **D008 决策草案**（`339c2ad`）：Week 05 语音链路 5 项决策点记录，待用户审阅
+- **Step 4A/4B PC 端语音控制台集成**（`fedd33c`）→ 已 revert（`adf123f`），当前代码不含独立 PC 语音控制台页面
 
 **本周未完成（如实标注，收尾不扩开发范围）**:
 - Step 4 语言模型 NL→JSON（未开始）
