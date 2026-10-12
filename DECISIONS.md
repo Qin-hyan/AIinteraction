@@ -63,3 +63,55 @@
 - **决定**: 使用 GPIO38（RGB LED）和 GPIO3（模组电源 LED）作为物理反馈输出
 - **原因**: ESP32-S3-EYE 板载 LED
 - **影响**: `help_led_update()` 同时驱动两个 LED
+
+---
+
+## D008 — Week 05 语音链路决策草案（待审查）
+
+> **状态**: ⏳ **待审查** —— 本条为「Week 05 语音链路决策草案」的落实记录，**尚未视为已确认决策**；逐项标注【已确认】【候选方案】【待验证】，并附课程要求或代码证据。不猜测、不编造，未发生事项不声称发生。
+
+- **日期**: Week 05（2026-10-11）
+- **基线**: `7dd788b` — Merge pull request #4（Week 04 已进入 `main`）
+- **性质**: 待用户审阅后决定是否转为正式 D 条目；仅记录，不改 `TaskContract`、不引入新选项
+
+### 1. 音频处理运行位置 ——【已确认】
+
+- 初版音频处理运行在 **PC 端**；ESP32 侧只发出「开始/结束录音」控制请求，不采集、不处理音频。
+  - 代码证据: `service/audio_capture.py`（sounddevice 采集 16kHz/16bit/mono → stdlib `wave` 写 WAV）；`main/voice_button.c` 文件头「不采集音频、不做 ASR/LLM/TTS」。
+  - 硬件/课程依据: ESP32-S3-EYE 板上无麦克风（有 OV2640 摄像头与 QMA6100P），音频输入依赖 PC 麦克风；真实麦克风采集已验证（Step 1 PASS，`weeks/week05/STATE.md`）。
+- 【待验证】播放侧: TTS 播报（Step 5）**未开始**，语音链路输出侧无实现，不得宣称已完成。
+- 【已确认/证据】真实录音与控制服务闭环已通过 Step 2C / Step 3I 双端验证（START/STOP 均 HTTP 200、ESP32 回 IDLE）。
+
+### 2. ESP32 实体按键通知 PC 开始/结束录音 ——【选项与冲突说明】
+
+- **Help 事件冲突（已确认的事实基础）**: Week 03 的 `help_event.c/h` + `help_uplink.c/h` 是**单一事件槽**——同一时间只受理一个上行请求（`help_uplink.c` 单一 `s_event_copy` 拷贝、在途请求被拒）；若语音控制共用该通道，会与教学测试消息状态机（`HELP_TRIGGERED→HELP_SENDING→HELP_SENT→HELP_REMOTE_RECEIVED/HELP_FAILED`）与 LED 反馈逻辑争用，且 PLAY 键在 Week 03 语义上触发 Help 事件，直接复用会产生「同键双义」冲突。
+  - 代码证据: `main/help_event.h`、`main/help_uplink.h`（单一在途请求语义）。
+- **独立语音事件通道（候选方案；分支已有实现原型，决策待审）**: 在 `main/` 新增独立模块 `voice_button.c/h`——独立请求队列 + FreeRTOS 任务（优先级 3 < 按键扫描 5），不复用 `help_uplink` 事件槽，不修改 Week 03 Help 状态机与 LED。
+  - 代码证据: `main/voice_button.c` 文件头声明；对应实现提交 `aff8e8c`（Step 2B）。实机闭环已验证（Step 3I）。
+  - **声明**: 按任务约束，本方案仍在分支中以原型形式存在并已验证，但记录为**候选方案**，最终采纳与否由用户审阅。
+
+### 3. 「每次按下切换录音状态」——【暂定方案 / 候选】
+
+- 评估按 PLAY 时依据「本地已确认状态」自动选择 START/STOP（toggle 切换）：区分「录」与「止」两个阶段，即第 1 次按下开始录音、第 2 次按下结束录音。
+  - 代码证据: `voice_button_request_toggle()`（`main/voice_button.h` / `voice_button.c`）：`confirmed == VOICE_CTRL_RECORDING ? STOP : START`（`voice_button.c` L616-617）；Step 2C / 3I 实机采用同一按键语义。
+- 【待验证】toggle 在以下场景的健壮性与交互体验：请求在途被拒（`busy_reject_count`）、快速连按、长时间录音、设备/PC 状态失步恢复（Step 3G Brownout 复位曾导致设备本地 IDLE 而 PC 仍在录音，用户按下按 START 触发 409 的实机案例，见 `weeks/week05/STATE.md`）。
+- **非决策声明**: 本项按任务约束记为**暂定方案/候选**，不构成已确认、已成正式决定的表述。
+
+### 4. 音频来源与运行位置；不修改 TaskContract ——【已确认】
+
+- 不修改 Week 04 `TaskContract` 结构（`service/task_schema.py`）；音频采集来源（麦克风）、运行位置（PC）、WAV 存放目录先记录在**语音会话记录/服务日志**中，不把音频字段并入任务契约。
+  - 代码证据: `service/task_schema.py`（IntentEnum / TaskContract 无音频字段）；`service/audio_capture.py` 输出 `%TEMP%/voice_task/`（WAV 不提交仓库）。
+  - 关联课程要求: 输入/任务/结果/反馈可追踪关联——语音请求以 `voice-{ms}-{nnnn}` 关联 ID 追踪（`voice_button.c`）。
+- 【待验证】多轮会话下语音会话日志与连续请求 ID 的可追溯性审计（属 Week 06 范畴）。
+
+### 5. ASR / TTS 服务选型与依赖 ——【暂不选择；不引入依赖】
+
+- 任务约束: **暂不选择** ASR/TTS 服务提供商，**不引入**相关依赖；本记录不构成任何选型决定。
+- 代码现状（**非决策确认**）: 分支为实现 Step 3A 已引入本地 Whisper（`service/asr_whisper.py`）与 `requirements-asr.txt` 等分步依赖清单；`edge-tts` TTS 候选在文档中提及但**课程许可/隐私授权未确认**（`PROJECT_STATE.md` 留档）。以上均属代码现状，不在本记录中作成决策。
+
+### 待用户审阅确认的事项
+
+1. 独立语音事件通道（`voice_button` 独立队列/任务）是否正式采纳为 Week 05 决策；
+2. toggle 切换语义是否确定为正式交互方案；
+3. ASR/TTS 服务选型与依赖引入范围（当前仅代码现状，未定论）；
+4. `TaskContract` 保持不扩展语音字段的边界是否延续到 Week 06 多轮语音对话。
