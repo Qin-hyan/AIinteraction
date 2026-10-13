@@ -1175,6 +1175,149 @@ class AsrTaskRunnerUnitTest(unittest.TestCase):
         self.assertIsNone(snap["text"])
         self.assertIn("提交路径异常", snap["error"])
 
+# ═══════════════════════════════════════════════════════════════
+# Week 06: 任务上下文、取消、澄清与迟到结果隔离测试
+# ═══════════════════════════════════════════════════════════════
+
+
+class Week06TaskContextTest(VoiceServerTestBase):
+    """Week 06: request_id / 状态机 / 状态查询。"""
+
+    def test_status_includes_task_block_when_idle(self):
+        data = self.assert_json(self.client.get("/api/voice/status"), 200)
+        self.assertIn("task", data)
+        task = data["task"]
+        self.assertIsNone(task["request_id"])
+        self.assertEqual(task["state"], "idle")
+        self.assertEqual(task["generation"], 0)
+        self.assertIsNone(task["result"])
+
+    def test_start_generates_request_id(self):
+        data = self.assert_json(self.post("/api/voice/start"), 200)
+        self.assertIn("request_id", data)
+        self.assertTrue(data["request_id"].startswith("voice-"))
+        self.assertEqual(data["task_state"], "recording")
+
+    def test_stop_enters_processing_then_task_log(self):
+        self.assert_json(self.post("/api/voice/start"), 200)
+        self.capture.simulate_frames(8000)
+        self.capture.stop_result = make_info(self.output_dir / "t1.wav", frames=8000)
+        data = self.assert_json(self.post("/api/voice/stop"), 200)
+        self.assertEqual(data["task_state"], "processing")
+        s = self.assert_json(self.client.get("/api/voice/status"), 200)
+        self.assertGreaterEqual(len(s["task"]["log"]), 1)
+
+    def test_request_id_unique_across_starts(self):
+        d1 = self.assert_json(self.post("/api/voice/start"), 200)
+        self.post("/api/voice/stop")
+        d2 = self.assert_json(self.post("/api/voice/start"), 200)
+        self.assertNotEqual(d1["request_id"], d2["request_id"])
+
+
+class Week06CancelTest(VoiceServerTestBase):
+    """Week 06: 取消测试。"""
+
+    def test_cancel_no_task_returns_error(self):
+        data = self.assert_json(self.post("/api/voice/cancel"), 409)
+        self.assertEqual(data["error"], "no_active_task")
+
+    def test_cancel_during_recording(self):
+        self.assert_json(self.post("/api/voice/start"), 200)
+        self.capture.simulate_frames(4000)
+        data = self.assert_json(self.post("/api/voice/cancel"), 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["state"], "cancelled")
+        self.assertTrue(data["cancelled_recording"])
+
+    def test_double_cancel_idempotent(self):
+        self.assert_json(self.post("/api/voice/start"), 200)
+        self.assert_json(self.post("/api/voice/cancel"), 200)
+        self.assert_json(self.post("/api/voice/cancel"), 409)
+class Week06StatusCompatibilityTest(VoiceServerTestBase):
+    """Week 06: 状态接口兼容性。"""
+
+    def test_existing_fields_preserved(self):
+        data = self.assert_json(self.client.get("/api/voice/status"), 200)
+        for key in ("ok", "state", "recording", "frames_recorded",
+                     "elapsed_seconds", "config", "asr"):
+            self.assertIn(key, data)
+
+    def test_full_lifecycle_task_fields(self):
+        self.assert_json(self.post("/api/voice/start"), 200)
+        self.capture.simulate_frames(8000)
+        self.capture.stop_result = make_info(self.output_dir / "f1.wav", frames=8000)
+        self.post("/api/voice/stop")
+        s = self.assert_json(self.client.get("/api/voice/status"), 200)
+        task = s["task"]
+        self.assertIn("request_id", task)
+        self.assertIn("generation", task)
+        self.assertGreaterEqual(len(task["log"]), 1)
+
+
+class Week06ClarifyTest(VoiceAsrServerTestBase):
+    """Week 06: 澄清/重新输入。"""
+
+    def test_clarify_no_task_returns_error(self):
+        data = self.assert_json(self.post("/api/voice/clarify", {"text": "x"}), 409)
+        self.assertEqual(data["error"], "no_active_task")
+
+    def test_clarify_empty_text(self):
+        self.assert_json(self.post("/api/voice/start"), 200)
+        self.post("/api/voice/stop")
+        self.assert_json(self.post("/api/voice/clarify", {"text": "   "}), 400)
+
+    def test_new_task_after_cancel(self):
+        self.assert_json(self.post("/api/voice/start"), 200)
+        self.assert_json(self.post("/api/voice/cancel"), 200)
+        data = self.assert_json(self.post("/api/voice/start"), 200)
+        self.assertEqual(data["task_state"], "recording")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+class Week06LateResultIsolationTest(unittest.TestCase):
+    """Week 06: 迟到结果隔离——取消后旧任务不能覆盖新任务。"""
+
+    def setUp(self):
+        self.tmp = TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.capture = FakeAudioCapture(Path(self.tmp.name))
+        self._model = FakeWhisperModel(text="查看最近的加速度数据")
+        tr = asr_whisper.Transcriber(model=self._model, model_name="base",
+                                     language="zh", task="transcribe", device="cpu")
+        self.svc = voice_control_server.VoiceControlService(
+            capture=self.capture, asr=tr)
+
+    def test_cancel_increments_generation(self):
+        self.svc.start()
+        g0 = self.svc._task_generation
+        self.svc.cancel()
+        self.assertGreater(self.svc._task_generation, g0)
+
+    def test_new_task_after_cancel_has_clean_slate(self):
+        self.svc.start()
+        rid1 = self.svc._task_id
+        self.svc.cancel()
+        self.svc.start()
+        rid2 = self.svc._task_id
+        self.assertNotEqual(rid1, rid2)
+        s = self.svc.status()
+        self.assertEqual(s["task"]["state"], "recording")
+        self.assertIsNone(s["task"]["context"])
+
+    def test_cancelled_state_persists(self):
+        self.svc.start()
+        self.svc.cancel()
+        s = self.svc.status()
+        self.assertEqual(s["task"]["state"], "cancelled")
+
+    def test_cancel_then_full_lifecycle(self):
+        self.svc.start()
+        self.svc.cancel()
+        self.svc.start()
+        rid = self.svc._task_id
+        self.capture.simulate_frames(8000)
+        self.capture.stop_result = make_info(Path(self.tmp.name) / "lt.wav", frames=8000)
+        self.svc.stop()
+        s = self.svc.status()
+        self.assertEqual(s["task"]["request_id"], rid)
+        self.assertNotEqual(s["task"]["state"], "cancelled")

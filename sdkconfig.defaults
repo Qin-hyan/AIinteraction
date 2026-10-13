@@ -30,9 +30,11 @@ CONFIG_HTTPD_MAX_URI_LEN=512
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096
 
 # Week 05 语音控制（ESP32 PLAY 按键 → PC 录音控制接口，见 main/voice_button.c）
-# 留空（默认）= 关闭该功能：不创建任务/队列，启动时打印提示，PLAY 按键保持 Week 03 行为。
-# 启用时通过 idf.py menuconfig（Week 05 Voice Control）填写 PC 服务基地址，
-# 形如 http://192.168.x.x:8080（不含路径）；不要在仓库中提交真实电脑私有 IP 或任何凭据。
+# 默认空 = 语音控制关闭（不创建任务/队列，启动时打印提示，PLAY 按键保持 Week 03 行为）。
+# 实际开发环境通过本地已 gitignore 的 sdkconfig（或 idf.py menuconfig → Week 05 Voice Control）
+# 填写 PC 语音服务基地址，形如 http://192.168.x.x:8080（不含路径）；
+# 本地 sdkconfig 中的同名配置优先于本模板（构建实际以本地 sdkconfig 为准），
+# 因此本共享模板不写入当前开发网/实验网的 DHCP 私有 IP。
 CONFIG_VOICE_PC_URL=""
 # 单次请求超时（ms），仅限制后台任务的阻塞时长，不影响按键扫描与主循环。
 CONFIG_VOICE_HTTP_TIMEOUT_MS=5000
