@@ -735,6 +735,58 @@ if (help_button_get_pending(&btn)) {
 | /api/voice/status | GET | ✅ 新增 task 块 |
 
 ### 未验证
-- ESP32 仪表盘取消按钮（需固件重编译）
-- 真实语音交互闭环
+- ESP32 仪表盘取消按钮（需固件重编译）→ 已于 `6e14622` 实现并实机验证（见下方「Week 06 收尾」）
+- 真实语音交互闭环 → 取消联动已实机验证（见下方「Week 06 收尾」）；ASR 内容验收待补
 - TTS 停止播报（无 TTS 实现）
+---
+
+## Week 06 收尾 — 最终验证 (2026-10-14)
+
+**分支**: `feature/week06-voice-task-context`
+**版本**: HEAD `6e14622` — feat(week06): add voice task cancel button and status display to ESP32 dashboard
+**验证方式**: pytest 自动化 + HTTP 接口验证 + ESP32 实机
+**结果**: 自动化 **78/78**（voice server）/ **229/229**（全量）；接口生命周期 ✓；实机取消联动 ✓
+
+### A. 自动化测试（pytest，虚拟环境 `D:\AIinteraction-venvs\week05-audio`）
+
+| # | 测试 | 结果 |
+|---|------|------|
+| 1 | `test_voice_control_server.py`（任务上下文/取消/澄清/迟到隔离/兼容性回归） | ✅ **78/78 PASS** |
+| 2 | `pytest service/` 全量回归 | ✅ **229/229 PASS** |
+
+### B. 接口测试（HTTP API 生命周期验证）
+
+| # | 验证项 | 输入 | 预期 | 实际 | 结果 |
+|---|--------|------|------|------|------|
+| 1 | 任务创建 | `POST /api/voice/start` | 返回唯一 `request_id` | `voice-…-0004` | ✅ PASS |
+| 2 | 录音状态 | `GET /api/voice/status` | `state=recording` | `state=recording` | ✅ PASS |
+| 3 | 取消任务 | `POST /api/voice/cancel` | 停止录音 + 记录取消 | `cancelled_recording=true` | ✅ PASS |
+| 4 | 取消后状态 | `GET /api/voice/status` | `state=cancelled`、generation 递增 | `state=cancelled`，generation 7→8 | ✅ PASS |
+| 5 | 迟到结果隔离 | 取消后旧代次结果返回 | 记录 `result_stale_discarded`，不覆盖新状态 | ✅（自动测试覆盖） | ✅ PASS |
+
+### C. 硬件测试（ESP32 实机，2026-10-14）
+
+| # | 验证项 | 结果 | 证据 |
+|---|--------|------|------|
+| 1 | 固件烧录 | ✅ PASS | ESP-IDF `idf.py flash` 成功 |
+| 2 | 实际 IP | ✅ PASS | `10.28.53.63` |
+| 3 | 仪表盘 | ✅ PASS | HTTP 200 |
+| 4 | 新增取消按钮页面 | ✅ PASS | 页面实测可用 |
+| 5 | **实机取消联动**（ESP32/dashboard → PC service） | ✅ **PASS** | 见下方闭环记录 |
+
+**实机取消闭环证据**（request_id=`voice-09188851-0004`）：
+
+| 阶段 | 证据 |
+|------|------|
+| start | `state=recording`（PC voice service `10.28.53.130:8080`） |
+| cancel | `cancelled_recording=true` |
+| result | `state=cancelled`，generation **7 → 8** |
+
+状态链：`recording → cancel → cancelled`；generation `7 → 8`。
+
+### 未验收（如实记录，不得描述为失败）
+
+| 项 | 状态 | 原因 |
+|----|------|------|
+| 中文 ASR 准确率 | ⏳ 未完成验收 | 用户当前不方便进行语音输入 |
+| TTS 停止播报 | ⛔ 不适用 | 项目无 TTS 实现，不存在可中断的音频播报 |
