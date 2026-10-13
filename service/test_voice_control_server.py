@@ -1274,3 +1274,50 @@ class Week06ClarifyTest(VoiceAsrServerTestBase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+class Week06LateResultIsolationTest(unittest.TestCase):
+    """Week 06: 迟到结果隔离——取消后旧任务不能覆盖新任务。"""
+
+    def setUp(self):
+        self.tmp = TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.capture = FakeAudioCapture(Path(self.tmp.name))
+        self._model = FakeWhisperModel(text="查看最近的加速度数据")
+        tr = asr_whisper.Transcriber(model=self._model, model_name="base",
+                                     language="zh", task="transcribe", device="cpu")
+        self.svc = voice_control_server.VoiceControlService(
+            capture=self.capture, asr=tr)
+
+    def test_cancel_increments_generation(self):
+        self.svc.start()
+        g0 = self.svc._task_generation
+        self.svc.cancel()
+        self.assertGreater(self.svc._task_generation, g0)
+
+    def test_new_task_after_cancel_has_clean_slate(self):
+        self.svc.start()
+        rid1 = self.svc._task_id
+        self.svc.cancel()
+        self.svc.start()
+        rid2 = self.svc._task_id
+        self.assertNotEqual(rid1, rid2)
+        s = self.svc.status()
+        self.assertEqual(s["task"]["state"], "recording")
+        self.assertIsNone(s["task"]["context"])
+
+    def test_cancelled_state_persists(self):
+        self.svc.start()
+        self.svc.cancel()
+        s = self.svc.status()
+        self.assertEqual(s["task"]["state"], "cancelled")
+
+    def test_cancel_then_full_lifecycle(self):
+        self.svc.start()
+        self.svc.cancel()
+        self.svc.start()
+        rid = self.svc._task_id
+        self.capture.simulate_frames(8000)
+        self.capture.stop_result = make_info(Path(self.tmp.name) / "lt.wav", frames=8000)
+        self.svc.stop()
+        s = self.svc.status()
+        self.assertEqual(s["task"]["request_id"], rid)
+        self.assertNotEqual(s["task"]["state"], "cancelled")
