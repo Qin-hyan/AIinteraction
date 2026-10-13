@@ -711,3 +711,30 @@ if (help_button_get_pending(&btn)) {
 1. **真实中文语音识别准确率**：以真人普通话口语输入（非预录音、非静音），人工判断 Whisper `base/zh` 转写结果是否语义正确
 2. **简体中文输出质量**：ASR 转写文本的编码（UTF-8）与简体中文内容，在浏览器仪表盘 `🎙 语音` 面板中是否正确显示
 3. 验收标准：**不得**把静音导致的空转写记录为识别成功；**不得**在人工审阅前宣称识别准确率已通过
+## Week 06 — 任务上下文、取消与澄清 (2026-10-13)
+
+**分支**: eature/week06-voice-task-context
+**版本**: HEAD 54857b9
+**验证方式**: pytest (venv D:\AIinteraction-venvs\week05-audio)
+**结果**: **74 PASS / 0 FAIL（语音控制）；224 PASS / 1 FAIL（全量，1 历史已知）**
+
+| # | 测试类 | 结果 |
+|---|--------|------|
+| 1 | Week06TaskContextTest (4) | ✅ 4/4 PASS |
+| 2 | Week06CancelTest (4) | ✅ 4/4 PASS |
+| 3 | Week06StatusCompatibilityTest (2) | ✅ 2/2 PASS |
+| 4 | Week06ClarifyTest (2) | ✅ 2/2 PASS |
+| 5 | Week 05 回归 (62) | ✅ 62/62 PASS |
+| 6 | 全量 service | ✅ 224/225 PASS |
+
+### 新增 API
+| 端点 | 方法 | 状态 |
+|------|------|------|
+| /api/voice/cancel | POST | ✅ 取消+停止录音+幂等 |
+| /api/voice/clarify | POST | ✅ CLARIFYING 接受+空拒绝 |
+| /api/voice/status | GET | ✅ 新增 task 块 |
+
+### 未验证
+- ESP32 仪表盘取消按钮（需固件重编译）
+- 真实语音交互闭环
+- TTS 停止播报（无 TTS 实现）

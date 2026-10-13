@@ -1175,6 +1175,102 @@ class AsrTaskRunnerUnitTest(unittest.TestCase):
         self.assertIsNone(snap["text"])
         self.assertIn("提交路径异常", snap["error"])
 
+# ═══════════════════════════════════════════════════════════════
+# Week 06: 任务上下文、取消、澄清与迟到结果隔离测试
+# ═══════════════════════════════════════════════════════════════
+
+
+class Week06TaskContextTest(VoiceServerTestBase):
+    """Week 06: request_id / 状态机 / 状态查询。"""
+
+    def test_status_includes_task_block_when_idle(self):
+        data = self.assert_json(self.client.get("/api/voice/status"), 200)
+        self.assertIn("task", data)
+        task = data["task"]
+        self.assertIsNone(task["request_id"])
+        self.assertEqual(task["state"], "idle")
+        self.assertEqual(task["generation"], 0)
+        self.assertIsNone(task["result"])
+
+    def test_start_generates_request_id(self):
+        data = self.assert_json(self.post("/api/voice/start"), 200)
+        self.assertIn("request_id", data)
+        self.assertTrue(data["request_id"].startswith("voice-"))
+        self.assertEqual(data["task_state"], "recording")
+
+    def test_stop_enters_processing_then_task_log(self):
+        self.assert_json(self.post("/api/voice/start"), 200)
+        self.capture.simulate_frames(8000)
+        self.capture.stop_result = make_info(self.output_dir / "t1.wav", frames=8000)
+        data = self.assert_json(self.post("/api/voice/stop"), 200)
+        self.assertEqual(data["task_state"], "processing")
+        s = self.assert_json(self.client.get("/api/voice/status"), 200)
+        self.assertGreaterEqual(len(s["task"]["log"]), 1)
+
+    def test_request_id_unique_across_starts(self):
+        d1 = self.assert_json(self.post("/api/voice/start"), 200)
+        self.post("/api/voice/stop")
+        d2 = self.assert_json(self.post("/api/voice/start"), 200)
+        self.assertNotEqual(d1["request_id"], d2["request_id"])
+
+
+class Week06CancelTest(VoiceServerTestBase):
+    """Week 06: 取消测试。"""
+
+    def test_cancel_no_task_returns_error(self):
+        data = self.assert_json(self.post("/api/voice/cancel"), 409)
+        self.assertEqual(data["error"], "no_active_task")
+
+    def test_cancel_during_recording(self):
+        self.assert_json(self.post("/api/voice/start"), 200)
+        self.capture.simulate_frames(4000)
+        data = self.assert_json(self.post("/api/voice/cancel"), 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["state"], "cancelled")
+        self.assertTrue(data["cancelled_recording"])
+
+    def test_double_cancel_idempotent(self):
+        self.assert_json(self.post("/api/voice/start"), 200)
+        self.assert_json(self.post("/api/voice/cancel"), 200)
+        self.assert_json(self.post("/api/voice/cancel"), 409)
+class Week06StatusCompatibilityTest(VoiceServerTestBase):
+    """Week 06: 状态接口兼容性。"""
+
+    def test_existing_fields_preserved(self):
+        data = self.assert_json(self.client.get("/api/voice/status"), 200)
+        for key in ("ok", "state", "recording", "frames_recorded",
+                     "elapsed_seconds", "config", "asr"):
+            self.assertIn(key, data)
+
+    def test_full_lifecycle_task_fields(self):
+        self.assert_json(self.post("/api/voice/start"), 200)
+        self.capture.simulate_frames(8000)
+        self.capture.stop_result = make_info(self.output_dir / "f1.wav", frames=8000)
+        self.post("/api/voice/stop")
+        s = self.assert_json(self.client.get("/api/voice/status"), 200)
+        task = s["task"]
+        self.assertIn("request_id", task)
+        self.assertIn("generation", task)
+        self.assertGreaterEqual(len(task["log"]), 1)
+
+
+class Week06ClarifyTest(VoiceAsrServerTestBase):
+    """Week 06: 澄清/重新输入。"""
+
+    def test_clarify_no_task_returns_error(self):
+        data = self.assert_json(self.post("/api/voice/clarify", {"text": "x"}), 409)
+        self.assertEqual(data["error"], "no_active_task")
+
+    def test_clarify_empty_text(self):
+        self.assert_json(self.post("/api/voice/start"), 200)
+        self.post("/api/voice/stop")
+        self.assert_json(self.post("/api/voice/clarify", {"text": "   "}), 400)
+
+    def test_new_task_after_cancel(self):
+        self.assert_json(self.post("/api/voice/start"), 200)
+        self.assert_json(self.post("/api/voice/cancel"), 200)
+        data = self.assert_json(self.post("/api/voice/start"), 200)
+        self.assertEqual(data["task_state"], "recording")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

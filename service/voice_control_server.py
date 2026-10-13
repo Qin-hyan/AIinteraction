@@ -898,8 +898,10 @@ def create_app(
 
     @app.post("/api/voice/clarify")
     def voice_clarify():
+        """Week 06: 澄清/重新输入。"""
         try:
-            d = flask_cls.request.get_json(silent=True) or {}
+            from flask import request
+            d = request.get_json(silent=True) or {}
             p = service.clarify_input(d.get("text", ""))
         except Exception as e:
             return _fail(e)
