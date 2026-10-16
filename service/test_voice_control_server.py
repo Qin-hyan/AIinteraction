@@ -2016,3 +2016,65 @@ class Week06ProductionTimingAcceptanceTest(unittest.TestCase):
         self.assertNotIn("latency_completion_ms", timing)
         self.assertNotIn("latency_termination_ms", timing)
         self.assertNotIn("termination_reason", timing)
+# Test 11: Cancel-to-feedback-stop metric exists for cancelled tasks
+    def test_latency_cancel_to_feedback_stop_present_for_cancelled(self):
+        """Cancelled tasks: latency_cancel_to_feedback_stop_ms present and >=0."""
+        self.svc.start()
+        self.capture.simulate_frames(4000)
+        self.svc.cancel()
+        timing = self.svc.status()["task"]["timing"]
+        self.assertIsNotNone(timing)
+        c2f = timing.get("latency_cancel_to_feedback_stop_ms")
+        self.assertIsNotNone(c2f, "cancelled task should have cancel-to-feedback-stop")
+        self.assertGreaterEqual(c2f, 0)
+        # Also verify the two metrics coexist
+        self.assertIsNotNone(timing.get("latency_termination_ms"))
+        self.assertEqual(timing.get("termination_reason"), "cancelled")
+
+    def test_latency_cancel_to_feedback_stop_absent_for_completed(self):
+        """Completed tasks: latency_cancel_to_feedback_stop_ms absent."""
+        self.svc.start()
+        rid = self.svc._task_id
+        self.capture.simulate_frames(8000)
+        _write_silent_wav(Path(self.tmp.name) / f"{rid}.wav", frames=8000)
+        self.capture.stop_result = make_info(
+            Path(self.tmp.name) / f"{rid}.wav", frames=8000
+        )
+        pip = _StubPipeline(
+            [(0.0, {"ok": True, "intent": "query_last", "sentence": "OK"})]
+        )
+        with patch("service.task_pipeline.run_task", pip.run_task):
+            self.svc.stop()
+            self._poll_state(self.svc, voice_control_server.TASK_STATE_COMPLETED)
+
+        timing = self.svc.status()["task"]["timing"]
+        self.assertIsNotNone(timing)
+        self.assertNotIn("latency_cancel_to_feedback_stop_ms", timing,
+                         "completed task should not have cancel-stop metric")
+
+    def test_cancel_to_feedback_stop_previous_state_not_carry_over(self):
+        """New task after cancel: cancel-stop metric cleared."""
+        # Task 1: cancel
+        self.svc.start()
+        self.svc.cancel()
+        timing1 = self.svc.status()["task"]["timing"]
+        self.assertIn("latency_cancel_to_feedback_stop_ms", timing1)
+
+        # Task 2: complete normally
+        self.svc.start()
+        rid = self.svc._task_id
+        self.capture.simulate_frames(8000)
+        _write_silent_wav(Path(self.tmp.name) / f"{rid}.wav", frames=8000)
+        self.capture.stop_result = make_info(
+            Path(self.tmp.name) / f"{rid}.wav", frames=8000
+        )
+        pip = _StubPipeline(
+            [(0.0, {"ok": True, "intent": "query_last", "sentence": "OK"})]
+        )
+        with patch("service.task_pipeline.run_task", pip.run_task):
+            self.svc.stop()
+            self._poll_state(self.svc, voice_control_server.TASK_STATE_COMPLETED)
+
+        timing2 = self.svc.status()["task"]["timing"]
+        self.assertNotIn("latency_cancel_to_feedback_stop_ms", timing2,
+                         "new completed task should not have old cancel metric")

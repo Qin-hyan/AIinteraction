@@ -131,29 +131,30 @@ generation：`7 → 8`（代次单调递增，旧结果不覆盖取消状态）
 | `latency_completion_ms` | int | 输入结束→成功完成的耗时（ms） | 仅 COMPLETED |
 | `latency_termination_ms` | int | 输入结束→非成功终止的耗时（ms） | FAILED 或 CANCELLED |
 | `termination_reason` | str | 终止原因 `"failed"` / `"cancelled"` | 与 `latency_termination_ms` 同时出现 |
+| `latency_cancel_to_feedback_stop_ms` | int | 取消触发→反馈停止的耗时（ms） | 仅 CANCELLED |
 
-输入未结束时 `timing` 为 `null`；输入已结束但尚未到达首反馈状态时 `timing` 为 `{}`。
+### 三项指标对照课程要求
 
-### 实现要点
+| 课程指标 | 测量起止 | 当前状态 | 说明 |
+|----------|----------|----------|------|
+| 输入结束→首次反馈 | `stop()` 返回 → `_transition_task_state(COMPLETED/FAILED/CLARIFYING/CANCELLED)` | ✅ | 成功任务时与完成时延相等（流水线无中间反馈点） |
+| 输入结束→任务完成 | `stop()` 返回 → `_transition_task_state(COMPLETED)` | ✅ | |
+| 取消→反馈停止 | `cancel()` 入口 → `_transition_task_state(CANCELLED)` | ✅ 本次补齐 | 独立于 `latency_termination_ms`（后者量的是输入结束→CANCELLED） |
 
-- 所有时刻使用 `time.monotonic()`，对外只暴露差值（ms 整数），不暴露绝对时钟值
-- `_transition_task_state()` 中统一记录首次反馈、完成、失败、取消的时刻
-- 每个计时值绑定 `request_id` 和 generation；新任务开始时自动清零
-- 旧任务的迟到回调不覆盖新任务计时
-- cancel 中断录音时记录 `input_end_at`；取消、失败和成功完成严格分离
-- 兼容性：不破坏现有 API 契约（96/96 PASS）
+### 为什么成功任务的首次反馈时延等于完成时延
+
+当流水线架构中 ASR 完成后直接产生最终结果时，首个用户可观察的反馈
+（仪表盘轮询 `/api/voice/status` 看到 `task.state == "completed"` 且含
+`task.result`）与任务完成是同一事件。没有中间的部分结果通知。这是对
+「可观察反馈」的如实度量，不是缺陷。CLARIFYING 和 FAILED 路径中二者不同。
 
 ### 自动化测试
 
-新增 `Week06ProductionTimingAcceptanceTest`（11 项）：
-- 正常完成时延
-- 失败终止时延
-- 录音中/处理中取消时延
-- request_id 一致性
-- 跨任务计时隔离
-- 慢响应×取消交错
-- 输入未结束/处理中边界
-- 计时字段异常不影响状态机
-- CLARIFYING 首反馈≠完成
+`Week06ProductionTimingAcceptanceTest`（14 项）：
+- 正常完成时延、失败终止时延、录音中/处理中取消时延
+- **取消→反馈停止**：存在性、非完成不留痕、跨任务清除
+- request_id 一致性、跨任务计时隔离
+- 慢响应×取消交错、CLARIFYING 首反馈≠完成
+- 输入未结束/处理中边界、计时字段异常不影响状态机
 
-全量回归：**247/247 PASS**（原 235 → 247；0 新增失败）
+全量回归：**250/250 PASS**（原 235 → 247 → 250；0 新增失败）
