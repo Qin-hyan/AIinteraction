@@ -65,13 +65,13 @@ IDLE → RECORDING → PROCESSING → COMPLETED
 | 任务上下文 / 状态机 / 代次隔离 | `service/voice_control_server.py` | ✅ |
 | 取消 `/api/voice/cancel` | `service/voice_control_server.py` | ✅ 自动测试 + 实机 |
 | 澄清/重新输入 `/api/voice/clarify` | `service/voice_control_server.py` | ✅ 自动测试 |
-| Week 06 测试 | `service/test_voice_control_server.py` | ✅ 78/78 |
+| Week 06 测试 | `service/test_voice_control_server.py` | ✅ 85/85 |
 | ESP32 仪表盘取消按钮 + 状态显示 | `main/http_server.c` | ✅ 已烧录实机验证 |
 
 ## 已验证
 
-- **78/78** `test_voice_control_server.py` 通过（任务上下文/取消/澄清/迟到隔离/兼容性回归）
-- **229/229** 全量 `pytest service/` 通过
+- **85/85** `test_voice_control_server.py` 通过（任务上下文/取消/澄清/迟到隔离/兼容性回归 + 新增慢响应/连续查询/迟到结果隔离验收 `Week06SlowAndLateResultAcceptanceTest` 7/7）
+- **235/236** 全量 `pytest service/` 通过（1 失败为既有 flake：`test_audio_capture.py::test_state_transitions_allow_repeated_recordings`，毫秒级文件名碰撞，HEAD 基线同现，与本任务无关）
 - 兼容性：所有 Week 05 既有字段保持不变
 
 ## 实机验证记录（2026-10-14）

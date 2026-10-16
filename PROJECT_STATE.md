@@ -17,7 +17,7 @@
 - **澄清/重新输入**：`POST /api/voice/clarify`（仅 CLARIFYING 接受、空输入拒绝、轮次递增）
 - **迟到结果隔离**：generation 代次单调递增 + `_check_stale()`，旧代次结果记录 `result_stale_discarded` 不覆盖当前状态
 - **ESP32 仪表盘**：取消按钮 + 任务状态显示（`6e14622`），固件已烧录、仪表盘 HTTP 200
-- **自动测试**：`test_voice_control_server.py` **78/78**；全量 `pytest service/` **229/229 PASS**
+- **自动测试**：`test_voice_control_server.py` **85/85**（含 Week 06 慢响应/连续查询/迟到结果隔离验收）；全量 `pytest service/` **235/236 PASS**（1 失败为**既有 flake**：`test_audio_capture` 毫秒级文件名碰撞，HEAD 基线同样失败，与本任务改动无关）
 
 **实机取消联动（2026-10-14）**：ESP32 `10.28.53.63` ↔ PC voice service `10.28.53.130:8080`
 ```text
@@ -79,7 +79,7 @@ result: state=cancelled                   generation 7 → 8
 | | Week 03 | 实体按键与物理反馈闭环 | ✅ 已合并至 main (PR #3, `ec9c94b`) |
 | 单元2 | Week 04 | 自然语言查询与请求采集 | ✅ 已合并至 main (PR #4, `7dd788b`) |
 | | **Week 05** | **接通按键说话与语音播报** | 🟢 语音输入链路已完成实机双端闭环验证（Step 3I）；TTS 播报/LLM/全链路未完成（feature 分支） |
-| | **Week 06** | **让语音任务可以澄清与停止** | 🟢 核心开发完成（分支 `feature/week06-voice-task-context`，HEAD `6e14622`，voice server 78/78、全量 229/229 PASS）；✅ 实机取消联动验证完成（ESP32 `10.28.53.63` ↔ PC `10.28.53.130:8080`）；⏳ 中文 ASR 内容验收待补 |
+| | **Week 06** | **让语音任务可以澄清与停止** | 🟢 核心开发完成（分支 `feature/week06-voice-task-context`，HEAD `6e14622`，voice server 85/85、全量 235/236 PASS 含 1 既有 flake）；✅ 实机取消联动验证完成（ESP32 `10.28.53.63` ↔ PC `10.28.53.130:8080`）；⏳ 中文 ASR 内容验收待补 |
 | 单元3 | Week 07-09 | 视觉感知与事件反馈 | ⏳ 未开始 |
 | 单元4 | Week 10-12 | 多源上下文与状态推断 | ⏳ 未开始 |
 | 单元5 | Week 13-15 | 边云协作与韧性通信 | ⏳ 未开始 |

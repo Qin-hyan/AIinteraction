@@ -726,10 +726,17 @@ class VoiceControlService:
         self._task_state = new_state
         self._log_task_event("state_change", from_state=prev, to_state=new_state)
 
-    def _log_task_event(self, event_type: str, **extra):
+    def _log_task_event(self, event_type: str, request_id=None, generation=None, **extra):
         import time as _time
-        entry = {"event": event_type, "request_id": self._task_id,
-                 "generation": self._task_generation, "ts": int(_time.time() * 1000)}
+        # Week 06 验收：迟到结果丢弃等事件允许显式关联「其来源任务」的
+        # request_id/generation，避免被误记为当前（可能是新）任务的代次，
+        # 保证输入/事件/结果/反馈可追踪关联。
+        entry = {
+            "event": event_type,
+            "request_id": self._task_id if request_id is None else request_id,
+            "generation": self._task_generation if generation is None else generation,
+            "ts": int(_time.time() * 1000),
+        }
         entry.update(extra)
         self._task_log.append(entry)
         if len(self._task_log) > 20:
@@ -784,13 +791,28 @@ class VoiceControlService:
             return
         with self._lock:
             if self._check_stale(generation):
-                self._log_task_event("result_stale_discarded")
+                self._log_task_event(
+                    "result_stale_discarded",
+                    request_id=task_id,
+                    generation=generation,
+                )
                 return
-            self._task_result = result if isinstance(result, dict) else {"ok": False, "error": "invalid_result", "message": str(result)}
-            if not result.get("ok") and result.get("intent") == "clarify":
-                self._task_context["clarify_question"] = result.get("data", {}).get("question", "")
+            # run_task() 契约返回 str（用户可读文本）；当前 NL→JSON 未接入时
+            # 生产返回必为 str。统一归一化为 dict 再决策：既杜绝 str.get() 的
+            # AttributeError（历史行为：worker 线程崩溃、状态卡在 PROCESSING），
+            # 又让状态机确定收敛到 FAILED（invalid_result），不污染新任务。
+            normalized = result if isinstance(result, dict) else {
+                "ok": False,
+                "error": "invalid_result",
+                "message": str(result),
+            }
+            self._task_result = normalized
+            if not normalized.get("ok") and normalized.get("intent") == "clarify":
+                self._task_context["clarify_question"] = (
+                    normalized.get("data") or {}
+                ).get("question", "")
                 self._transition_task_state(TASK_STATE_CLARIFYING)
-            elif not result.get("ok"):
+            elif not normalized.get("ok"):
                 self._transition_task_state(TASK_STATE_FAILED)
             else:
                 self._transition_task_state(TASK_STATE_COMPLETED)
