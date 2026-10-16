@@ -1725,3 +1725,294 @@ class Week06SlowAndLateResultAcceptanceTest(unittest.TestCase):
         # 生产字段：ASR 推理耗时槽位存在（实际值由真实转录器填充，此处仅验收存在性）
         asr_snap = self.svc.status()["asr"]
         self.assertIn("duration_seconds", asr_snap)
+# ============================================================
+# Week 06 Production Timing Acceptance Tests
+# ============================================================
+
+
+class Week06ProductionTimingAcceptanceTest(unittest.TestCase):
+    """Week 06 production timing: first-feedback / completion / failure / cancellation."""
+
+    def setUp(self):
+        self.tmp = TemporaryDirectory(prefix="week06_timing_")
+        self.addCleanup(self.tmp.cleanup)
+        self.capture = FakeAudioCapture(Path(self.tmp.name))
+        model = FakeWhisperModel(text="sensor data query")
+        tr = asr_whisper.Transcriber(
+            model=model, model_name="base", language="zh",
+            task="transcribe", device="cpu",
+        )
+        self.svc = voice_control_server.VoiceControlService(
+            capture=self.capture, asr=tr
+        )
+        self.addCleanup(self._join_asr_worker)
+
+    def _join_asr_worker(self):
+        runner = getattr(self.svc, "_asr_runner", None)
+        thread = getattr(runner, "_thread", None) if runner is not None else None
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=ASR_TEST_POLL_TIMEOUT)
+
+    def _poll_state(self, svc, state, timeout=ASR_TEST_POLL_TIMEOUT):
+        self.assertTrue(
+            _poll_until(lambda: svc._task_state == state, timeout),
+            f"wait for state {state} timed out; current {svc._task_state}",
+        )
+# Test 1: Normal completion timing
+    def test_normal_timing_first_feedback_and_completion(self):
+        """Normal task: latency_first_feedback_ms == latency_completion_ms > 0."""
+        injected_delay = 0.12
+        self.svc.start()
+        rid = self.svc._task_id
+        self.capture.simulate_frames(8000)
+        _write_silent_wav(Path(self.tmp.name) / f"{rid}.wav", frames=8000)
+        self.capture.stop_result = make_info(
+            Path(self.tmp.name) / f"{rid}.wav", frames=8000
+        )
+        pip = _StubPipeline(
+            [(injected_delay, {"ok": True, "intent": "query_last",
+                               "sentence": "OK"})]
+        )
+        with patch("service.task_pipeline.run_task", pip.run_task):
+            self.svc.stop()
+            self._poll_state(self.svc, voice_control_server.TASK_STATE_COMPLETED)
+
+        timing = self.svc.status()["task"]["timing"]
+        self.assertIsNotNone(timing, "Normal task should have timing block")
+        fb_ms = timing.get("latency_first_feedback_ms")
+        comp_ms = timing.get("latency_completion_ms")
+        self.assertIsNotNone(fb_ms)
+        self.assertGreater(fb_ms, 0)
+        self.assertIsNotNone(comp_ms)
+        self.assertGreater(comp_ms, 0)
+        self.assertEqual(fb_ms, comp_ms)
+        self.assertGreaterEqual(fb_ms, injected_delay * 500)
+# Test 2: Failed termination timing
+    def test_failed_task_timing_with_termination_reason(self):
+        """Failed task: latency_termination_ms + termination_reason='failed'."""
+        self.svc.start()
+        rid = self.svc._task_id
+        self.capture.simulate_frames(8000)
+        _write_silent_wav(Path(self.tmp.name) / f"{rid}.wav", frames=8000)
+        self.capture.stop_result = make_info(
+            Path(self.tmp.name) / f"{rid}.wav", frames=8000
+        )
+        pip = _StubPipeline([(0.0, RuntimeError("simulated crash"))])
+        with patch("service.task_pipeline.run_task", pip.run_task):
+            self.svc.stop()
+            self._poll_state(self.svc, voice_control_server.TASK_STATE_FAILED)
+
+        timing = self.svc.status()["task"]["timing"]
+        self.assertIsNotNone(timing)
+        self.assertIsNotNone(timing.get("latency_first_feedback_ms"))
+        self.assertIsNotNone(timing.get("latency_termination_ms"))
+        self.assertEqual(timing.get("termination_reason"), "failed")
+        self.assertTrue("latency_completion_ms" not in timing)
+# Test 3: Cancelled during recording
+    def test_cancelled_during_recording_timing(self):
+        """Cancel during recording: produces cancelled termination timing."""
+        self.svc.start()
+        self.capture.simulate_frames(4000)
+        result = self.svc.cancel()
+        self.assertTrue(result["ok"])
+        self.assertEqual(self.svc._task_state,
+                         voice_control_server.TASK_STATE_CANCELLED)
+        timing = self.svc.status()["task"]["timing"]
+        self.assertIsNotNone(timing)
+        self.assertIsNotNone(timing.get("latency_first_feedback_ms"))
+        self.assertIsNotNone(timing.get("latency_termination_ms"))
+        self.assertEqual(timing.get("termination_reason"), "cancelled")
+
+    # Test 4: Cancelled during processing
+    def test_cancelled_during_processing_timing(self):
+        """Cancel during processing: independent termination timing."""
+        gate = threading.Event()
+        pip = _StubPipeline(
+            [(0.0, {"ok": True, "intent": "query_last", "sentence": "LATE"})],
+            gate=gate,
+        )
+        with patch("service.task_pipeline.run_task", pip.run_task):
+            self.svc.start()
+            rid = self.svc._task_id
+            self.capture.simulate_frames(8000)
+            _write_silent_wav(Path(self.tmp.name) / f"{rid}.wav", frames=8000)
+            self.capture.stop_result = make_info(
+                Path(self.tmp.name) / f"{rid}.wav", frames=8000
+            )
+            self.svc.stop()
+            _poll_until(lambda: len(pip.calls) > 0, ASR_TEST_GATE_TIMEOUT)
+            self.svc.cancel()
+            gate.set()
+        self._poll_state(self.svc, voice_control_server.TASK_STATE_CANCELLED)
+        timing = self.svc.status()["task"]["timing"]
+        self.assertIsNotNone(timing)
+        self.assertEqual(timing.get("termination_reason"), "cancelled")
+
+    # Test 5: request_id consistency
+    def test_timing_events_share_request_id(self):
+        """All state_change events share the same request_id."""
+        self.svc.start()
+        rid = self.svc._task_id
+        self.capture.simulate_frames(8000)
+        _write_silent_wav(Path(self.tmp.name) / f"{rid}.wav", frames=8000)
+        self.capture.stop_result = make_info(
+            Path(self.tmp.name) / f"{rid}.wav", frames=8000
+        )
+        pip = _StubPipeline(
+            [(0.0, {"ok": True, "intent": "query_last", "sentence": "OK"})]
+        )
+        with patch("service.task_pipeline.run_task", pip.run_task):
+            self.svc.stop()
+            self._poll_state(self.svc, voice_control_server.TASK_STATE_COMPLETED)
+
+        task = self.svc.status()["task"]
+        self.assertEqual(task["request_id"], rid)
+        for entry in task["log"]:
+            if entry.get("event") == "state_change":
+                self.assertEqual(entry["request_id"], rid)
+# Test 6: Cross-task isolation
+    def test_old_task_timing_does_not_contaminate_new_task(self):
+        """Old task timing does not leak into new task."""
+        self.svc.start()
+        rid1 = self.svc._task_id
+        self.capture.simulate_frames(8000)
+        _write_silent_wav(Path(self.tmp.name) / f"{rid1}.wav", frames=8000)
+        self.capture.stop_result = make_info(
+            Path(self.tmp.name) / f"{rid1}.wav", frames=8000
+        )
+        pip1 = _StubPipeline(
+            [(0.0, {"ok": True, "intent": "query_last", "sentence": "T1"})]
+        )
+        with patch("service.task_pipeline.run_task", pip1.run_task):
+            self.svc.stop()
+            self._poll_state(self.svc, voice_control_server.TASK_STATE_COMPLETED)
+
+        self.svc.start()
+        rid2 = self.svc._task_id
+        self.assertNotEqual(rid1, rid2)
+        self.capture.simulate_frames(8000)
+        _write_silent_wav(Path(self.tmp.name) / f"{rid2}.wav", frames=8000)
+        self.capture.stop_result = make_info(
+            Path(self.tmp.name) / f"{rid2}.wav", frames=8000
+        )
+        pip2 = _StubPipeline(
+            [(0.0, {"ok": True, "intent": "trigger_collect", "sentence": "T2"})]
+        )
+        with patch("service.task_pipeline.run_task", pip2.run_task):
+            self.svc.stop()
+            self._poll_state(self.svc, voice_control_server.TASK_STATE_COMPLETED)
+
+        task2 = self.svc.status()["task"]
+        self.assertEqual(task2["request_id"], rid2)
+        timing2 = task2["timing"]
+        self.assertIsNotNone(timing2)
+        self.assertGreaterEqual(timing2["latency_first_feedback_ms"], 0)
+        self.assertGreaterEqual(timing2["latency_completion_ms"], 0)
+        self.assertNotIn("latency_termination_ms", timing2)
+# Test 7: Slow response + cancel interleaving
+    def test_slow_response_cancel_interleaving_cancelled_timing(self):
+        """Slow response cancelled: timing reflects cancelled, not completed."""
+        gate = threading.Event()
+        pip = _StubPipeline(
+            [(0.0, {"ok": True, "sentence": "STALE"})], gate=gate
+        )
+        with patch("service.task_pipeline.run_task", pip.run_task):
+            self.svc.start()
+            rid = self.svc._task_id
+            gen_before = self.svc._task_generation
+            self.capture.simulate_frames(8000)
+            _write_silent_wav(Path(self.tmp.name) / f"{rid}.wav", frames=8000)
+            self.capture.stop_result = make_info(
+                Path(self.tmp.name) / f"{rid}.wav", frames=8000
+            )
+            self.svc.stop()
+            _poll_until(lambda: len(pip.calls) > 0, ASR_TEST_GATE_TIMEOUT)
+            self.svc.cancel()
+            gen_after = self.svc._task_generation
+            gate.set()
+        self._poll_state(self.svc, voice_control_server.TASK_STATE_CANCELLED)
+        self.assertGreater(gen_after, gen_before)
+        timing = self.svc.status()["task"]["timing"]
+        self.assertIsNotNone(timing)
+        self.assertEqual(timing.get("termination_reason"), "cancelled")
+        self.assertIsNotNone(timing.get("latency_termination_ms"))
+        self.assertNotIn("latency_completion_ms", timing)
+# Test 8: No timing before input end
+    def test_timing_none_before_input_end(self):
+        """Before input end: task.timing is None."""
+        self.svc.start()
+        timing = self.svc.status()["task"]["timing"]
+        self.assertIsNone(timing)
+
+    def test_timing_no_first_feedback_during_processing(self):
+        """During processing: timing exists but no first_feedback yet."""
+        self.svc.start()
+        rid = self.svc._task_id
+        self.capture.simulate_frames(8000)
+        _write_silent_wav(Path(self.tmp.name) / f"{rid}.wav", frames=8000)
+        self.capture.stop_result = make_info(
+            Path(self.tmp.name) / f"{rid}.wav", frames=8000
+        )
+        gate = threading.Event()
+        pip = _StubPipeline(
+            [(0.0, {"ok": True, "sentence": "A"})], gate=gate
+        )
+        with patch("service.task_pipeline.run_task", pip.run_task):
+            self.svc.stop()
+            _poll_until(lambda: len(pip.calls) > 0, ASR_TEST_GATE_TIMEOUT)
+            timing = self.svc.status()["task"]["timing"]
+        self.assertIsNotNone(timing)
+        self.assertNotIn("latency_first_feedback_ms", timing)
+        gate.set()
+        self._poll_state(self.svc, voice_control_server.TASK_STATE_COMPLETED)
+# Test 9: Timing absence does not break state machine
+    def test_timing_absence_does_not_break_state_machine(self):
+        """Timing fields anomaly does not prevent state machine operation."""
+        self.svc.start()
+        self.svc._input_end_at = None
+        self.svc._first_feedback_at = None
+        self.svc._task_completed_at = None
+        self.capture.simulate_frames(8000)
+        rid = self.svc._task_id
+        _write_silent_wav(Path(self.tmp.name) / f"{rid}.wav", frames=8000)
+        self.capture.stop_result = make_info(
+            Path(self.tmp.name) / f"{rid}.wav", frames=8000
+        )
+        pip = _StubPipeline(
+            [(0.0, {"ok": True, "intent": "query_last", "sentence": "OK"})]
+        )
+        with patch("service.task_pipeline.run_task", pip.run_task):
+            self.svc.stop()
+            self._poll_state(self.svc, voice_control_server.TASK_STATE_COMPLETED)
+
+        self.assertEqual(self.svc._task_state,
+                         voice_control_server.TASK_STATE_COMPLETED)
+        timing = self.svc.status()["task"]["timing"]
+        self.assertIsNotNone(timing)
+        self.assertIsNotNone(timing.get("latency_first_feedback_ms"))
+        self.assertIsNotNone(timing.get("latency_completion_ms"))
+
+    # Test 10: CLARIFYING has first feedback but not completion
+    def test_clarifying_has_first_feedback_but_not_completion(self):
+        """CLARIFYING: first feedback recorded, no completion/termination."""
+        self.svc.start()
+        rid = self.svc._task_id
+        self.capture.simulate_frames(8000)
+        _write_silent_wav(Path(self.tmp.name) / f"{rid}.wav", frames=8000)
+        self.capture.stop_result = make_info(
+            Path(self.tmp.name) / f"{rid}.wav", frames=8000
+        )
+        pip = _StubPipeline(
+            [(0.0, {"ok": False, "intent": "clarify",
+                    "data": {"question": "Please repeat"}})]
+        )
+        with patch("service.task_pipeline.run_task", pip.run_task):
+            self.svc.stop()
+            self._poll_state(self.svc, voice_control_server.TASK_STATE_CLARIFYING)
+
+        timing = self.svc.status()["task"]["timing"]
+        self.assertIsNotNone(timing)
+        self.assertIsNotNone(timing.get("latency_first_feedback_ms"))
+        self.assertNotIn("latency_completion_ms", timing)
+        self.assertNotIn("latency_termination_ms", timing)
+        self.assertNotIn("termination_reason", timing)

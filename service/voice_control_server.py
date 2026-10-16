@@ -570,6 +570,16 @@ class VoiceControlService:
         self._task_log = []
         self._task_asr_epoch = None
 
+        # ── 生产计时（Week 06 原子任务）────────────────────
+        # 内部使用 time.monotonic() 记录各阶段时刻；
+        # 向外只暴露差值（ms），不暴露绝对时钟值。
+        self._input_end_at: Optional[float] = None
+        self._first_feedback_at: Optional[float] = None
+        self._first_feedback_state: Optional[str] = None
+        self._task_completed_at: Optional[float] = None
+        self._task_failed_at: Optional[float] = None
+        self._task_cancelled_at: Optional[float] = None
+
     # ── 只读视图 ─────────────────────────────
 
     @property
@@ -602,7 +612,8 @@ class VoiceControlService:
         return "recording" if self._capture.is_recording else "idle"
 
     def status(self) -> Dict[str, Any]:
-        """返回当前状态。Week 06: 新增 task 块。"""
+        """返回当前状态。Week 06: 新增 task 块 + 生产 timing。"""
+        import time as _time
         recording = bool(self._capture.is_recording)
         with self._lock:
             target = self._target_path
@@ -613,6 +624,32 @@ class VoiceControlService:
             tc = dict(self._task_context)
             tg = self._task_generation
             tl = list(self._task_log[-10:])
+            _iea = self._input_end_at
+            _ffa = self._first_feedback_at
+            _tca = self._task_completed_at
+            _tfa = self._task_failed_at
+            _txa = self._task_cancelled_at
+        # ── 计算对外暴露的时延（ms 整数），不暴露内部单调时钟绝对值 ──
+        timing = {}
+        if _iea is not None:
+            if _ffa is not None:
+                timing["latency_first_feedback_ms"] = int(
+                    round((_ffa - _iea) * 1000.0)
+                )
+            if _tca is not None:
+                timing["latency_completion_ms"] = int(
+                    round((_tca - _iea) * 1000.0)
+                )
+            if _tfa is not None:
+                timing["latency_termination_ms"] = int(
+                    round((_tfa - _iea) * 1000.0)
+                )
+                timing["termination_reason"] = "failed"
+            elif _txa is not None:
+                timing["latency_termination_ms"] = int(
+                    round((_txa - _iea) * 1000.0)
+                )
+                timing["termination_reason"] = "cancelled"
         return {
             "ok": True,
             "state": "recording" if recording else "idle",
@@ -624,7 +661,8 @@ class VoiceControlService:
             "config": self.config(),
             "asr": self._asr_runner.snapshot(),
             "task": {"request_id": tid, "state": ts, "generation": tg,
-                     "result": tr, "context": tc if tc else None, "log": tl},
+                     "result": tr, "context": tc if tc else None, "log": tl,
+                     "timing": timing if _iea is not None else None},
         }
 
     # ── 控制 ─────────────────────────────────
@@ -642,6 +680,12 @@ class VoiceControlService:
             self._task_context = {}
             self._task_result = None
             self._task_asr_epoch = None
+            self._input_end_at = None
+            self._first_feedback_at = None
+            self._first_feedback_state = None
+            self._task_completed_at = None
+            self._task_failed_at = None
+            self._task_cancelled_at = None
             self._transition_task_state(TASK_STATE_RECORDING)
             return {
                 "ok": True,
@@ -696,6 +740,9 @@ class VoiceControlService:
                 self._task_asr_epoch = None
             if self._task_state not in (TASK_STATE_CANCELLING, TASK_STATE_CANCELLED):
                 self._transition_task_state(TASK_STATE_PROCESSING)
+            # ── 记录输入结束时刻（Week 06 生产计时）──
+            import time as _time
+            self._input_end_at = _time.monotonic()
             # 紧凑回执：只含 ESP32 契约必需字段 + 极简关联信息。
             # wav 只取 frames/duration_seconds（固件用于日志关联；见
             # voice_button.c voice_post_action），asr 只取 status（回执 = 已提交）。
@@ -725,6 +772,18 @@ class VoiceControlService:
         prev = self._task_state
         self._task_state = new_state
         self._log_task_event("state_change", from_state=prev, to_state=new_state)
+        # ── 生产计时：首次反馈、完成/失败/取消（Week 06）──
+        _feedback_states = (TASK_STATE_COMPLETED, TASK_STATE_FAILED,
+                            TASK_STATE_CLARIFYING, TASK_STATE_CANCELLED)
+        if self._first_feedback_at is None and new_state in _feedback_states:
+            self._first_feedback_at = _time.monotonic()
+            self._first_feedback_state = new_state
+        if new_state == TASK_STATE_COMPLETED:
+            self._task_completed_at = _time.monotonic()
+        elif new_state == TASK_STATE_FAILED:
+            self._task_failed_at = _time.monotonic()
+        elif new_state == TASK_STATE_CANCELLED:
+            self._task_cancelled_at = _time.monotonic()
 
     def _log_task_event(self, event_type: str, request_id=None, generation=None, **extra):
         import time as _time
@@ -833,6 +892,10 @@ class VoiceControlService:
                     self._capture.stop_recording()
                     self._target_path = None
                     cr = True
+                    # ── 输入在取消时被中断：记录结束时刻 ──
+                    if self._input_end_at is None:
+                        import time as _time
+                        self._input_end_at = _time.monotonic()
                 except Exception: pass
             self._task_generation += 1
             self._task_asr_epoch = None

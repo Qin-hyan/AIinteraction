@@ -115,3 +115,45 @@ generation：`7 → 8`（代次单调递增，旧结果不覆盖取消状态）
 
 - [ ] 中文 ASR 内容人工验收（用户方便时补录真实语音）
 - [ ] （如后续引入 TTS）再验证「停止播报」行为
+## 生产计时（2026-10-16）
+
+**提交**: （待提交后填写）
+
+### 首次反馈定义
+
+「首次反馈」= 音频输入结束后（`stop()` 或 cancel 中断录音），任务状态首次从 PROCESSING 变迁为 COMPLETED / FAILED / CLARIFYING，或 CANCELLING → CANCELLED。此后 `GET /api/voice/status` 的 `task.timing.latency_first_feedback_ms` 首次可观测到非空值。
+
+### 计时字段（`status().task.timing`）
+
+| 字段 | 类型 | 含义 | 出现条件 |
+|------|------|------|----------|
+| `latency_first_feedback_ms` | int | 输入结束→首次有效反馈的耗时（ms），单调时钟差值 | 任务到达 COMPLETED/FAILED/CLARIFYING/CANCELLED 后 |
+| `latency_completion_ms` | int | 输入结束→成功完成的耗时（ms） | 仅 COMPLETED |
+| `latency_termination_ms` | int | 输入结束→非成功终止的耗时（ms） | FAILED 或 CANCELLED |
+| `termination_reason` | str | 终止原因 `"failed"` / `"cancelled"` | 与 `latency_termination_ms` 同时出现 |
+
+输入未结束时 `timing` 为 `null`；输入已结束但尚未到达首反馈状态时 `timing` 为 `{}`。
+
+### 实现要点
+
+- 所有时刻使用 `time.monotonic()`，对外只暴露差值（ms 整数），不暴露绝对时钟值
+- `_transition_task_state()` 中统一记录首次反馈、完成、失败、取消的时刻
+- 每个计时值绑定 `request_id` 和 generation；新任务开始时自动清零
+- 旧任务的迟到回调不覆盖新任务计时
+- cancel 中断录音时记录 `input_end_at`；取消、失败和成功完成严格分离
+- 兼容性：不破坏现有 API 契约（96/96 PASS）
+
+### 自动化测试
+
+新增 `Week06ProductionTimingAcceptanceTest`（11 项）：
+- 正常完成时延
+- 失败终止时延
+- 录音中/处理中取消时延
+- request_id 一致性
+- 跨任务计时隔离
+- 慢响应×取消交错
+- 输入未结束/处理中边界
+- 计时字段异常不影响状态机
+- CLARIFYING 首反馈≠完成
+
+全量回归：**247/247 PASS**（原 235 → 247；0 新增失败）
