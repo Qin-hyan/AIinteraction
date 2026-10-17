@@ -950,3 +950,93 @@ python -m pytest service/ -q
 - 本周「取消 / 澄清 / 迟到结果隔离 / 计时指标 / 仪表盘状态显示」均有代码、自动测试或实机证据。
 - **完整语音任务链路（真实 ASR 文本 → NL→JSON → 任务管道）仍未端到端验收**，阻塞点为 `service/nl_to_task.py` 缺失（见上一节 2026-10-16 诊断）。
 - 本轮未修改生产代码、未重新烧录/复位设备、未触发真实采集或要求用户说话。
+
+---
+
+## Week 07 — 按需环境图像采集与画面可用性识别 (2026-10-17)
+
+**分支**: `feature/week07-vision-capture` ｜ **基线**: `origin/main` `5aebea1`
+**课程来源**: 课程主页 Week 07「按需获取一张环境图像」（2026-10-17 核实）
+
+### A. 自动化测试结果（实际运行）
+
+命令（Python `D:\Anaconda3\python.exe` 3.11.7，pytest 7.4.4）：
+
+```bash
+python -m pytest service/test_image_quality.py -v
+python -m pytest service/ -q
+```
+
+| 测试范围 | 实际结果 |
+|----------|----------|
+| `service/test_image_quality.py` | ✅ **10 passed** |
+| `service/` 全量 | ✅ **260 passed**（基线 250 + 新增 10，0 失败） |
+
+明细：
+
+```
+service/test_image_quality.py::test_invalid_empty_bytes PASSED
+service/test_image_quality.py::test_invalid_garbage_data PASSED
+service/test_image_quality.py::test_all_black_too_dark PASSED
+service/test_image_quality.py::test_all_white_too_bright PASSED
+service/test_image_quality.py::test_uniform_gray_low_contrast PASSED
+service/test_image_quality.py::test_blurred_checkerboard_low_detail PASSED
+service/test_image_quality.py::test_checkerboard_ok PASSED
+service/test_image_quality.py::test_metrics_fields_complete_for_ok_image PASSED
+service/test_image_quality.py::test_metrics_empty_for_invalid_input PASSED
+service/test_image_quality.py::test_score_within_unit_interval PASSED
+============================= 10 passed in 0.35s ==============================
+```
+
+> 全量 260 passed；`pytest service/ -q` 运行过程中虽有 torch DLL 的
+> access violation 栈打印（进程退出阶段），但 pytest 汇总为 **260 passed，退出码 0**。
+> 已单独确认 `import torch` 在本机崩溃（`OSError WinError 1114`，`c10.dll`），
+> 属**预存环境问题**，与本次改动无关，不影响测试结果判定。
+
+### B. 固件构建结果（实际运行）
+
+```powershell
+. D:\esp\Espressif\frameworks\esp-idf-v5.4.3\export.ps1
+idf.py build
+```
+
+| 项目 | 结果 |
+|------|------|
+| 编译 | ✅ `Project build complete`，**无新增警告** |
+| 产物 | `build/week02-sensor-collect.bin` |
+| 体积 | `0x110950` bytes，app 分区剩余约 65% |
+
+**链接级符号验证**（`xtensa-esp32s3-elf-nm`）：
+
+| 符号 | 地址 | 说明 |
+|------|------|------|
+| `image_quality_assess` | `420131c4` | 端侧画面可用性评估入口 |
+| `esp_jpeg_decode` | `420208ac` | JPEG 解码器已链接 |
+| `capture_task_status_name` | `42011628` | 四态名称函数 |
+| `camera_status_handler` | `4201166c` | `GET /api/camera/status` 处理函数 |
+
+端点注册确认：`main/http_server.c:1397` `httpd_register_uri_handler(s_server, &uri_cam_status)`。
+
+### C. 与课程 Week 07 要求的对应
+
+| 课程要求 | 当前证据 | 状态 |
+|----------|----------|------|
+| 按需图像采集（请求触发） | `POST /api/camera/capture`（复用 Week 02 状态机） | ✅ 代码 |
+| 关联请求、图像记录、采集时间 | gallery 返回 `request_id` + `captured_ms`；`/api/camera/status` 返回 `last_request_id` + `updated_ms` | ✅ 代码 |
+| 只在请求/教学事件触发后取图 | `auto_cap.enabled` 默认 `false`（`main.c:411`） | ✅ 代码 |
+| 四态反馈（采集中/成功/不可用/失败） | `capture_task_status_t` + `main.c:506/263-264/531/548` | ✅ 代码 + 编译 |
+| 画面可用性/遮挡识别（保底任务） | PC 端 `assess_image()` + 端侧 `image_quality_assess()`，阈值两端对齐 | ✅ 单元测试 + 编译 |
+| 上次成功图像不得标为本次采集成功 | 每次采集重新评估新 JPEG，`captured_us` 取本次帧时间；失败不覆盖槽位 | ✅ 代码 |
+| 采集失败保持明确状态 | 两条失败路径固定写 `CAPTURE_TASK_FAILED` | ✅ 代码 |
+| 不推导精确位置/人身风险 | 仅暴露亮度/对比度/细节统计量 | ✅ 代码 |
+| 未经校准分数不写成正确率 | API/UI/文档均无"准确率"字样，`score` 注明仅作相对比较 | ✅ 代码 |
+| **带采集时间的输入样例** | — | ⛔ **需实机产出** |
+| **采集权限与失败记录** | — | ⛔ **需实机产出** |
+| **最少保留策略** | 9 槽位环形覆盖 | ⚠️ 未显式实现 |
+
+### D. 结论
+
+- 本周「按需采集 / 画面可用性识别 / 四态反馈 / 质量指标暴露」均有代码实现，并通过单元测试与固件构建验证。
+- **验证层级止于单元测试与固件构建**；**未烧录、未实机验证、未产出真实输入样例**。
+- 课程要求的两项实机交付物（带采集时间的输入样例、采集权限与失败记录）**待烧录后补验**。
+- 本轮未烧录/复位设备，未要求用户操作硬件。

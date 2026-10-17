@@ -4,7 +4,30 @@
 
 ---
 
-## 当前：Week 06 — 让语音任务可以澄清与停止（核心开发完成，实机取消复测完成，ASR/NL→JSON 待验收）
+## 当前：Week 07 — 按需获取一张环境图像（代码与构建完成，实机验证待补）
+
+**分支**: `feature/week07-vision-capture`（基线 `origin/main` `5aebea1`，4 个原子提交）
+**阶段**: 🟡 **代码实现 + 单元测试 + 固件构建通过**；⛔ **未烧录、未实机验证**
+**详见**: `weeks/week07/STATE.md`
+
+**已完成（有证据）**:
+- **PC 端画面可用性基线**（`b682cee`）：`service/image_quality.py` `assess_image()`，指标 `mean_luma/contrast/detail`，10 项测试全通过；全量 `pytest service/` **260 passed**（基线 250 + 新增 10）
+- **端侧画面可用性评估**（`1abaa3d`）：`main/image_quality.c/h` 用 `esp_jpeg` 解码（RGB888+1/4 缩放，PSRAM），**阈值与 PC 端逐一对齐**
+- **四态采集反馈**（`6d6853a`）：`capture_task_status_t`（`capturing/ok/unusable/failed`）与图像质量状态（`too_dark/too_bright/low_contrast/low_detail/invalid`）**语义分离**，映射实现于 `main.c:506/263-264/531/548`
+- **API/UI**：新增 `GET /api/camera/status`；gallery 暴露 `img_status/usable/mean_luma/contrast/detail`；Web UI 四态标签 + 画面不可用原因显示
+- **构建证据**：`idf.py build` 成功无新增警告；固件符号 `image_quality_assess@420131c4`、`capture_task_status_name@42011628`、`camera_status_handler@4201166c` 已链接
+
+**未完成（如实标注）**:
+- ⛔ **未烧录、未实机验证**；课程当堂验证项未通过
+- ⛔ **带采集时间的输入样例 / 采集权限与失败记录**：需实机产出
+- ⚠️ **"最少保留"未显式实现**（当前仅 9 槽位环形覆盖）
+- ⚠️ 阈值基于合成图像，**真实场景需现场校准**
+
+**待用户决策**: `auto_capture` 是否保留（默认关闭）；"最少保留"含义确认（最小化留存 vs 至少保留 N 张）；烧录授权
+
+---
+
+## Week 06 — 让语音任务可以澄清与停止（核心开发完成，实机取消复测完成，ASR/NL→JSON 待验收）
 
 **分支**: `feature/week06-voice-task-context`（HEAD `66ecbb6`，领先 `origin/feature/week06-voice-task-context` 3 提交；本次文档收尾提交后为 4 提交；2026-10-17 收尾）
 **基线**: `f0653f0`（= Week 05 HEAD）
@@ -77,7 +100,9 @@
 | 单元2 | Week 04 | 自然语言查询与请求采集 | ✅ 已合并至 main (PR #4, `7dd788b`) |
 | | **Week 05** | **接通按键说话与语音播报** | 🟢 语音输入链路已完成实机双端闭环验证（Step 3I）；TTS 播报/LLM/全链路未完成（feature 分支） |
 | | **Week 06** | **让语音任务可以澄清与停止** | 🟢 核心开发完成（分支 `feature/week06-voice-task-context`，HEAD `66ecbb6` + 文档收尾，voice server **99/99**、全量 **250 passed + 6 subtests**）；✅ 实机取消/反馈停止复测（generation 5→6，取消→反馈停止 **79 ms**）；✅ 此前实机取消联动（7→8）；⏳ 中文 ASR 内容验收待补；⛔ NL→JSON 缺失，完整语音任务链路待验收 |
-| 单元3 | Week 07-09 | 视觉感知与事件反馈 | ⏳ 未开始 |
+| 单元3 | **Week 07** | **按需获取一张环境图像** | 🟡 代码+构建完成（分支 `feature/week07-vision-capture`；PC/端侧画面可用性识别、四态反馈 API/UI；`pytest service/` **260 passed**、固件符号已链接）；⛔ **未烧录、未实机验证** |
+| | Week 08 | 把视觉推理结果变成可理解反馈 | ⏳ 未开始 |
+| | Week 09 | 用视觉事件触发一次主动询问 | ⏳ 未开始 |
 | 单元4 | Week 10-12 | 多源上下文与状态推断 | ⏳ 未开始 |
 | 单元5 | Week 13-15 | 边云协作与韧性通信 | ⏳ 未开始 |
 | 单元6 | Week 16-18 | 体验检验、改进与结课交付 | ⏳ 未开始 |

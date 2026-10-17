@@ -64,6 +64,41 @@ AIinteraction/
 
 ---
 
+## Week 07 关键机制（长期事实）
+
+### 画面可用性/遮挡识别（课程单元 3 保底任务）
+
+- **双端实现、阈值对齐**：PC 端 `service/image_quality.py::assess_image()` 与端侧 `main/image_quality.c::image_quality_assess()` 使用**完全相同的阈值与判定顺序**，可交叉验证
+  - 阈值：`LUMA_DARK=25` / `LUMA_BRIGHT=230` / `CONTRAST_LOW=8` / `DETAIL_LOW=8`
+  - 判定顺序：`invalid → too_dark → too_bright → low_contrast → low_detail → ok`
+  - 指标：`mean_luma`（灰度均值）、`contrast`（标准差）、`detail`（前向差分梯度能量）
+- **端侧解码**：`esp_jpeg`（`esp_jpeg_decode()`，头文件 `jpeg_decoder.h`，组件名需在 `main/CMakeLists.txt` REQUIRES 中声明）；RGB888 + 1/4 缩放，缓冲优先 `MALLOC_CAP_SPIRAM`
+- **两端指标绝对值不可直接比对**：端侧为 1/4 缩放图，交叉验证应比对**状态一致性**而非数值
+
+### 采集任务状态 vs 图像质量状态（语义分离，易错点）
+
+| 类别 | 枚举 | 取值 | 用途 |
+|---|---|---|---|
+| 采集任务状态 | `capture_task_status_t` | `idle/capturing/ok/unusable/failed` | 任务层四态反馈 |
+| 图像质量状态 | `image_status_t` | `ok/too_dark/too_bright/low_contrast/low_detail/invalid` | 说明 `unusable` 的具体原因 |
+
+- 映射：受理→`capturing`；取帧成功且 `img_status==OK`→`ok`；取帧成功且非 OK→`unusable`；取帧失败/无摄像头→`failed`
+- **不得**把"采集失败"直接记为 `IMG_STATUS_INVALID`（该值仅表示图像解码失败），两类语义必须分开
+
+### 课程隐私约束
+
+- 课程要求「**只在请求或教学事件触发后取图，设置最少保留**」
+- 现有 `auto_cap.enabled` **默认 `false`**（`main.c:411`），符合按需原则；用户可主动开启
+- **不得**把未经校准的模型分数写成现实正确率或安全概率；API/UI 均不得出现"准确率"字样
+
+### 环境事实（Windows / ESP-IDF）
+
+- ESP-IDF 在 **PowerShell** 中需用点源激活：`. D:\esp\Espressif\frameworks\esp-idf-v5.4.3\export.ps1`（直接调用 `export.bat` 不会持久化环境变量；Git Bash 下不可用）
+- 工具链符号检查：`/d/esp/Espressif/tools/xtensa-esp-elf/esp-14.2.0_20250730/xtensa-esp-elf/bin/xtensa-esp32s3-elf-nm.exe`
+- 本机 `import torch` 崩溃（`OSError WinError 1114`，`c10.dll`），属**预存环境问题**；`pytest service/` 仍可全量通过（退出码 0），其栈打印出现在进程退出阶段，**不构成测试失败**
+
+---
+
 ## Week 06 关键机制（长期事实）
 
 ### 任务 generation 隔离
@@ -153,3 +188,6 @@ IDLE → SUBMITTED → RECEIVED → COMPLETED / FAILED
 | `feature/week04-natural-language` | Week 04 开发分支（已合并，PR #4 → `7dd788b`；分支 HEAD `0b4b323` 保留） |
 | `feature/week05-voice-interaction` | **已收尾**（作为 Week 06 基线 `f0653f0`）— Week 05 开发分支（基线 `7dd788b`）；功能（PC 音频采集/录音 HTTP 控制服务/本地 Whisper ASR/ESP32 PLAY 语音控制）已实现并经 Step 3I 实机双端闭环验证；2026-10-13 收尾（HEAD `91959fb`） |
 | `feature/week06-voice-task-context` | **当前** Week 06 开发分支（基线 `f0653f0` = Week 05 HEAD）；HEAD `66ecbb6` + 本次文档收尾提交；任务上下文/取消/澄清/迟到结果隔离 + 生产计时 + ESP32 仪表盘取消按钮与任务状态显示；voice server **99/99**、全量 **250 passed + 6 subtests**（2026-10-17）；ESP32↔PC 实机取消复测（generation 5→6，取消→反馈停止 **79 ms**）与 2026-10-14 实机取消联动（7→8）均通过；`origin/main` 已合并 PR #6 至 `28aa45c`，后续 3 个功能提交及本次文档提交尚未合并；中文 ASR 内容验收待补；`service/nl_to_task.py` 缺失，完整语音任务链路未验收 |
+| `feature/week07-vision-capture` | **当前** Week 07 开发分支（基线 `origin/main` `5aebea1`）；PC 端画面可用性基线 + 端侧 `esp_jpeg` 评估 + 四态采集反馈 API/UI；`pytest service/` 260 passed、固件构建成功；**未烧录、未实机验证** |
+| `origin/main` | **`5aebea1`**（Merge PR #7，Week 06 已合并）——2026-10-17 核实，非旧报告的 `6761db6` |
+| `integration/week06-followup` | ⚠️ **历史遗留冗余分支**（`ea04269`）：`git diff origin/main integration/week06-followup` **为空**，内容已完全包含于 `origin/main`。**不得作为开发基线**；是否删除由用户决定 |
