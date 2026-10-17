@@ -4,33 +4,30 @@
 
 ---
 
-## 当前：Week 06 — 让语音任务可以澄清与停止（核心开发完成，实机取消验证完成，ASR 内容验收待补）
+## 当前：Week 06 — 让语音任务可以澄清与停止（核心开发完成，实机取消复测完成，ASR/NL→JSON 待验收）
 
-**分支**: `feature/week06-voice-task-context`（HEAD `6e14622`，领先 `origin/feature/week06-voice-task-context` 2 提交；2026-10-14 最终收尾）
-**基线**: `f0653f0`（= Week 05 HEAD；**未合并 main**）
-**阶段**: 🟢 **核心开发完成 + 实机取消验证完成**；⏳ **中文 ASR 内容验收待补**（用户当前不方便语音输入，按「未完成验收」记录，**不得描述为失败**）
+**分支**: `feature/week06-voice-task-context`（HEAD `66ecbb6`，领先 `origin/feature/week06-voice-task-context` 3 提交；本次文档收尾提交后为 4 提交；2026-10-17 收尾）
+**基线**: `f0653f0`（= Week 05 HEAD）
+**远端**: `origin/main` `6761db6` 已包含 PR #6（合并 Week 06 至 `28aa45c`）；当前分支后续 3 个功能提交与本次文档提交**尚未合并 main**
+**阶段**: 🟢 **核心开发完成 + 实机取消/反馈停止复测完成**；⏳ **中文 ASR 内容验收待补**；⛔ **完整 ASR→NL→JSON→任务链路未端到端验收**
 
 **本周已完成（有证据）**:
 - **任务上下文**：request_id `voice-{ms}-{counter:04d}` 贯穿 start → recording → stop → ASR → 管线 → 取消/完成
-- **任务状态机**：IDLE→RECORDING→PROCESSING→COMPLETED / FAILED / CLARIFYING（→PROCESSING）/ CANCELING→CANCELLED；取消可从 RECORDING / PROCESSING / CLARIFYING 触发
+- **任务状态机**：IDLE→RECORDING→PROCESSING→COMPLETED / FAILED / CLARIFYING（→PROCESSING）/ CANCELLING→CANCELLED；取消可从 RECORDING / PROCESSING / CLARIFYING 触发
 - **任务取消**：`POST /api/voice/cancel`（停止录音、幂等、已取消/完成/失败返回 409）
 - **澄清/重新输入**：`POST /api/voice/clarify`（仅 CLARIFYING 接受、空输入拒绝、轮次递增）
 - **迟到结果隔离**：generation 代次单调递增 + `_check_stale()`，旧代次结果记录 `result_stale_discarded` 不覆盖当前状态
 - **ESP32 仪表盘**：取消按钮 + 任务状态显示（`6e14622`），固件已烧录、仪表盘 HTTP 200
-- **自动测试**：`test_voice_control_server.py` **78/78**；全量 `pytest service/` **229/229 PASS**
-
-**实机取消联动（2026-10-14）**：ESP32 `10.28.53.63` ↔ PC voice service `10.28.53.130:8080`
-```text
-start:  request_id=voice-09188851-0004    state=recording
-cancel: cancelled_recording=true
-result: state=cancelled                   generation 7 → 8
-```
-状态链：`recording → cancel → cancelled`
+- **生产计时**：`task.timing` 暴露 `latency_first_feedback_ms` / `latency_completion_ms` / `latency_termination_ms` / `latency_cancel_to_feedback_stop_ms`（`6ff8086`、`66ecbb6`）
+- **自动测试（2026-10-17 本次运行）**：`test_voice_control_server.py` **99/99**；全量 `pytest service/` **250 passed + 6 subtests**（0 失败）
+- **实机取消复测（2026-10-17）**：ESP32 PLAY 启动 → Web 取消 `POST /api/voice/cancel` HTTP 200 → 状态链 `recording → cancelling → cancelled`；generation `5 → 6`；`latency_cancel_to_feedback_stop_ms = 79 ms`；服务端取消状态与浏览器显示一致。**单次实测，不代表所有场景的固定性能；项目无 TTS，不得称为语音播报停止时延**
+- **此前实机取消联动（2026-10-14）**：generation `7 → 8`（另一会话/任务，见 TEST_LOG）
 
 **本周未完成（如实标注，收尾不扩开发范围）**:
 - ⏳ **中文 ASR 准确率**：**未完成人工验收**（用户当前不方便进行语音输入；**不是失败，属待补验收**）
+- ⛔ **完整语音任务链路**：`service/nl_to_task.py` 缺失，ASR 原始文本无法转为 TaskContract JSON，`task_pipeline.run_task()` 无法处理；详见 TEST_LOG 2026-10-16 诊断
 - ⛔ **TTS 停止播报**：项目无 TTS 实现，不适用（不存在可中断的音频播报）
-- 语音澄清（CLARIFYING）真实语音交互闭环：待 ASR 人工验收后配合补验
+- ⏳ 语音澄清（CLARIFYING）真实语音交互闭环：待 ASR 人工验收后配合补验
 
 ---
 
@@ -79,7 +76,7 @@ result: state=cancelled                   generation 7 → 8
 | | Week 03 | 实体按键与物理反馈闭环 | ✅ 已合并至 main (PR #3, `ec9c94b`) |
 | 单元2 | Week 04 | 自然语言查询与请求采集 | ✅ 已合并至 main (PR #4, `7dd788b`) |
 | | **Week 05** | **接通按键说话与语音播报** | 🟢 语音输入链路已完成实机双端闭环验证（Step 3I）；TTS 播报/LLM/全链路未完成（feature 分支） |
-| | **Week 06** | **让语音任务可以澄清与停止** | 🟢 核心开发完成（分支 `feature/week06-voice-task-context`，HEAD `6e14622`，voice server 78/78、全量 229/229 PASS）；✅ 实机取消联动验证完成（ESP32 `10.28.53.63` ↔ PC `10.28.53.130:8080`）；⏳ 中文 ASR 内容验收待补 |
+| | **Week 06** | **让语音任务可以澄清与停止** | 🟢 核心开发完成（分支 `feature/week06-voice-task-context`，HEAD `66ecbb6` + 文档收尾，voice server **99/99**、全量 **250 passed + 6 subtests**）；✅ 实机取消/反馈停止复测（generation 5→6，取消→反馈停止 **79 ms**）；✅ 此前实机取消联动（7→8）；⏳ 中文 ASR 内容验收待补；⛔ NL→JSON 缺失，完整语音任务链路待验收 |
 | 单元3 | Week 07-09 | 视觉感知与事件反馈 | ⏳ 未开始 |
 | 单元4 | Week 10-12 | 多源上下文与状态推断 | ⏳ 未开始 |
 | 单元5 | Week 13-15 | 边云协作与韧性通信 | ⏳ 未开始 |

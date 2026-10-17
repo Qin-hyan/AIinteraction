@@ -570,6 +570,18 @@ class VoiceControlService:
         self._task_log = []
         self._task_asr_epoch = None
 
+        # ── 生产计时（Week 06 原子任务）────────────────────
+        # 内部使用 time.monotonic() 记录各阶段时刻；
+        # 向外只暴露差值（ms），不暴露绝对时钟值。
+        self._input_end_at: Optional[float] = None
+        self._first_feedback_at: Optional[float] = None
+        self._first_feedback_state: Optional[str] = None
+        self._task_completed_at: Optional[float] = None
+        self._task_failed_at: Optional[float] = None
+        self._task_cancelled_at: Optional[float] = None
+        self._cancel_requested_at: Optional[float] = None
+        self._latency_cancel_to_feedback_stop_ms: Optional[int] = None
+
     # ── 只读视图 ─────────────────────────────
 
     @property
@@ -602,7 +614,8 @@ class VoiceControlService:
         return "recording" if self._capture.is_recording else "idle"
 
     def status(self) -> Dict[str, Any]:
-        """返回当前状态。Week 06: 新增 task 块。"""
+        """返回当前状态。Week 06: 新增 task 块 + 生产 timing。"""
+        import time as _time
         recording = bool(self._capture.is_recording)
         with self._lock:
             target = self._target_path
@@ -613,6 +626,37 @@ class VoiceControlService:
             tc = dict(self._task_context)
             tg = self._task_generation
             tl = list(self._task_log[-10:])
+            _iea = self._input_end_at
+            _ffa = self._first_feedback_at
+            _tca = self._task_completed_at
+            _tfa = self._task_failed_at
+            _txa = self._task_cancelled_at
+            _lat_c2fb = self._latency_cancel_to_feedback_stop_ms
+        # Compute latencies (ms). COMPLETED: first_feedback==completion because the
+        # first user-observable task feedback and completion are the same event
+        # in the current pipeline (no intermediate partial-result notification).
+        timing = {}
+        if _iea is not None:
+            if _ffa is not None:
+                timing["latency_first_feedback_ms"] = int(
+                    round((_ffa - _iea) * 1000.0)
+                )
+            if _tca is not None:
+                timing["latency_completion_ms"] = int(
+                    round((_tca - _iea) * 1000.0)
+                )
+            if _tfa is not None:
+                timing["latency_termination_ms"] = int(
+                    round((_tfa - _iea) * 1000.0)
+                )
+                timing["termination_reason"] = "failed"
+            elif _txa is not None:
+                timing["latency_termination_ms"] = int(
+                    round((_txa - _iea) * 1000.0)
+                )
+                timing["termination_reason"] = "cancelled"
+            if _lat_c2fb is not None:
+                timing["latency_cancel_to_feedback_stop_ms"] = _lat_c2fb
         return {
             "ok": True,
             "state": "recording" if recording else "idle",
@@ -624,7 +668,8 @@ class VoiceControlService:
             "config": self.config(),
             "asr": self._asr_runner.snapshot(),
             "task": {"request_id": tid, "state": ts, "generation": tg,
-                     "result": tr, "context": tc if tc else None, "log": tl},
+                     "result": tr, "context": tc if tc else None, "log": tl,
+                     "timing": timing if _iea is not None else None},
         }
 
     # ── 控制 ─────────────────────────────────
@@ -642,6 +687,14 @@ class VoiceControlService:
             self._task_context = {}
             self._task_result = None
             self._task_asr_epoch = None
+            self._input_end_at = None
+            self._first_feedback_at = None
+            self._first_feedback_state = None
+            self._task_completed_at = None
+            self._task_failed_at = None
+            self._task_cancelled_at = None
+            self._cancel_requested_at = None
+            self._latency_cancel_to_feedback_stop_ms = None
             self._transition_task_state(TASK_STATE_RECORDING)
             return {
                 "ok": True,
@@ -696,6 +749,9 @@ class VoiceControlService:
                 self._task_asr_epoch = None
             if self._task_state not in (TASK_STATE_CANCELLING, TASK_STATE_CANCELLED):
                 self._transition_task_state(TASK_STATE_PROCESSING)
+            # ── 记录输入结束时刻（Week 06 生产计时）──
+            import time as _time
+            self._input_end_at = _time.monotonic()
             # 紧凑回执：只含 ESP32 契约必需字段 + 极简关联信息。
             # wav 只取 frames/duration_seconds（固件用于日志关联；见
             # voice_button.c voice_post_action），asr 只取 status（回执 = 已提交）。
@@ -725,11 +781,34 @@ class VoiceControlService:
         prev = self._task_state
         self._task_state = new_state
         self._log_task_event("state_change", from_state=prev, to_state=new_state)
+        # ── 生产计时：首次反馈、完成/失败/取消（Week 06）──
+        _feedback_states = (TASK_STATE_COMPLETED, TASK_STATE_FAILED,
+                            TASK_STATE_CLARIFYING, TASK_STATE_CANCELLED)
+        if self._first_feedback_at is None and new_state in _feedback_states:
+            self._first_feedback_at = _time.monotonic()
+            self._first_feedback_state = new_state
+        if new_state == TASK_STATE_COMPLETED:
+            self._task_completed_at = _time.monotonic()
+        elif new_state == TASK_STATE_FAILED:
+            self._task_failed_at = _time.monotonic()
+        elif new_state == TASK_STATE_CANCELLED:
+            self._task_cancelled_at = _time.monotonic()
+            if self._cancel_requested_at is not None:
+                self._latency_cancel_to_feedback_stop_ms = int(
+                    round((self._task_cancelled_at - self._cancel_requested_at) * 1000.0)
+                )
 
-    def _log_task_event(self, event_type: str, **extra):
+    def _log_task_event(self, event_type: str, request_id=None, generation=None, **extra):
         import time as _time
-        entry = {"event": event_type, "request_id": self._task_id,
-                 "generation": self._task_generation, "ts": int(_time.time() * 1000)}
+        # Week 06 验收：迟到结果丢弃等事件允许显式关联「其来源任务」的
+        # request_id/generation，避免被误记为当前（可能是新）任务的代次，
+        # 保证输入/事件/结果/反馈可追踪关联。
+        entry = {
+            "event": event_type,
+            "request_id": self._task_id if request_id is None else request_id,
+            "generation": self._task_generation if generation is None else generation,
+            "ts": int(_time.time() * 1000),
+        }
         entry.update(extra)
         self._task_log.append(entry)
         if len(self._task_log) > 20:
@@ -784,19 +863,36 @@ class VoiceControlService:
             return
         with self._lock:
             if self._check_stale(generation):
-                self._log_task_event("result_stale_discarded")
+                self._log_task_event(
+                    "result_stale_discarded",
+                    request_id=task_id,
+                    generation=generation,
+                )
                 return
-            self._task_result = result if isinstance(result, dict) else {"ok": False, "error": "invalid_result", "message": str(result)}
-            if not result.get("ok") and result.get("intent") == "clarify":
-                self._task_context["clarify_question"] = result.get("data", {}).get("question", "")
+            # run_task() 契约返回 str（用户可读文本）；当前 NL→JSON 未接入时
+            # 生产返回必为 str。统一归一化为 dict 再决策：既杜绝 str.get() 的
+            # AttributeError（历史行为：worker 线程崩溃、状态卡在 PROCESSING），
+            # 又让状态机确定收敛到 FAILED（invalid_result），不污染新任务。
+            normalized = result if isinstance(result, dict) else {
+                "ok": False,
+                "error": "invalid_result",
+                "message": str(result),
+            }
+            self._task_result = normalized
+            if not normalized.get("ok") and normalized.get("intent") == "clarify":
+                self._task_context["clarify_question"] = (
+                    normalized.get("data") or {}
+                ).get("question", "")
                 self._transition_task_state(TASK_STATE_CLARIFYING)
-            elif not result.get("ok"):
+            elif not normalized.get("ok"):
                 self._transition_task_state(TASK_STATE_FAILED)
             else:
                 self._transition_task_state(TASK_STATE_COMPLETED)
 
     def cancel(self, request_id=None):
         import time as _time
+        # cancel -> feedback-stop (Week 06 independent metric)
+        self._cancel_requested_at = _time.monotonic()
         with self._lock:
             if request_id is not None and request_id != self._task_id:
                 return {"ok": False, "error": "request_id_mismatch"}
@@ -811,6 +907,9 @@ class VoiceControlService:
                     self._capture.stop_recording()
                     self._target_path = None
                     cr = True
+                    # ── 输入在取消时被中断：记录结束时刻 ──
+                    if self._input_end_at is None:
+                        self._input_end_at = _time.monotonic()
                 except Exception: pass
             self._task_generation += 1
             self._task_asr_epoch = None
