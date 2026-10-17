@@ -1040,3 +1040,39 @@ idf.py build
 - **验证层级止于单元测试与固件构建**；**未烧录、未实机验证、未产出真实输入样例**。
 - 课程要求的两项实机交付物（带采集时间的输入样例、采集权限与失败记录）**待烧录后补验**。
 - 本轮未烧录/复位设备，未要求用户操作硬件。
+
+---
+
+## 2026-10-17 Week 07 实机验证（烧录授权后，操作者：WorkBuddy + 覃总授权）
+
+**设备**: ESP32-S3-EYE @ COM10（USB Serial/JTAG）｜ **固件**: `1abaa3d`+`6d6853a`（feature/week07-vision-capture）｜ **烧录**: `idf.py -p COM10 flash` 成功，Hash verified，耗时 2m34s
+
+### E. 端到端采集验证（真实硬件，真实证据）
+
+| 验证点 | 真实证据 | 结论 |
+|---|---|---|
+| 新固件运行 | `GET /api/camera/status` 返回 Week 07 新端点 JSON（初始 `cap_task_status:idle, total:0, slots:9`） | ✅ |
+| 按需采集受理 | `POST /api/camera/capture` → `{"request_id":"req-178737-0001","task_seq":1}` | ✅ |
+| capturing 中间态 | 串口: `[DIAG-CAP] status=capturing (capturing) req=req-178737-0001` (180316ms) | ✅ |
+| 真实取帧 | 串口: `Capture OK: 15210 bytes, fmt=4(JPEG), 800x600` | ✅ |
+| 端侧 esp_jpeg 评估 | 串口: `IMGQ: assess status=too_dark usable=0 200x150 mean=9.47 contrast=2.85 detail=0.89 score=0.015`（解码缩放至 200x150，评估耗时约 780ms） | ✅ |
+| 四态终态 | status 接口: `cap_task_status:unusable, last_img_status:too_dark`；环境照度低（mean_luma 9.47 < 阈值 25），判定合理 | ✅ |
+| 请求-图像-时间关联 | `last_request_id` 与受理 request_id 一致；`updated_ms` 记录采集时刻；槽位 `cap-00001.jpg 800x600` 带 `req_id` | ✅ |
+| 状态稳定保持 | 串口连接期间 7 次轮询 ×15s（105 秒）状态恒定不变 | ✅ |
+
+### F. 重大发现：设备脱机稳定性缺陷（预存问题，非 Week 07 引入）
+
+**现象**：PC 断开 COM10 串口后约 15-35 秒，设备自动重启（uptime 与 IMU cadence 编号回退，全部 RAM 状态清零）；保持串口连接则 150 秒连续运行无任何异常（299s→448.8s 日志无 panic）。
+
+**复现记录**：3 次断开复现 + 1 次连接反向验证（对照实验）。
+
+**初步定位**：`sdkconfig` 中 `CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y` 使日志同时写 USB 通道；主机断开 COM10 后 USB CDC 缓冲无人消费，写阻塞（IMU 每秒打印）→ 任务挂起 → `CONFIG_ESP_TASK_WDT_TIMEOUT_S=5` 超时复位。**待进一步实验确认**（需在断开状态下用 UART0 主通道或崩溃后立即重连抓 panic）。
+
+**影响**：所有无人值守场景设备周期性重启；此前各周未暴露因实机验证时 `idf.py monitor` 始终连接。对 Week 07 课堂演示构成风险（演示时不会连串口）。
+
+**处置建议**：作为独立原子任务修复（候选方案：禁用 USB 辅助控制台或配置 USB Serial/JTAG 非阻塞模式）。**待覃总决策是否纳入本周范围**。
+
+### G. 待覃总配合的实机验证项
+
+- 当前环境照度不足（mean_luma≈10），只能验证 `too_dark/unusable`；**正常光照采集（ok 态）、遮挡镜头（low_contrast 态）需覃总物理操作设备**。
+- 「上次成功图像不得被标为本次采集成功」需先有一次 ok 采集后再验证。
