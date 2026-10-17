@@ -29,6 +29,7 @@
 #include "wifi_app.h"
 #include "http_server.h"
 #include "camera_app.h"
+#include "image_quality.h"
 #include "esp_heap_caps.h"
 #include "help_event.h"
 #include "help_uplink.h"
@@ -245,13 +246,29 @@ static void save_capture_slot(collect_task_t *t, camera_frame_t *f,
              t->cap_count + 1);
     snprintf(t->last_cap_request_id, sizeof(t->last_cap_request_id),
              "%s", t->request_id);
+
+    /* Week 7: 对本次 JPEG 做画面可用性评估，结果写入槽位 */
+    image_quality_t q = {0};
+    image_quality_assess(s->jpeg_buf, s->jpeg_len, &q);
+    s->img_status = q.status;
+    s->usable     = q.usable;
+    s->mean_luma  = q.mean_luma;
+    s->contrast   = q.contrast;
+    s->detail     = q.detail;
+
+    t->last_cap_status  = q.status;
+    t->last_cap_usable  = q.usable;
+
     t->cap_head++;
     t->cap_count++;
     ESP_LOGI(TAG, "[DIAG-CAP] save done: #%d file=%s req=%s %dx%d %d bytes "
-             "cap_head=%d cap_count=%d",
+             "status=%s usable=%d cap_head=%d cap_count=%d",
              t->cap_count, s->file_name, s->request_id,
              s->width, s->height, (int)s->size_bytes,
+             image_quality_status_name(s->img_status), (int)s->usable,
              t->cap_head, t->cap_count);
+    ESP_LOGI(TAG, "[DIAG-CAP] quality: mean_luma=%.2f contrast=%.2f detail=%.2f score=%.3f",
+             s->mean_luma, s->contrast, s->detail, q.score);
 }
 
 /* ================================================================
@@ -496,6 +513,8 @@ void app_main(void)
                     ESP_LOGI(TAG, "[DIAG-CAM] Camera captured OK: %d bytes", (int)frame.len);
                 } else {
                     ESP_LOGW(TAG, "[DIAG-CAM] camera_app_capture FAILED ret=0x%X for %s", cap_ret, collect_task.request_id);
+                    collect_task.last_cap_status = IMG_STATUS_INVALID;
+                    collect_task.last_cap_usable = false;
                 }
                 ESP_LOGI(TAG, "[DIAG-CAM] clearing capture_camera flag");
                 collect_task.capture_camera = false;
@@ -506,6 +525,8 @@ void app_main(void)
                          heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
             } else if (collect_task.capture_camera && !cam_handle) {
                 ESP_LOGW(TAG, "[DIAG-CAM] SKIP: capture_camera=true but cam_handle=NULL");
+                collect_task.last_cap_status = IMG_STATUS_INVALID;
+                collect_task.last_cap_usable = false;
                 collect_task.capture_camera = false;
             }
             /* 任务完成，复位状态 */

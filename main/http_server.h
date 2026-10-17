@@ -14,6 +14,7 @@
 #include "adc_button.h"
 #include "camera_app.h"
 #include "help_event.h"
+#include "image_quality.h"
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -110,6 +111,12 @@ typedef struct {
     uint8_t *jpeg_buf;         /**< JPEG 数据 */
     size_t   jpeg_len;         /**< JPEG 数据长度 */
     bool     uploaded;         /**< 是否已上传 */
+    /* Week 7: 画面可用性评估结果 */
+    image_status_t img_status; /**< 画面可用性状态 */
+    bool     usable;           /**< 画面是否可用 */
+    float    mean_luma;        /**< 灰度均值 */
+    float    contrast;         /**< 灰度标准差 */
+    float    detail;           /**< 相邻像素梯度能量均值 */
 } capture_slot_t;
 
 /** @brief 定时自动抓拍配置 */
@@ -149,6 +156,9 @@ typedef struct {
     int               cap_count;         /**< 已拍照片总数 */
     auto_capture_cfg_t auto_cap;         /**< 定时自动抓拍配置 */
     char              last_cap_request_id[32]; /**< 最后一次抓拍的请求号 */
+    /* Week 7: 最近一次抓拍（含失败路径）的画面可用性状态 */
+    image_status_t    last_cap_status;   /**< 最近一次抓拍状态 */
+    bool              last_cap_usable;   /**< 最近一次抓拍是否可用 */
 } collect_task_t;
 
 /**
