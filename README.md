@@ -41,7 +41,7 @@
 | **CSV 导出** | 12 列字段，UTF-8+BOM 编码兼容 Excel，字段缺失留空，不伪造数值 |
 | **按键物理反馈** | Week 03：独立 FreeRTOS 按键扫描任务 (30 Hz)，事件驱动 LED 反馈与 HTTP 上行 |
 | **语音交互面板** | Week 05：ESP32 仪表盘内置 🎙 语音控制面板，通过 PC 语音服务实现录音/ASR 状态显示与按钮控制；语音输入链路（PLAY→PC 录音→Whisper ASR→STOP 回执→ESP32 回 IDLE）已实机双端闭环验证通过（Step 3I） |
-| **语音任务上下文与取消** | Week 06：PC 语音服务全面增加 request_id 全链路追踪、任务状态机、任务取消 `/api/voice/cancel`、澄清/重新输入 `/api/voice/clarify` 与迟到结果代次隔离（generation 单调递增，旧代次结果丢弃）；ESP32 仪表盘新增取消按钮与任务状态显示 |
+| **语音任务上下文与取消** | Week 06：PC 语音服务全面增加 request_id 全链路追踪、任务状态机、任务取消 `/api/voice/cancel`、澄清/重新输入 `/api/voice/clarify` 与迟到结果代次隔离（generation 单调递增，旧代次结果丢弃）；ESP32 仪表盘新增取消按钮与任务状态显示；新增任务计时（首次反馈/完成/终止/取消→反馈停止，单次实测 79 ms） |
 
 > ⚠️ **Week 05 语音识别待人工验收**：真实中文语音识别准确率和简体中文输出质量**尚未经人工审阅**，不得宣称已通过。静音/背景噪声导致的空转录不得记录为识别成功。
 
@@ -221,7 +221,7 @@ idf.py -p COM端口 flash monitor
 
 ⚠️ **Week 05 未完成能力（如实标注，不得声称已完成）**：Step 4 语言模型 NL→JSON、Step 5 TTS 播报、Step 6 全链路串联、Step 7 状态显示与 LED 反馈、Step 8 异常处理与文字对照测试均**未开始**；语音仅实现「按钮开始/结束录音 → 音频 → 任务文本（ASR）」输入侧，输出侧语音播报（TTS）尚未实现。
 
-#### Week 06 — 让语音任务可以澄清与停止 🟢（核心开发完成 + 实机取消验证完成；ASR 内容验收待补）2026-10-14
+#### Week 06 — 让语音任务可以澄清与停止 🟢（核心开发完成 + 实机取消/反馈停止复测完成；ASR 内容验收待补）2026-10-17
 
 | 能力 | 状态 | 验证方式 |
 |------|------|---------|
@@ -229,13 +229,15 @@ idf.py -p COM端口 flash monitor
 | 任务取消 `POST /api/voice/cancel` | ✅ 停止录音 + 幂等 + 409 保护 | 自动测试 + 实机联动 |
 | 澄清/重新输入 `POST /api/voice/clarify` | ✅ 仅 CLARIFYING 接受、空输入拒绝、轮次递增 | Python 自动测试 |
 | 迟到结果隔离 | ✅ generation 单调递增，旧代次结果记录 `result_stale_discarded` 不覆盖新状态 | Python 自动测试 |
-| 自动测试 | ✅ `test_voice_control_server.py` **78/78 PASS**；全量 `pytest service/` **229/229 PASS** | pytest |
+| 任务计时 `task.timing` | ✅ 首次反馈 / 完成 / 终止 / 取消→反馈停止四项指标 | Python 自动测试（14 项） |
+| 自动测试 | ✅ `test_voice_control_server.py` **99/99 PASS**；全量 `pytest service/` **250 passed + 6 subtests**（0 失败，2026-10-17） | pytest |
 | ESP32 仪表盘取消按钮 + 任务状态显示（`main/http_server.c`） | ✅ 固件已烧录，仪表盘 HTTP 200，取消按钮页面已验证 | 实机 |
-| **ESP32↔PC 实机取消联动** | ✅ `recording → cancel（cancelled_recording=true）→ cancelled`；generation **7→8**；request_id=`voice-09188851-0004` | 实机双端取证 |
+| **ESP32↔PC 实机取消联动**（2026-10-14） | ✅ `recording → cancel（cancelled_recording=true）→ cancelled`；generation **7→8**；request_id=`voice-09188851-0004` | 实机双端取证 |
+| **ESP32↔PC 实机取消复测**（2026-10-17） | ✅ PLAY 启动 → Web 取消 HTTP **200** → `recording → cancelling → cancelled`；generation **5→6**；`latency_cancel_to_feedback_stop_ms=79 ms`；服务端与浏览器显示一致 | 实机双端取证 |
 
-**运行方式**：ESP32 仪表盘（默认 `http://<esp32-ip>`）通过内嵌语音面板调用 PC voice service；PC 服务端为 `service/voice_control_server.py`（绑定如 `10.28.53.130:8080`，`POST /api/voice/{start,stop,status,cancel,clarify}`）。
+**运行方式**：ESP32 仪表盘（默认 `http://<esp32-ip>`）通过内嵌语音面板调用 PC voice service；PC 服务端为 `service/voice_control_server.py`（绑定如 `10.28.x.x:8080`，`POST /api/voice/{start,stop,status,cancel,clarify}`）。
 
-> ⚠️ **Week 06 未验收项（如实记录，不得描述为失败）**：① **中文 ASR 准确率**——用户当前不方便进行语音输入，**尚未完成人工验收**，按「待补验收」记录，不宣称通过；② **TTS 停止播报**——**项目无 TTS 实现**，不存在可中断的音频播报，该能力不适用。
+> ⚠️ **Week 06 未验收项（如实记录，不得描述为失败）**：① **中文 ASR 准确率**——用户当前不方便进行语音输入，**尚未完成人工验收**，按「待补验收」记录，不宣称通过；② **完整 ASR→NL→JSON→任务链路**——`service/nl_to_task.py` 缺失，ASR 原始文本无法转为 TaskContract JSON，链路未端到端验收；③ **TTS 停止播报**——**项目无 TTS 实现**，不存在可中断的音频播报，该能力不适用。
 
 
 ### 仍待补验
@@ -245,6 +247,7 @@ idf.py -p COM端口 flash monitor
 | ⚠️ **真实语言模型输出 → 管道输入接口对接** | 当前使用结构化 JSON 样例替代 LLM 输出 |
 | ⚠️ **真实 ESP32 HTTP 调用** | query_last、trigger_collect 工具仅通过 mock 测试，未在真实设备上运行 |
 | ⚠️ **Week 06 中文 ASR 准确率内容验收** | 用户当前不方便语音输入，实机中文语音识别质量**未完成验收**（非失败，属待补验收）；TTS 停止播报因项目无 TTS 不适用 |
+| ⚠️ **Week 06 完整 ASR→NL→JSON→任务链路** | `service/nl_to_task.py` 缺失，ASR 原始文本无法转为 TaskContract JSON；取消/澄清/计时链路已验收，但「真实语音 → 任务执行」未端到端验收 |
 | ⚠️ **Week 03 ESP32→VPS HTTP 上行端到端验收** | **软件集成已完成**：help_uplink 异步任务已集成至 `main.c`（初始化调用 `help_uplink_start`，事件状态机调用 `help_uplink_is_configured` / `help_uplink_request_send` / `help_uplink_poll`，见 `29dd72d`）；**仍未完成**真实 VPS URL 配置与 ESP32→VPS 端到端实机验收（HTTP POST 成功/失败路径未验证） |
 
 > 所有测试记录详见 [TEST_LOG.md](TEST_LOG.md)（版本、输入、预期、实际、PASS/FAIL、运行位置和证据）。
@@ -289,7 +292,7 @@ AIinteraction/
 │   ├── voice_control_server.py # Week 05/06：PC 录音 HTTP 控制服务 + 后台自动 Whisper ASR + 任务上下文/取消/澄清/代次隔离
 │   ├── asr_whisper.py        # Week 05：本地 Whisper ASR 模块（base/zh/transcribe）
 │   ├── requirements-*.txt    # Week 05：PC 端音频/ASR 依赖清单
-│   └── test_*.py             # 单元/集成测试（Week 04 共 102 项；Week 05 追加 ASR/录音/服务；Week 06 voice server 78/78、全量 229/229）
+│   └── test_*.py             # 单元/集成测试（Week 04 共 102 项；Week 05 追加 ASR/录音/服务；Week 06 voice server 99/99、全量 250 passed + 6 subtests）
 ├── partitions.csv            # 8MB Flash 分区表
 ├── CMakeLists.txt            # 顶层 CMake 项目
 ├── sdkconfig.defaults        # 公开配置模板（含 Wi-Fi 占位符）
@@ -319,7 +322,7 @@ AIinteraction/
 | [TEST_LOG.md](TEST_LOG.md) | 完整测试记录（版本、输入、预期、实际、PASS/FAIL） |
 | [weeks/week04/STATE.md](weeks/week04/STATE.md) | Week 04 详细设计、测试覆盖、验证结果 |
 | [weeks/week05/STATE.md](weeks/week05/STATE.md) | Week 05 详细状态（分支 `feature/week05-voice-interaction`；按键说话链路 PLAY→录音→Whisper ASR→STOP→回 IDLE 已完成实机双端闭环验证；TTS/LLM/全链路未完成） |
-| [weeks/week06/STATE.md](weeks/week06/STATE.md) | Week 06 详细状态（分支 `feature/week06-voice-task-context`：任务上下文/取消/澄清/迟到结果隔离 + ESP32 仪表盘取消按钮与状态显示；实机取消联动已验证；ASR 内容验收待补） |
+| [weeks/week06/STATE.md](weeks/week06/STATE.md) | Week 06 详细状态（分支 `feature/week06-voice-task-context`：任务上下文/取消/澄清/迟到结果隔离 + 生产计时 + ESP32 仪表盘取消按钮与状态显示；实机取消/反馈停止已复测；ASR 内容验收待补；NL→JSON 缺失） |
 | [每周计划/](每周计划/) | 18 周课程计划 HTML |
 
 ### HTTP API 速查
@@ -353,11 +356,11 @@ IDLE → SUBMITTED(已提交·已受理) → RECEIVED(设备已接收)
 
 | 引用 | 说明 |
 |------|------|
-| `main` | 最新合并版本 `7dd788b`（PR #4）— 已包含 Week 01–04 完整代码，与 `origin/main` 同步 |
+| `main` | 远端 `origin/main` `6761db6`（PR #6，含 Week 06 至 `28aa45c`）；本地 `main` 仍为 `7dd788b`（未快进） |
 | `week02-stable` (tag) | **稳定基线** — 12 项实机验证全 PASS |
 | `feature/week04-natural-language` | 已合并的**历史分支**（PR #4 → `main` `7dd788b`；分支 HEAD `0b4b323` 保留） |
 | `feature/week05-voice-interaction` | **已收尾**（作为 Week 06 基线 `f0653f0`）— Week 05 开发分支（基线 `7dd788b`）；HEAD `91959fb`；含完整功能实现：PC 音频采集/录音 HTTP 控制服务/本地 Whisper ASR 模块 + ESP32 PLAY 按键语音控制 + **ESP32 仪表盘 🎙 语音交互面板**；语音输入链路实机双端闭环验证通过（Step 3I）；真实中文 ASR/简体中文输出待人工验收；TTS/LLM/全链路播报未完成 |
-| `feature/week06-voice-task-context` | **当前** — Week 06 开发分支（基线 `f0653f0` = Week 05 HEAD）；HEAD `6e14622`（任务上下文/取消/澄清/迟到结果隔离 + ESP32 仪表盘取消按钮与状态显示）；`test_voice_control_server.py` **78/78**、全量 **229/229** PASS；ESP32↔PC 实机取消联动验证通过（ESP32 `10.28.53.63`；PC `10.28.53.130:8080`）；中文 ASR 准确率待补人工验收；未合并 main |
+| `feature/week06-voice-task-context` | **当前** — Week 06 开发分支（基线 `f0653f0` = Week 05 HEAD）；HEAD `66ecbb6` + 本次文档收尾提交（任务上下文/取消/澄清/迟到结果隔离 + 生产计时 + ESP32 仪表盘取消按钮与状态显示）；`test_voice_control_server.py` **99/99**、全量 **250 passed + 6 subtests** PASS；ESP32↔PC 实机取消复测（generation 5→6，取消→反馈停止 79 ms）与 2026-10-14 实机取消联动（7→8）均通过；`origin/main` 已合并 PR #6 至 `28aa45c`，后续 3 个功能提交及本次文档提交尚未合并；中文 ASR 准确率待补人工验收；NL→JSON 缺失，完整任务链路未验收 |
 
 ---
 
