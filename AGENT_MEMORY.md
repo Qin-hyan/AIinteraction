@@ -45,7 +45,7 @@ AIinteraction/
 | 物理反馈 | `help_event.c/h` | ✅ Week 03 | 按键→LED→Web 闭环, 去抖 FSM (30Hz), 快速连按抑制通过 |
 | VPS 上行推送 | `help_uplink.c/h` | 🔧 Week 03 | help_event_t 序列化为 JSON → HTTP POST；**异步接口已集成 main.c**（`29dd72d`：`help_uplink_start` / `request_send` / `poll`），**真实 ESP32→VPS 端到端实机验收未完成** |
 | 语音控制（PLAY→PC） | `voice_button.c/h` | ✅ Week 05 | PLAY 按键 → `esp_http_client` POST `/api/voice/start` \| `/api/voice/stop`；独立任务+队列（非阻塞）；Kconfig `CONFIG_VOICE_PC_URL`（空 = 功能关闭）；**已烧录并经 Step 3I 真实双端闭环验证（START/STOP 双端 HTTP 200、ESP32 本地回 IDLE）** |
-| 语音任务管理 | `service/voice_control_server.py` | ✅ Week 06 | `_generate_request_id()` → `voice-{ms}-{counter:04d}`；任务状态机 IDLE→RECORDING→PROCESSING→COMPLETED/FAILED/CLARIFYING（→PROCESSING）/CANCELLING→CANCELLED；CANCEL 可自 RECORDING/PROCESSING/CLARIFYING 触发；`POST /api/voice/cancel`（幂等/409）+ `/api/voice/clarify`（仅 CLARIFYING）；`_task_generation` 代次单调递增 + `_check_stale()` 迟到结果隔离（`result_stale_discarded`）；集成 Week 04 `task_pipeline`；`test_voice_control_server.py` **78/78**、全量 **229/229** PASS |
+| 语音任务管理 | `service/voice_control_server.py` | ✅ Week 06 | `_generate_request_id()` → `voice-{ms}-{counter:04d}`；任务状态机 IDLE→RECORDING→PROCESSING→COMPLETED/FAILED/CLARIFYING（→PROCESSING）/CANCELLING→CANCELLED；CANCEL 可自 RECORDING/PROCESSING/CLARIFYING 触发；`POST /api/voice/cancel`（幂等/409）+ `/api/voice/clarify`（仅 CLARIFYING）；`_task_generation` 代次单调递增 + `_check_stale()` 迟到结果隔离（`result_stale_discarded`，日志显式关联旧任务代次）；集成 Week 04 `task_pipeline`（`run_task()` 返回 str 已归一化为 invalid_result→FAILED，不再崩溃）；`test_voice_control_server.py` **99/99**（含慢响应/连续查询/迟到结果隔离验收、生产计时 14 项）、全量 **250 passed + 6 subtests**（2026-10-17，0 失败）；`task.timing` 暴露首次反馈/完成/终止/取消→反馈停止四项时延 |
 | ESP32 仪表盘语音面板 | `main/http_server.c` | ✅ Week 05/06 | 🎙 语音交互面板：开始/停止/取消任务按钮 + 实时帧数/时长/ASR 文本 + 任务状态（state/generation/request_id）显示；`__VOICE_PC_URL__` 模板注入（`CONFIG_VOICE_PC_URL` 空时自动隐藏）；Week 05 `91959fb` → Week 06 `6e14622`（取消按钮+状态显示，实机 HTTP 200 已验证） |
 | PC 录音控制服务 | `service/voice_control_server.py` | ✅ Week 05 | Flask HTTP 控制录音（start/stop/status）；stop 返回紧凑回执（≤120B）；停录后自动后台 Whisper ASR；自动测试 62/62（Step 3D 版） |
 | PC 音频采集 | `service/audio_capture.py` | ✅ Week 05 | sounddevice 采集 16000Hz/1ch/int16 → stdlib `wave` 写 WAV；自动测试 31/31 + 真实麦克风 PASS |
@@ -76,7 +76,13 @@ AIinteraction/
 
 - ESP32 仪表盘（`main/http_server.c` 内嵌 HTML/JS）通过 `__VOICE_PC_URL__` 模板注入指向 PC 语音服务基地址（`CONFIG_VOICE_PC_URL`；空 = 面板功能隐藏）
 - 面板调用 `/api/voice/{start,stop,status,cancel}`；任务状态 / request_id / generation 由 status 的 `task` 块返回并在页面显示
-- 实机验证网络（2026-10-14）：ESP32 `10.28.53.63`；PC voice service `10.28.53.130:8080`
+- 实机验证网络（2026-10-14）：ESP32 `10.28.x.x`；PC voice service `10.28.x.x:8080`（私有地址已脱敏）
+
+### 生产计时指标（2026-10-16/17）
+
+- `GET /api/voice/status` → `task.timing`：`latency_first_feedback_ms`（输入结束→首次反馈）、`latency_completion_ms`（→完成）、`latency_termination_ms` + `termination_reason`（→失败/取消）、`latency_cancel_to_feedback_stop_ms`（`cancel()` 入口→CANCELLED，仅取消任务）
+- 使用 `time.monotonic()` 差值，仅暴露 ms 差值；新任务开始时清除，跨任务不串值
+- 实测：2026-10-17 取消→反馈停止 **79 ms**（单次实测，非固定性能）；项目无 TTS，不得称为语音播报停止时延
 
 ---
 
@@ -146,4 +152,4 @@ IDLE → SUBMITTED → RECEIVED → COMPLETED / FAILED
 | `feature/week03-physical-feedback` | Week 03 开发分支（已合并，PR #3 → `ec9c94b`） |
 | `feature/week04-natural-language` | Week 04 开发分支（已合并，PR #4 → `7dd788b`；分支 HEAD `0b4b323` 保留） |
 | `feature/week05-voice-interaction` | **已收尾**（作为 Week 06 基线 `f0653f0`）— Week 05 开发分支（基线 `7dd788b`）；功能（PC 音频采集/录音 HTTP 控制服务/本地 Whisper ASR/ESP32 PLAY 语音控制）已实现并经 Step 3I 实机双端闭环验证；2026-10-13 收尾（HEAD `91959fb`） |
-| `feature/week06-voice-task-context` | **当前** Week 06 开发分支（基线 `f0653f0` = Week 05 HEAD）；HEAD `6e14622`；任务上下文/取消/澄清/迟到结果隔离 + ESP32 仪表盘取消按钮与任务状态显示；voice server 78/78、全量 229/229 PASS；ESP32↔PC 实机取消联动验证通过（2026-10-14）；中文 ASR 内容验收待补 |
+| `feature/week06-voice-task-context` | **当前** Week 06 开发分支（基线 `f0653f0` = Week 05 HEAD）；HEAD `66ecbb6` + 本次文档收尾提交；任务上下文/取消/澄清/迟到结果隔离 + 生产计时 + ESP32 仪表盘取消按钮与任务状态显示；voice server **99/99**、全量 **250 passed + 6 subtests**（2026-10-17）；ESP32↔PC 实机取消复测（generation 5→6，取消→反馈停止 **79 ms**）与 2026-10-14 实机取消联动（7→8）均通过；`origin/main` 已合并 PR #6 至 `28aa45c`，后续 3 个功能提交及本次文档提交尚未合并；中文 ASR 内容验收待补；`service/nl_to_task.py` 缺失，完整语音任务链路未验收 |

@@ -769,7 +769,7 @@ if (help_button_get_pending(&btn)) {
 | # | 验证项 | 结果 | 证据 |
 |---|--------|------|------|
 | 1 | 固件烧录 | ✅ PASS | ESP-IDF `idf.py flash` 成功 |
-| 2 | 实际 IP | ✅ PASS | `10.28.53.63` |
+| 2 | 实际 IP | ✅ PASS | `10.28.x.x`（已脱敏） |
 | 3 | 仪表盘 | ✅ PASS | HTTP 200 |
 | 4 | 新增取消按钮页面 | ✅ PASS | 页面实测可用 |
 | 5 | **实机取消联动**（ESP32/dashboard → PC service） | ✅ **PASS** | 见下方闭环记录 |
@@ -778,7 +778,7 @@ if (help_button_get_pending(&btn)) {
 
 | 阶段 | 证据 |
 |------|------|
-| start | `state=recording`（PC voice service `10.28.53.130:8080`） |
+| start | `state=recording`（PC voice service `10.28.x.x:8080`，已脱敏） |
 | cancel | `cancelled_recording=true` |
 | result | `state=cancelled`，generation **7 → 8** |
 
@@ -790,3 +790,163 @@ if (help_button_get_pending(&btn)) {
 |----|------|------|
 | 中文 ASR 准确率 | ⏳ 未完成验收 | 用户当前不方便进行语音输入 |
 | TTS 停止播报 | ⛔ 不适用 | 项目无 TTS 实现，不存在可中断的音频播报 |
+
+---
+
+## Week 06 — 真实语音任务闭环诊断 (2026-10-16)
+
+**分支**: `feature/week06-voice-task-context`
+**版本**: HEAD `28aa45c` — docs(week06): update final status and validation records
+**验证方式**: 全链路代码审查 + 环境实时探测
+**结果**: ⛔ **BLOCKED** — NL→JSON 转换模块缺失，ASR 文本无法接入任务管道
+
+### 环境实时证据
+
+| 项 | 状态 | 证据 |
+|----|------|------|
+| Git 分支 | `feature/week06-voice-task-context` | HEAD `28aa45c`，工作区干净 |
+| ESP32 串口 | COM10 | `USB\VID_303A&PID_1001`（ESP32-S3 JTAG） |
+| ESP32 HTTP | ✅ 在线 | `10.28.x.x:80`（已脱敏），`/api/sensor` 返回有效数据（`accel_x=856, accel_y=-133, accel_z=539`，`obs-04016`，`uptime≈4087s`） |
+| PC 语音服务 | ❌ 未运行 | 端口 8080 被 PlatformIO MCP Dashboard（`node.exe` PID 66888）占用；无 Python `voice_control_server` 进程 |
+| Python 虚拟环境 | ✅ 存在 | `D:\AIinteraction-venvs\week05-audio\Scripts\python.exe` |
+
+### 全链路诊断
+
+| # | 环节 | 代码位置 | 状态 | 说明 |
+|---|------|----------|------|------|
+| 1 | ESP32 PLAY → HTTP start | `main/voice_button.c` → `POST /api/voice/start` | ✅ | 固件已烧录、ESP32 网络可达 |
+| 2 | PC 录音采集 | `service/audio_capture.py` | ✅ | sounddevice 16kHz/1ch/int16 → WAV，既往真实验证通过 |
+| 3 | ESP32 PLAY → HTTP stop | `main/voice_button.c` → `POST /api/voice/stop` | ✅ | 既往 Step 3I 双端闭环通过 |
+| 4 | 后台 Whisper ASR | `service/asr_whisper.py` `base/zh/transcribe/cpu` | ✅ | 既往真实中文语音识别通过（纯推理 0.68s） |
+| 5 | ASR 回调 | `voice_control_server.py:745` `_on_asr_done()` | ✅ | 代次校验、取消状态检查、调用 `_process_task()` |
+| 6 | **ASR 文本 → TaskContract JSON** | **缺失** `service/nl_to_task.py` | ❌ **BLOCKED** | Week 05 ARCHITECTURE.md 规划但从未实现（标记 `⏳ 待确认: 语言模型选型与授权`） |
+| 7 | 任务处理管道 | `voice_control_server.py:778` `task_pipeline.run_task(t)` | ⚠️ 不可达 | 传入原始中文文本，`parse_and_validate()` 要求 JSON → 校验失败 |
+| 8 | 意图分发 | `service/task_dispatcher.py:163` `dispatch_task()` | ⚠️ 不可达 | 四种意图（query_last/trigger_collect/clarify/unsupported），因上述断裂无法到达 |
+| 9 | query_last / trigger_collect → ESP32 | `service/query_last.py` `service/trigger_collect.py` | ⚠️ 不可达 | ESP32 HTTP API 经实时探测可达，但工具未被调用 |
+
+### 断裂点详情
+
+**位置**: `service/voice_control_server.py` 第 776-778 行
+
+```python
+from . import task_pipeline
+result = task_pipeline.run_task(t)   # t = 原始 ASR 中文文本
+```
+
+**原因**: `task_pipeline.run_task()` → `dispatch_task()` → `parse_and_validate()` 要求输入为结构化 JSON：
+
+```json
+{"intent": "query_last", "confidence": 0.95, "original": "查看最近的加速度数据"}
+```
+
+但 `t` 是原始中文文本（如 Whisper 转写的 `"查看最近的加速度数据"`），不是合法 JSON → 校验必然失败 → 任务进入 FAILED。
+
+**缺失模块**: `service/nl_to_task.py`（设计于 `weeks/week05/ARCHITECTURE.md` 第 430 行），功能定义为：
+- 输入：ASR 中文文本
+- 输出：`{"intent": "...", "confidence": 0.0-1.0, "original": "..."}` JSON
+- 验收标准：`"查看最近数据"` → `query_last` / `"重新采集"` → `trigger_collect` / `"你好"` → `unsupported` / 含糊 → `clarify`
+- 状态：`⏳ 待确认: 语言模型选型与授权`（从未进入实现阶段）
+
+### 附带代码缺陷
+
+`voice_control_server.py` 第 789-796 行存在类型不匹配：
+
+```python
+# run_task() 返回 str，但后续代码当作 dict 处理
+self._task_result = result if isinstance(result, dict) else {"ok": False, ...}
+if not result.get("ok") and result.get("intent") == "clarify":  # ← str 无 .get()
+```
+
+`run_task()` 返回 `str`（用户可读文本），`isinstance(result, dict)` 为 `False`，`self._task_result` 被正确设置为错误对象。但紧接着 `result.get("ok")` 对 `str` 调用会抛出 `AttributeError`，被 Flask 500 handler 捕获。此缺陷不影响本次诊断结论，但会在 NL→JSON 缺失补上后成为功能 bug。
+
+> 后续提交 `6ff8086` 已将 `run_task()` 返回值统一归一化为 dict（`normalized`），此缺陷已修复；本节保留 `28aa45c` 时点的诊断原文。
+
+### 接口契约速查
+
+| 模块 | 入口 | 输入要求 | 输出 |
+|------|------|----------|------|
+| `task_pipeline.run_task()` | `raw_input: str` | 结构化 JSON 字符串（`{"intent":"...","confidence":0.0-1.0,"original":"..."}`） | 用户可读文本 `str` |
+| `dispatch_task()` | `raw_input: str` | 同上 JSON | `DispatchResult(success, intent, observation, ...)` |
+| `parse_and_validate()` | `raw: str` | 合法 JSON + 四种已知意图 + 字段白名单 | `ValidationResult(valid, contract, errors)` |
+| `_process_task()` | `text: str` | ASR 中文文本（raw） | 无返回值；副作用：设置 `_task_result` + 推进状态机 |
+
+### 前置条件（NL→JSON 补全）
+
+1. **运行时语言模型授权**：需获得课程教师/助教确认可用的 LLM 服务（API Key 或本地模型），不得将 Cline 开发时使用的模型直接作为产品运行时模型
+2. **Prompt 工程**：将 ASR 中文文本映射到四种意图 + 置信度，正确处理含糊（→clarify）和越界（→unsupported）
+3. **输出校验**：LLM 输出须通过 `parse_and_validate()` 二次校验后方可进入 `dispatch_task()`
+4. **敏感信息隔离**：LLM API Key 不得写入仓库、不得出现在日志中
+
+### 结论
+
+- ⛔ **真实语音任务闭环：BLOCKED**，阻塞原因是 `service/nl_to_task.py` 缺失，ASR 文本无法转换为 TaskContract JSON
+- 此缺口是 Week 04/05 任务处理链路的前置依赖，不在 Week 07 范畴
+- 已核实链路：ESP32 在线、HTTP API 可达、ASR 模块可用、任务管道待 NL→JSON 后串联
+- 本轮未修改源码、未安装依赖、未访问外部模型、未读取敏感信息
+
+---
+
+## Week 06 最终收尾 — 实机取消与反馈停止时延 (2026-10-17)
+
+**分支**: `feature/week06-voice-task-context`
+**版本**: HEAD `66ecbb6` — feat(week06): add cancel-to-feedback-stop latency metric and audit three curriculum timings
+**验证方式**: ESP32 实机 PLAY 按键 + 浏览器仪表盘取消 + PC voice service HTTP/status + pytest
+**结果**: 实机取消链路 **PASS**；自动化 voice server **99/99**；全量 `pytest service/` **250 passed + 6 subtests**（0 失败）
+
+### A. 实机取消链路（ESP32 ↔ PC voice service）
+
+| # | 验证项 | 输入/操作 | 预期 | 实际 | 结果 |
+|---|--------|-----------|------|------|------|
+| 1 | 实体按键启动任务 | 按下 ESP32 PLAY | 创建新任务并进入录音 | ESP32 串口日志与 PC 服务端日志相互印证，`state=recording` | ✅ PASS |
+| 2 | Web 取消任务 | 仪表盘点击「取消任务」 | `POST /api/voice/cancel` 成功 | HTTP **200**，`cancelled_recording=true` | ✅ PASS |
+| 3 | 状态链 | 取消前后查询 `GET /api/voice/status` | `recording → cancelling → cancelled` | 与预期一致 | ✅ PASS |
+| 4 | 代次递增 | 同一取消操作 | generation 单调递增 | **5 → 6** | ✅ PASS |
+| 5 | 取消→反馈停止时延 | 同一次取消 | `task.timing.latency_cancel_to_feedback_stop_ms` 可读 | **79 ms**（与 generation 6 的取消任务同属一个 `task` 块） | ✅ PASS |
+| 6 | 服务端/浏览器一致性 | 取消后查看仪表盘 | 服务端 `task.state=cancelled` 与页面显示一致 | 一致 | ✅ PASS |
+| 7 | 迟到结果隔离 | 取消后旧代次结果返回 | 记录 `result_stale_discarded`，不覆盖取消状态 | 自动测试覆盖（本次未注入真实迟到结果） | ✅ PASS（测试） |
+
+**关联说明**：`voice_control_server.py` 在同一任务上以 `time.monotonic()` 记录 `cancel()` 入口 → `CANCELLED` 状态迁移，结果写入 `GET /api/voice/status` 的 `task.timing`，并与同一 `task` 块中的 `request_id` / `generation=6` 绑定。本次现场记录保留的是 generation `5 → 6`；`request_id` 本次未单独留存。
+
+> 2026-10-14 的另一次实机取消记录为 generation `7 → 8`（见上节）；与本次 `5 → 6` 属不同会话/任务，不矛盾。
+
+**口径说明（必须保留）**：
+- 79 ms 是**本次单次实测值**，不代表所有场景的固定性能；设备、网络与负载变化都会影响结果。
+- 项目**没有 TTS**，该指标度量的是「取消 → 任务进入 `cancelled` / 仪表盘停止显示录音反馈」的时延，**不得称为「语音播报停止时延」**。
+- 本项只证明取消与反馈停止链路；**不证明**完整 ASR 内容识别或自然语言转任务链路已验收。
+
+### B. 自动化测试（本次收尾实际运行）
+
+命令（虚拟环境 `D:\\AIinteraction-venvs\\week05-audio`）：
+
+```powershell
+python -m pytest service/test_voice_control_server.py -q
+python -m pytest service/ -q
+```
+
+| 测试范围 | 实际结果 |
+|----------|----------|
+| `service/test_voice_control_server.py` | ✅ **99 passed** |
+| `service/` 全量 | ✅ **250 passed, 6 subtests passed** |
+
+> 本次全量运行 0 失败；此前记录的 `test_audio_capture` 毫秒级文件名碰撞 flake 本次未复现。
+
+### C. 与课程 Week 06 要求的对应
+
+| 课程要求（Week 06 周任务卡） | 当前证据 | 状态 |
+|------------------------------|----------|------|
+| 有限多轮任务上下文 / request_id 关联 | request_id 全链路 + `task.log` | ✅ 自动测试 |
+| 任务取消、停止与回到空闲 | 实机取消 + HTTP 200 + `recording→cancelling→cancelled` | ✅ 实机 |
+| 取消后迟到结果不重新播放/触发动作 | 代次隔离 + `result_stale_discarded` | ✅ 自动测试 |
+| 新任务不被旧任务结果覆盖 | generation 隔离 + 跨任务计时清除测试 | ✅ 自动测试 |
+| 连续两次查询 / 慢响应 | `Week06SlowAndLateResultAcceptanceTest` | ✅ 自动测试 |
+| 测量输入结束→首次反馈、输入结束→完成 | 课程三项计时 + `task.timing` + 14 项计时验收 | ✅ 自动测试 |
+| 澄清 / 重新输入 | `/api/voice/clarify` + 状态机 | ✅ 自动测试 |
+| 真实语音输入 + ASR 内容 | 用户当前不方便语音输入 | ⏳ 待验收 |
+| ASR 文本 → 任务 JSON（NL→JSON） | `service/nl_to_task.py` 缺失 | ⛔ 未实现，完整任务链路 BLOCKED |
+| TTS 停止播报 | 项目无 TTS | ⛔ 不适用 |
+
+### D. 结论
+
+- 本周「取消 / 澄清 / 迟到结果隔离 / 计时指标 / 仪表盘状态显示」均有代码、自动测试或实机证据。
+- **完整语音任务链路（真实 ASR 文本 → NL→JSON → 任务管道）仍未端到端验收**，阻塞点为 `service/nl_to_task.py` 缺失（见上一节 2026-10-16 诊断）。
+- 本轮未修改生产代码、未重新烧录/复位设备、未触发真实采集或要求用户说话。
