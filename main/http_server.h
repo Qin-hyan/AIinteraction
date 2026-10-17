@@ -35,6 +35,15 @@ typedef enum {
     COLLECT_TIMEOUT,        /**< 采集超时（设备无响应） */
 } collect_status_t;
 
+/** @brief 摄像头图像采集任务四态（与 collect_status_t 解耦） */
+typedef enum {
+    CAPTURE_TASK_IDLE = 0,     /**< 无图像采集任务 */
+    CAPTURE_TASK_CAPTURING,    /**< 采集中 */
+    CAPTURE_TASK_OK,           /**< 采集成功，画面可用 */
+    CAPTURE_TASK_UNUSABLE,     /**< 采集成功，画面不可用 */
+    CAPTURE_TASK_FAILED,       /**< 采集失败 */
+} capture_task_status_t;
+
 /* ================================================================
  * Week 2: 任务参数与证据字段
  * ================================================================ */
@@ -159,6 +168,9 @@ typedef struct {
     /* Week 7: 最近一次抓拍（含失败路径）的画面可用性状态 */
     image_status_t    last_cap_status;   /**< 最近一次抓拍状态 */
     bool              last_cap_usable;   /**< 最近一次抓拍是否可用 */
+    /* Week 7: 图像采集任务四态与状态更新时间 */
+    capture_task_status_t cap_task_status;   /**< 当前图像采集任务状态 */
+    int64_t           cap_task_updated_us;   /**< 状态最后更新时间 (µs since boot) */
 } collect_task_t;
 
 /**
@@ -179,6 +191,11 @@ typedef struct {
  * @param[in] ctx 传感器上下文
  * @return ESP_OK 成功
  */
+/**
+ * @brief 返回图像采集任务状态字符串名
+ */
+const char *capture_task_status_name(capture_task_status_t st);
+
 esp_err_t http_server_start(const sensor_ctx_t *ctx);
 
 /**

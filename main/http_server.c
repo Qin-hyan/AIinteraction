@@ -17,6 +17,9 @@ static sensor_ctx_t  s_ctx = {0};
 static const char *collect_status_name(collect_status_t s) {
  switch(s){case COLLECT_IDLE:return "idle";case COLLECT_SUBMITTED:return "submitted";case COLLECT_RECEIVED:return "received";case COLLECT_COMPLETED:return "completed";case COLLECT_FAILED:return "failed";case COLLECT_TIMEOUT:return "timeout";default:return "unknown";}
 }
+const char *capture_task_status_name(capture_task_status_t s) {
+ switch(s){case CAPTURE_TASK_IDLE:return "idle";case CAPTURE_TASK_CAPTURING:return "capturing";case CAPTURE_TASK_OK:return "ok";case CAPTURE_TASK_UNUSABLE:return "unusable";case CAPTURE_TASK_FAILED:return "failed";default:return "unknown";}
+}
 /* ================================================================
  * Week 2: JSON 组装工具（观测 / 请求记录）
  * ================================================================ */
@@ -259,6 +262,13 @@ static const char INDEX_HTML[] =
 ".voice-badge.failed{background:#2d1216;color:#f85149}"
 ".voice-asr{background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:10px 14px;margin-top:10px;min-height:38px;font-size:.85em;color:#c9d1d9;white-space:pre-wrap;word-break:break-all}"
 ".voice-meta{font-size:.72em;color:#8b949e;margin-top:6px}"
+/* === Week 7 图像采集任务四态标签 === */
+".cap-task-status{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:14px;font-size:.82em;font-weight:600;margin-left:10px;white-space:nowrap}"
+".cap-task-status.idle{background:#21262d;color:#8b949e;border:1px solid #30363d}"
+".cap-task-status.capturing{background:#1a2332;color:#a5d6ff;border:1px solid #1f6feb;animation:pulse 1s infinite}"
+".cap-task-status.ok{background:#12261e;color:#7ee787;border:1px solid #238636}"
+".cap-task-status.unusable{background:#2d1c12;color:#d29922;border:1px solid #9e6a03}"
+".cap-task-status.failed{background:#2d1216;color:#f85149;border:1px solid #da3633}"
 "</style><meta http-equiv=\"Cache-Control\" content=\"no-cache,no-store,must-revalidate\"><meta http-equiv=\"Pragma\" content=\"no-cache\"><meta http-equiv=\"Expires\" content=\"0\"></head><body>"
 "<div id=\"toast\" style=\"position:fixed;top:60px;left:50%;transform:translateX(-50%);background:#1a2332;color:#a5d6ff;padding:10px 24px;border-radius:8px;font-size:.88em;z-index:99;opacity:0;transition:opacity .3s;pointer-events:none;border:1px solid #1f6feb\"></div>"
 "<nav class=\"topnav\"><span class=\"brand\">ESP32-S3-EYE · WK2+3 v3</span>"
@@ -327,7 +337,7 @@ static const char INDEX_HTML[] =
 "<tbody id=\"recBody\"><tr><td class=\"mut\" colspan=\"7\">暂无记录：先点一次“采集一次最新数据”。</td></tr></tbody></table></div>"
 "<div class=\"hint\">设备端记录由开发板保存（请求号、设备回执时间、新观测、耗时）；浏览器端记录用于“设备关机/离线”时页面仍能追踪本次尝试。超时记录明确标注“未收到设备结果”，不把旧值标成本次成功。</div>"
 "</div></div>"
-"<div class=\"card\" id=\"camera-console\"><h2>📷 相机远程抓拍控制台<span class=\"panel-badge\" id=\"camBadge\">OV2640</span></h2><div class=\"card-body\">"
+"<div class=\"card\" id=\"camera-console\"><h2>📷 相机远程抓拍控制台<span class=\"panel-badge\" id=\"camBadge\">OV2640</span><span class=\"cap-task-status idle\" id=\"capTaskStatus\">空闲</span></h2><div class=\"card-body\">"
 "<div class=\"infostrip\">"
 "<div class=\"info-item\">目标设备 <b id=\"infoCamDev\">—</b></div>"
 "<div class=\"info-item\">摄像头 <b>OV2640 / SVGA</b></div>"
@@ -336,6 +346,7 @@ static const char INDEX_HTML[] =
 "<button class=\"act-btn cam\" id=\"btnCamCapture\" onclick=\"doCameraCapture()\" style=\"min-width:200px\">📸 立即发送抓拍指令</button></div>"
 "<div id=\"camStatus\" style=\"margin-top:12px\">"
 "<div class=\"hint ok\">就绪：点击按钮通过现有任务链路下发抓拍指令</div></div>"
+"<div id=\"capUnusableReason\" style=\"display:none;margin-top:10px;padding:10px 14px;background:#2d1c12;border:1px solid #9e6a03;border-radius:8px;color:#d29922;font-size:.85em\"></div>"
 "<div class=\"kv\" style=\"margin-top:8px\"><span>上次请求号</span><span id=\"lastCapReq\">—</span></div>"
 "<div class=\"kv\"><span>抓拍计数</span><span id=\"camCapCount\">0</span></div>"
 "</div></div>"
@@ -537,38 +548,51 @@ static const char INDEX_HTML[] =
 "function tick(){"
 "if(!snapshotKept&&!pendingTask){refreshStored();}else{updateAge();}}"
 "/* ==== Camera Capture JS ==== */"
+"function updateCapTaskStatus(st,reason){"
+"var el=$('capTaskStatus'),reasonEl=$('capUnusableReason');if(!el)return;"
+"var labels={idle:'空闲',capturing:'采集中',ok:'采集成功',unusable:'画面不可用',failed:'采集失败'};"
+"el.textContent=labels[st]||orDash(st);el.className='cap-task-status '+(st||'idle');"
+"if(st==='unusable'&&reason){reasonEl.style.display='';reasonEl.textContent='具体原因：'+reason;}"
+"else if(st==='failed'&&reason){reasonEl.style.display='';reasonEl.textContent='失败：'+reason;reasonEl.style.background='#2d1216';reasonEl.style.borderColor='#da3633';reasonEl.style.color='#f85149';}"
+"else{reasonEl.style.display='none';reasonEl.textContent='';}}"
 "function doCameraCapture(){"
 "var btn=$('btnCamCapture');btn.disabled=true;btn.textContent='⏳ 采集中...';"
+"updateCapTaskStatus('capturing');"
 "$('camStatus').innerHTML='<div class=\"hint\">下发抓拍指令...</div>';"
 "fetch('/api/camera/capture',{method:'POST'}).then(function(r){return r.json();})"
 ".then(function(d){if(!d||!d.request_id)throw new Error('No request_id');"
 "txt('lastCapReq',d.request_id);"
+"updateCapTaskStatus(d.cap_task_status||'capturing');"
 "$('camStatus').innerHTML='<div class=\"hint warn\">请求号: '+d.request_id+' (等待回执)</div>';"
 "pollCamStatus(d.request_id,Date.now());})"
-".catch(function(e){$('camStatus').innerHTML='<div class=\"hint err\">抓拍失败: '+e.message+'</div>';"
+".catch(function(e){updateCapTaskStatus('failed',e.message);"
+"$('camStatus').innerHTML='<div class=\"hint err\">抓拍失败: '+e.message+'</div>';"
 "$('btnCamCapture').disabled=false;$('btnCamCapture').textContent='📸 立即发送抓拍指令';});}"
-"function pollCamStatus(reqId,startTime){var dl=startTime+8000;"
-"function chk(){if(Date.now()>dl){$('camStatus').innerHTML='<div class=\"hint err\">超时：未收到设备抓拍结果</div>';"
+"function pollCamStatus(reqId,startTime){var dl=startTime+8000;var timer=null;"
+"function chk(){if(Date.now()>dl){if(timer)clearTimeout(timer);$('camStatus').innerHTML='<div class=\"hint err\">超时：未收到设备抓拍结果</div>';"
+"updateCapTaskStatus('failed','等待设备结果超时');"
 "$('btnCamCapture').disabled=false;$('btnCamCapture').textContent='📸 立即发送抓拍指令';loadGallery();return;}"
-"fetch('/api/camera/gallery').then(function(r){return r.json();})"
-".then(function(d){var ps=d.photos||[];"
-"for(var i=0;i<ps.length;i++){if(ps[i].request_id===reqId){"
-"$('camStatus').innerHTML='<div class=\"hint ok\">✓ 抓拍完成！'+ps[i].file_name+' ('+ps[i].width+'x'+ps[i].height+', '+(ps[i].size_bytes/1024).toFixed(1)+' KB)</div>';"
+"fetch('/api/camera/status').then(function(r){return r.json();}).then(function(st){"
+"var cst=st.cap_task_status||'idle';updateCapTaskStatus(cst,(cst==='unusable'?st.last_img_status:null));"
+"if(cst==='ok'||cst==='unusable'||cst==='failed'){"
+"var note=(cst==='ok')?'✓ 抓拍完成':(cst==='unusable')?'画面不可用（'+st.last_img_status+'）':'采集失败';"
+"$('camStatus').innerHTML='<div class=\"hint '+(cst==='ok'?'ok':(cst==='unusable'?'warn':'err'))+'\">'+note+'</div>';"
 "$('btnCamCapture').disabled=false;$('btnCamCapture').textContent='📸 立即发送抓拍指令';"
-"txt('camCapCount',d.total);loadGallery();refreshAutoCapStatus();return;}}"
-"setTimeout(chk,500);}).catch(function(){setTimeout(chk,500);});}"
-"setTimeout(chk,300);}"
+"txt('camCapCount',st.total);loadGallery();refreshAutoCapStatus();return;}"
+"timer=setTimeout(chk,500);}).catch(function(){timer=setTimeout(chk,500);});}"
+"timer=setTimeout(chk,300);}"
 "function loadGallery(){"
 "fetch('/api/camera/gallery').then(function(r){return r.json();})"
 ".then(function(d){var g=$('galGrid'),b=$('galBadge');b.textContent=(d.total||0)+' 张';"
 "if(!d.photos||!d.photos.length){g.innerHTML='<div class=\"gal-empty\">暂无照片：先点击抓拍指令拍摄一张。</div>';return;}"
 "var h='';for(var i=0;i<d.photos.length;i++){var p=d.photos[i];"
+"var statusLabel=p.usable?'可用':(p.img_status==='invalid'?'失败':p.img_status);"
 "h+='<div class=\"gal-card\"><img src=\"/api/camera/photo?index='+p.index+'&_t='+Date.now()+'\" alt=\"'+p.file_name+'\" onerror=\"this.hidden=true\">';"
 "h+='<div class=\"gal-meta\"><div class=\"fn\">'+p.file_name+'</div>';"
 "h+='<div class=\"kv\">请求号: '+orDash(p.request_id)+'</div>';"
 "h+='<div class=\"kv\">尺寸: '+p.width+'x'+p.height+' | '+(p.size_bytes/1024).toFixed(1)+' KB</div>';"
 "h+='<div class=\"kv\">时间: '+(p.captured_ms?(p.captured_ms/1000).toFixed(1)+'s':'—')+' | 来源: '+(p.source==='manual'?'手动':(p.source==='auto'?'自动':'—'))+'</div>';"
-"h+='<div class=\"kv\">状态: '+(p.valid?'有效':'—')+'</div></div></div>';}"
+"h+='<div class=\"kv\">状态: '+statusLabel+' | luma='+(p.mean_luma!=null?p.mean_luma.toFixed(1):'—')+' c='+(p.contrast!=null?p.contrast.toFixed(1):'—')+' d='+(p.detail!=null?p.detail.toFixed(1):'—')+'</div></div></div>';}"
 "g.innerHTML=h;}).catch(function(e){$('galGrid').innerHTML='<div class=\"gal-empty\">画廊加载失败</div>';});}"
 "function setAutoCapture(on){fetch('/api/auto_capture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:on})})"
 ".then(function(r){return r.json();}).then(function(d){if(d.result==='ok')refreshAutoCapStatus();})"
@@ -633,7 +657,8 @@ static const char INDEX_HTML[] =
 "voiceBusy=false;voiceCancelBusy=false;});}"
 "function voicePollStart(){if(voicePolling)return;voiceRefresh();voicePolling=setInterval(voiceRefresh,1500);}"
 "function voicePollStop(){if(voicePolling){clearInterval(voicePolling);voicePolling=null;}}"
-"function init(){startAuto();restoreLatest();refreshStored();loadRecords();loadGallery();refreshAutoCapStatus();voicePollStart();ageTimer=setInterval(tick,1000);}"
+"function refreshCapStatus(){fetch('/api/camera/status').then(function(r){return r.json();}).then(function(d){updateCapTaskStatus(d.cap_task_status,(d.cap_task_status==='unusable'?d.last_img_status:null));}).catch(function(){});}"
+"function init(){startAuto();restoreLatest();refreshStored();loadRecords();loadGallery();refreshAutoCapStatus();refreshCapStatus();voicePollStart();ageTimer=setInterval(tick,1000);}"
 "init();</script></body></html>";
 /* ================================================================
  * HTTP Request Handlers
@@ -984,10 +1009,12 @@ static esp_err_t camera_capture_handler(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "request_id", t->request_id);
     cJSON_AddStringToObject(root, "status", collect_status_name(t->status));
+    cJSON_AddStringToObject(root, "cap_task_status", capture_task_status_name(t->cap_task_status));
     cJSON_AddNumberToObject(root, "task_seq", t->task_seq);
     cJSON_AddNumberToObject(root, "timeout_ms", COLLECT_TIMEOUT_MS);
     cJSON_AddStringToObject(root, "message", "相机抓拍指令已下发");
-    ESP_LOGI(TAG, "[DIAG-CAP] <<< EXIT OK: %s", t->request_id);
+    ESP_LOGI(TAG, "[DIAG-CAP] <<< EXIT OK: %s cap_task_status=%s", t->request_id,
+             capture_task_status_name(t->cap_task_status));
     return send_json(req, root);
 }
 
@@ -1024,8 +1051,56 @@ static esp_err_t camera_gallery_handler(httpd_req_t *req)
                                (double)(s->captured_us / 1000));
         cJSON_AddBoolToObject(p, "valid", s->valid);
         cJSON_AddBoolToObject(p, "uploaded", s->uploaded);
+        /* Week 7: 暴露画面可用性评估结果 */
+        cJSON_AddStringToObject(p, "img_status", image_quality_status_name(s->img_status));
+        cJSON_AddBoolToObject(p, "usable", s->usable);
+        cJSON_AddNumberToObject(p, "mean_luma", s->mean_luma);
+        cJSON_AddNumberToObject(p, "contrast", s->contrast);
+        cJSON_AddNumberToObject(p, "detail", s->detail);
         cJSON_AddItemToArray(arr, p);
     }
+    return send_json(req, root);
+}
+
+/* ================================================================
+ * Week 7: GET /api/camera/status —— 当前图像采集任务四态
+ * ================================================================ */
+static esp_err_t camera_status_handler(httpd_req_t *req)
+{
+    if (!s_ctx.task) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No task");
+        return ESP_FAIL;
+    }
+    collect_task_t *t = s_ctx.task;
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "cap_task_status", capture_task_status_name(t->cap_task_status));
+    cJSON_AddStringToObject(root, "last_request_id",
+        t->last_cap_request_id[0] ? t->last_cap_request_id : "");
+    cJSON_AddNumberToObject(root, "updated_ms",
+        t->cap_task_updated_us ? (double)(t->cap_task_updated_us / 1000) : 0);
+    cJSON_AddStringToObject(root, "last_img_status",
+        image_quality_status_name(t->last_cap_status));
+    cJSON_AddBoolToObject(root, "usable", t->last_cap_usable);
+    /* 找到最近一次有效抓拍的槽位，取质量分数 */
+    capture_slot_t *latest = NULL;
+    for (int k = 0; k < CAPTURE_SLOTS_MAX; k++) {
+        int idx = (t->cap_head - 1 - k + CAPTURE_SLOTS_MAX * 2) % CAPTURE_SLOTS_MAX;
+        if (t->cap_slots[idx].valid && t->cap_slots[idx].jpeg_buf) {
+            latest = &t->cap_slots[idx];
+            break;
+        }
+    }
+    if (latest) {
+        cJSON_AddNumberToObject(root, "mean_luma", latest->mean_luma);
+        cJSON_AddNumberToObject(root, "contrast", latest->contrast);
+        cJSON_AddNumberToObject(root, "detail", latest->detail);
+    } else {
+        cJSON_AddNumberToObject(root, "mean_luma", 0);
+        cJSON_AddNumberToObject(root, "contrast", 0);
+        cJSON_AddNumberToObject(root, "detail", 0);
+    }
+    cJSON_AddNumberToObject(root, "slots", CAPTURE_SLOTS_MAX);
+    cJSON_AddNumberToObject(root, "total", t->cap_count);
     return send_json(req, root);
 }
 
@@ -1259,6 +1334,10 @@ static const httpd_uri_t uri_cam_gallery = {
     .uri = "/api/camera/gallery", .method = HTTP_GET,
     .handler = camera_gallery_handler, .user_ctx = NULL,
 };
+static const httpd_uri_t uri_cam_status = {   /* Week 7: 采集任务四态 */
+    .uri = "/api/camera/status", .method = HTTP_GET,
+    .handler = camera_status_handler, .user_ctx = NULL,
+};
 static const httpd_uri_t uri_cam_photo = {
     .uri = "/api/camera/photo", .method = HTTP_GET,
     .handler = camera_photo_handler, .user_ctx = NULL,
@@ -1315,6 +1394,7 @@ esp_err_t http_server_start(const sensor_ctx_t *ctx)
     httpd_register_uri_handler(s_server, &uri_auto);
     httpd_register_uri_handler(s_server, &uri_cam_capture);
     httpd_register_uri_handler(s_server, &uri_cam_gallery);
+    httpd_register_uri_handler(s_server, &uri_cam_status);
     httpd_register_uri_handler(s_server, &uri_cam_photo);
     httpd_register_uri_handler(s_server, &uri_auto_cap_get);
     httpd_register_uri_handler(s_server, &uri_auto_cap_post);

@@ -259,13 +259,19 @@ static void save_capture_slot(collect_task_t *t, camera_frame_t *f,
     t->last_cap_status  = q.status;
     t->last_cap_usable  = q.usable;
 
+    /* Week 7: 设置图像采集任务四态 */
+    t->cap_task_status = (q.status == IMG_STATUS_OK) ? CAPTURE_TASK_OK
+                                                     : CAPTURE_TASK_UNUSABLE;
+    t->cap_task_updated_us = esp_timer_get_time();
+
     t->cap_head++;
     t->cap_count++;
     ESP_LOGI(TAG, "[DIAG-CAP] save done: #%d file=%s req=%s %dx%d %d bytes "
-             "status=%s usable=%d cap_head=%d cap_count=%d",
+             "img_status=%s usable=%d cap_task_status=%s cap_head=%d cap_count=%d",
              t->cap_count, s->file_name, s->request_id,
              s->width, s->height, (int)s->size_bytes,
              image_quality_status_name(s->img_status), (int)s->usable,
+             capture_task_status_name(t->cap_task_status),
              t->cap_head, t->cap_count);
     ESP_LOGI(TAG, "[DIAG-CAP] quality: mean_luma=%.2f contrast=%.2f detail=%.2f score=%.3f",
              s->mean_luma, s->contrast, s->detail, q.score);
@@ -412,6 +418,8 @@ void app_main(void)
     collect_task.auto_cap.interval_s = 10;
     collect_task.auto_cap.batch_limit = 100;
     collect_task.capture_camera = false;
+    collect_task.cap_task_status = CAPTURE_TASK_IDLE;
+    collect_task.cap_task_updated_us = 0;
 
     ESP_LOGI(TAG, "READY! Open http://%s/ in browser (Week 2: +collect)", wifi_app_get_ip());
 
@@ -495,6 +503,11 @@ void app_main(void)
 
             /* ---- Week 3: Camera capture (if requested) ---- */
             if (collect_task.capture_camera && cam_handle) {
+                collect_task.cap_task_status = CAPTURE_TASK_CAPTURING;
+                collect_task.cap_task_updated_us = esp_timer_get_time();
+                ESP_LOGI(TAG, "[DIAG-CAP] status=%s (capturing) req=%s",
+                         capture_task_status_name(collect_task.cap_task_status),
+                         collect_task.request_id);
                 ESP_LOGI(TAG, "[DIAG-CAM] >>> START capture_camera=true req=%s", collect_task.request_id);
                 /* ---- heap before capture ---- */
                 ESP_LOGI(TAG, "[DIAG-HEAP] before cap: free_8bit=%u free_spiram=%u",
@@ -515,6 +528,11 @@ void app_main(void)
                     ESP_LOGW(TAG, "[DIAG-CAM] camera_app_capture FAILED ret=0x%X for %s", cap_ret, collect_task.request_id);
                     collect_task.last_cap_status = IMG_STATUS_INVALID;
                     collect_task.last_cap_usable = false;
+                    collect_task.cap_task_status = CAPTURE_TASK_FAILED;
+                    collect_task.cap_task_updated_us = esp_timer_get_time();
+                    ESP_LOGW(TAG, "[DIAG-CAP] status=%s (failed) req=%s",
+                             capture_task_status_name(collect_task.cap_task_status),
+                             collect_task.request_id);
                 }
                 ESP_LOGI(TAG, "[DIAG-CAM] clearing capture_camera flag");
                 collect_task.capture_camera = false;
@@ -527,6 +545,11 @@ void app_main(void)
                 ESP_LOGW(TAG, "[DIAG-CAM] SKIP: capture_camera=true but cam_handle=NULL");
                 collect_task.last_cap_status = IMG_STATUS_INVALID;
                 collect_task.last_cap_usable = false;
+                collect_task.cap_task_status = CAPTURE_TASK_FAILED;
+                collect_task.cap_task_updated_us = esp_timer_get_time();
+                ESP_LOGW(TAG, "[DIAG-CAP] status=%s (failed, cam_handle=NULL) req=%s",
+                         capture_task_status_name(collect_task.cap_task_status),
+                         collect_task.request_id);
                 collect_task.capture_camera = false;
             }
             /* 任务完成，复位状态 */
