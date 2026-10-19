@@ -99,6 +99,21 @@ AIinteraction/
 
 ---
 
+## Week 08 W8-1 关键机制（长期事实）
+
+### 结构化视觉结果契约（`service/vision_result.py`）
+
+- 单一入口 `build_vision_result(request_id, raw_output, score_threshold, model_version="iq_v1", created_at=None)`
+- 契约字段：`request_id / label / score / model_version / decision / reject_reason / created_at`；附 `time_quality="pc_utc"`、`score_kind="relative_usability"`、`score_threshold`
+- `decision` 仅 `ok / low_score / unknown`；`ok` 只表示结果可采纳，**不表示画面可用**
+- 拒识原因：`no_result / parse_error / missing_label / unsupported_label / missing_score / invalid_score / image_invalid / score_below_threshold`
+- 标签词汇直接复用 `image_quality.IMAGE_STATUSES`，**不得另造标签**；`label=invalid` 归 `unknown/image_invalid`
+- `score_threshold` **无默认值**，调用方必须显式传入 `(0, 1]`；未校准前不得给出低分门槛
+- `score` 保留原始相对值，**不得称准确率/置信度**
+- `created_at` 为 PC 端 UTC ISO-8601，`time_quality="pc_utc"`（设备时间仍为 D002 相对时间）
+
+---
+
 ## Week 06 关键机制（长期事实）
 
 ### 任务 generation 隔离
@@ -204,5 +219,6 @@ IDLE → SUBMITTED → RECEIVED → COMPLETED / FAILED
 | `feature/week05-voice-interaction` | **已收尾**（作为 Week 06 基线 `f0653f0`）— Week 05 开发分支（基线 `7dd788b`）；功能（PC 音频采集/录音 HTTP 控制服务/本地 Whisper ASR/ESP32 PLAY 语音控制）已实现并经 Step 3I 实机双端闭环验证；2026-10-13 收尾（HEAD `91959fb`） |
 | `feature/week06-voice-task-context` | **当前** Week 06 开发分支（基线 `f0653f0` = Week 05 HEAD）；HEAD `66ecbb6` + 本次文档收尾提交；任务上下文/取消/澄清/迟到结果隔离 + 生产计时 + ESP32 仪表盘取消按钮与任务状态显示；voice server **99/99**、全量 **250 passed + 6 subtests**（2026-10-17）；ESP32↔PC 实机取消复测（generation 5→6，取消→反馈停止 **79 ms**）与 2026-10-14 实机取消联动（7→8）均通过；`origin/main` 已合并 PR #6 至 `28aa45c`，后续 3 个功能提交及本次文档提交尚未合并；中文 ASR 内容验收待补；`service/nl_to_task.py` 缺失，完整语音任务链路未验收 |
 | `feature/week07-vision-capture` | **当前** Week 07 开发分支（基线 `origin/main` `5aebea1`）；PC 端画面可用性基线 + 端侧 `esp_jpeg` 评估 + 四态采集反馈 API/UI；`pytest service/` 260 passed、固件构建成功；**未烧录、未实机验证** |
-| `origin/main` | **`5aebea1`**（Merge PR #7，Week 06 已合并）——2026-10-17 核实，非旧报告的 `6761db6` |
+| `origin/main` | **`333a697`**（Merge PR #8，Week 07 已合并）——2026-10-19 核实 |
+| `feature/week08-vision-feedback` | **当前** Week 08 开发分支（基线 `origin/main` `333a697`）；W8-1 视觉结果契约 + 52 项单元测试（本地，未推送、未合并） |
 | `integration/week06-followup` | ⚠️ **历史遗留冗余分支**（`ea04269`）：`git diff origin/main integration/week06-followup` **为空**，内容已完全包含于 `origin/main`。**不得作为开发基线**；是否删除由用户决定 |

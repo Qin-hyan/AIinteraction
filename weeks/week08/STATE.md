@@ -1,8 +1,8 @@
 # Week 08 State — 把视觉推理结果变成可理解反馈
 
-**分支**: 待创建（`feature/week08-vision-feedback`，待 Week 07 分支审核合并后基于最新 main）
-**日期**: 2026-10-18（官方要求核实日）
-**阶段**: ⏳ **未开始**（Week 07 收尾中）
+**分支**: `feature/week08-vision-feedback`（基线 `origin/main` `333a697`，PR #8 已合并 Week 07）
+**日期**: 2026-10-18（官方要求核实日）；W8-1 实施 2026-10-19
+**阶段**: 🟡 **W8-1 完成（契约 + 单元测试）**；W8-2 等待真实模型资源
 
 ---
 
@@ -51,7 +51,42 @@
 | 输入-结果-反馈三者对应 | ⚠️ 输入(request_id)+结果(img_status)已关联 | 需补**反馈记录**关联 |
 | 正常/低分/错误/未知样例对照 | ⚠️ 已有 too_dark/low_detail 实机样例 | 需系统整理（部分待覃总实机配合） |
 
-## 3. 待办（待 Week 07 收尾后细化）
+## 3. 待办
 
-- [ ] 待 Week 07 分支合并后创建本周分支
-- [ ] 细化原子任务拆分
+- [x] 待 Week 07 分支合并后创建本周分支（`origin/main` `333a697`）
+- [x] W8-1 结构化视觉结果契约与拒识语义
+- [ ] W8-2 接入真实模型推理（等待模型资源，见第 4 节）
+- [ ] W8-3 低分/未知反馈、重新采集与人工纠正闭环
+
+---
+
+## 4. W8-1 结构化视觉结果契约与拒识语义（2026-10-19 完成）
+
+**目标**：把「标签 + 分数」变成可追踪、可审计的结构化结果，明确 `ok / low_score / unknown` 三态与拒识原因。
+
+**实现**：
+- `service/vision_result.py`：`build_vision_result(request_id, raw_output, score_threshold, model_version="iq_v1", created_at=None)`
+  - 契约字段：`request_id / label / score / model_version / decision / reject_reason / created_at`
+  - 附带解释性元数据：`time_quality="pc_utc"`、`score_kind="relative_usability"`、`score_threshold`
+  - `decision`：`ok`（结构合法、标签受支持、分数达门槛；**不表示画面可用**）/ `low_score` / `unknown`
+  - 拒识原因：`no_result`、`parse_error`、`missing_label`、`unsupported_label`、`missing_score`、`invalid_score`、`image_invalid`、`score_below_threshold`
+  - `label` 词汇表复用 `image_quality.IMAGE_STATUSES`（新增具名常量），**未新造标签**
+  - **阈值不内置**：`score_threshold` 无默认值，调用方必须显式提供且位于 `(0, 1]`；W8-1 未校准，不编造阈值
+  - `score` 为原始 0~1 相对可用性，合法时原值保留；**不得称准确率/置信度**
+  - 模型侧异常（`None`/坏 JSON/缺字段/非法分数/未知标签/无效图像）→ `unknown` + 原因，不抛异常
+  - 调用方错误（`request_id`、阈值、`model_version`）→ `ValueError`，不伪装成模型结果
+  - 时间：`created_at` 为 PC 端 UTC ISO-8601（毫秒 + `Z`），不与设备相对时间混用（D002）
+- `service/test_vision_result.py`：**52 项**测试（含参数化用例）
+
+**验证证据**：
+- 命令：`python -m pytest service/test_vision_result.py service/test_image_quality.py -q`
+- 结果：**62 passed in 0.44s**（新增 52 + `image_quality` 回归 10）；日志 `.workbuddy/logs/w8-1-tests.log`（本地忽略，未提交）
+- 验证层级：**单元测试**；未编译/未烧录/未接入真实模型
+
+**范围外（未做，不做宣称）**：真实模型推理、模型适配器、HTTP API、持久化、反馈文案/界面、人工纠正、重采闭环。
+
+**W8-2 尚缺资源（阻塞点）**：
+1. 教师基线/学生候选模型的**真实推理入口与接口约定**（当前仅有 Week 07 规则型 `image_quality`，不是训练模型）
+2. **真实失败样本/验证样本**及标签、分数语义说明（课程要求「模型课提供真实失败样本与分数语义」）
+3. 校准后的**低分阈值**（W8-1 刻意不设默认值；无校准时不得擅自给出 `low_score` 门槛）
+4. 模型**版本号**正式命名（当前 `iq_v1` 仅标识 Week 07 规则算法）

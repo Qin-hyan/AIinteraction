@@ -68,6 +68,19 @@ CONTRAST_LOW = 8.0
 DETAIL_LOW = 8.0
 """相邻像素梯度能量均值低于此值视为低细节（疑似失焦、严重模糊）。"""
 
+IMAGE_STATUSES = (
+    "ok",
+    "too_dark",
+    "too_bright",
+    "low_contrast",
+    "low_detail",
+    "invalid",
+)
+"""`assess_image()` 可能返回的全部状态值。
+
+Week 08 的视觉结果契约直接复用该集合作为标签词汇表，避免另造一套标签。
+"""
+
 # ──────────────────────────────────────────────
 # 内部工具函数
 # ──────────────────────────────────────────────
@@ -240,6 +253,7 @@ def assess_image(jpeg_bytes: bytes) -> Dict[str, Any]:
 
 __all__ = [
     "assess_image",
+    "IMAGE_STATUSES",
     "JPEG_MAGIC",
     "MAX_LONG_EDGE",
     "LUMA_DARK",

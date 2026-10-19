@@ -4,9 +4,26 @@
 
 ---
 
-## 当前：Week 07 — 按需获取一张环境图像（实机验收完成；失败态与失败记录待定）
+## 当前：Week 08 W8-1 — 结构化视觉结果契约与拒识语义（代码 + 单元测试完成）
 
-**分支**: `feature/week07-vision-capture`（基线 `origin/main` `5aebea1`）
+**分支**: `feature/week08-vision-feedback`（基线 `origin/main` `333a697`，PR #8 已合并 Week 07）
+**阶段**: 🟡 **W8-1 完成**（契约 + 52 项单元测试；含 `image_quality` 回归共 **62 passed**）；⏳ W8-2 真实模型接入待资源
+**详见**: `weeks/week08/STATE.md` 第 4 节 / `TEST_LOG.md`「L」/ `DECISIONS.md` D011
+
+**W8-1 已完成（有证据）**:
+- `service/vision_result.py::build_vision_result()`：`request_id / label / score / model_version / decision / reject_reason / created_at` 契约；`decision ∈ {ok, low_score, unknown}`
+- 拒识语义：`no_result / parse_error / missing_label / unsupported_label / missing_score / invalid_score / image_invalid / score_below_threshold`
+- 标签词汇复用 `image_quality.IMAGE_STATUSES`；低分阈值必须由调用方显式提供（未校准，不设默认）
+- `score` 为相对可用性原值，`score_kind=relative_usability`；不得称准确率
+- 测试：`python -m pytest service/test_vision_result.py service/test_image_quality.py -q` → **62 passed**（2026-10-19）
+
+**W8-2 尚缺资源**: 真实模型推理入口与接口约定、真实失败/验证样本与标签语义、校准后的低分阈值、正式模型版本号
+
+---
+
+## Week 07 — 按需获取一张环境图像（实机验收完成；失败态与失败记录待定；已合并 main）
+
+**分支**: `feature/week07-vision-capture`（基线 `origin/main` `5aebea1`；已由 PR #8 合并至 `origin/main` `333a697`）
 **阶段**: 🟢 **代码 + 构建 + 真实硬件验收完成**；⏳ 真实取帧失败 `failed` 未构造、无独立持久化失败记录
 **详见**: `weeks/week07/STATE.md` / `TEST_LOG.md`「J」
 

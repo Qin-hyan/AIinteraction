@@ -144,3 +144,16 @@
   3. 触发条件与停止条件写入 README「Week 07」。
 - **未满足/边界**：真实取帧失败未构造（无故障注入手段），**失败样例待补验**；失败历史不持久化（原文未要求）。
 - **证据**：README「Week 07」；TEST_LOG J/K；`weeks/week07/STATE.md` 第 7/8 节。
+
+## D011 — Week 08 W8-1 视觉结果契约：标签复用、阈值显式传入 ——【已确认】
+
+- **日期**: 2026-10-19
+- **决定**:
+  1. `label` 词汇表直接复用 `service/image_quality.py` 的 `IMAGE_STATUSES`（`ok/too_dark/too_bright/low_contrast/low_detail/invalid`），新增具名常量避免两处漂移；**不另造场景标签**。
+  2. `score_threshold` 在 `build_vision_result()` 中**无默认值**，必须由调用方显式提供且位于 `(0, 1]`；W8-1 未做校准，**不编造阈值**。
+  3. `decision` 仅 `ok / low_score / unknown`；`decision=ok` 只表示结果可采纳，**不表示画面可用**，画面语义由 `label` 表达；`label=invalid` 归入 `unknown/image_invalid`，不得当作低分。
+  4. `score` 保留原始 0~1 相对值，字段 `score_kind=relative_usability`；不得称准确率/置信度。
+  5. `created_at` 为 PC 端 UTC ISO-8601，`time_quality=pc_utc`，不与设备相对时间混用（D002）。
+- **原因**: 课程要求讲解预测标签、分数、拒识与模型版本；未经校准的分数不得表述为正确率。复用既有词表与阈值显式化可避免伪造校准结论。
+- **影响**: W8-2 模型适配器必须提供真实模型版本、阈值配置与样本；未提供时无法产生 `low_score` 判定。
+- **证据**: `service/vision_result.py`、`service/test_vision_result.py`；TEST_LOG 2026-10-19 L 节。

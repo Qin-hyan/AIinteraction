@@ -1193,3 +1193,30 @@ idf.py build
 
 **代码变更**：无。**结论**：现有实现符合原文最小要求；失败样例属证据缺口，进入 PR 审查时须如实标注。
 
+---
+
+## 2026-10-19 L. Week 08 W8-1 结构化视觉结果契约与拒识语义
+
+**分支**: `feature/week08-vision-feedback`（基线 `origin/main` `333a697`，含 PR #8 / Week 07）
+**验证层级**: 单元测试（第 2 级）；**未编译、未烧录、未接入真实模型**，不得据此声称模型推理已验证。
+
+| 输入 | 预期 | 实际 | 结论 |
+|---|---|---|---|
+| `{"label":"ok","score":0.87}`，阈值 0.5 | `decision=ok`，`reject_reason=null`，score 原值 | 同上 | ✅ PASS |
+| `{"label":"ok","score":0.2}`，阈值 0.5 | `decision=low_score` / `score_below_threshold` | 同上 | ✅ PASS |
+| `{"label":"ok","score":0.5}`，阈值 0.5 | 达到门槛 → `ok`（闭区间） | 同上 | ✅ PASS |
+| `None` | `unknown` / `no_result`，label 与 score 为 null | 同上 | ✅ PASS |
+| 坏 JSON / 非 UTF-8 / JSON 数组 / 数字 / list | `unknown` / `parse_error` | 同上 | ✅ PASS |
+| 缺 label / 缺 score / 非字符串 label | `missing_label` / `missing_score` / `unsupported_label` | 同上 | ✅ PASS |
+| `{"label":"cat","score":0.99}` | `unknown` / `unsupported_label`，保留原始 label 与 score | 同上 | ✅ PASS |
+| `{"label":"invalid","score":0.0}` | `unknown` / `image_invalid`（不得降级为 `low_score`） | 同上 | ✅ PASS |
+| score = 1.5 / -0.1 / "0.9" / true / null / NaN / Inf | `unknown` / `invalid_score`，score=null | 同上 | ✅ PASS |
+| request_id 空/None、阈值 0/1.5/True/缺省、model_version 空 | 调用方错误 → `ValueError` / `TypeError` | 同上 | ✅ PASS |
+| 注入 UTC 时间 | `created_at` = ISO-8601 毫秒 + `Z`，`time_quality=pc_utc` | 同上 | ✅ PASS |
+| 全部结果 JSON 序列化（`allow_nan=False`） | 可序列化，不漏 NaN | 同上 | ✅ PASS |
+
+**命令**: `python -m pytest service/test_vision_result.py service/test_image_quality.py -q`
+**结果**: **62 passed in 0.44s**（`test_vision_result.py` 52 + `test_image_quality.py` 10）
+**证据位置**: `.workbuddy/logs/w8-1-tests.log`（本地忽略，未提交）
+**未覆盖**: 真实模型推理、阈值校准、持久化/API/界面（均不在 W8-1 范围）。`score` 为相对可用性，**不得解释为准确率**。
+
