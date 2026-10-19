@@ -1131,3 +1131,37 @@ idf.py build
 | 清除图像与同时读取照片的并发边界 | ⚠️ 未测试（沿用现有无锁槽位访问模式） |
 
 **验证层级**：本次仅达到「固件构建」层，未实机验证，不得视为课程当堂验证通过。
+
+---
+
+## 2026-10-19 J. Week 07 真实硬件验收（保留 / 清除 / 自动抓拍 / 画面状态）
+
+**设备**: ESP32-S3-EYE（COM10，USB VID:PID `303A:1001`，烧录前重新核验）
+**固件**: `build/week02-sensor-collect.bin`（2026-10-19 13:16:41，1,118,400 字节）；esptool 写入后 **Hash of data verified**；运行后 `/api/camera/retention` 返回 200（旧固件无此端点）→ 确认为当前构建
+**方法**: 烧录后经 HTTP API 直连设备逐项核对；设备地址仅本机内部使用，未写入本记录
+
+### J.1 验收结果
+
+| 验收项 | 实测证据 | 结论 |
+|---|---|---|
+| 最少保留 | 4 次按需采集 `req-76430-0002`…`req-86711-0005`：`retained` 依次 1→2→3→3；`retention` = limit 3 / retained 3 / total 5 / evicted 2；`photo` index 0/1/2 = 200，index 3 = **404** | ✅ PASS |
+| 显式清空 | `POST /api/camera/clear` = cleared 3 / retained 0 / evicted 5；随后 `photo?index=0` = **404**；gallery `photos=0`，`total=5` 保留累计值 | ✅ PASS |
+| 定时自动抓拍禁用 | `POST /api/auto_capture {"enabled":true}` → **HTTP 400**，响应体 `{"result":"error","error":"course_policy_disabled","message":"课程要求只在请求触发后取图，定时自动抓拍已禁用"}`；`GET /api/auto_capture` 仍 `enabled=false` | ✅ PASS |
+| 正常光照 ok | `req-201358-0006`：cap_task_status=`ok`，img_status=`ok`，luma 117.64 / contrast 62.01 / detail 15.54，captured_ms=201997，JPEG 50195 B | ✅ PASS |
+| 镜头遮挡 | `req-291085-0007`：cap_task_status=`unusable`，img_status=`too_dark`，luma 5.31 / contrast 3.65 / detail 0.81，captured_ms=291857，JPEG 14261 B | ✅ PASS |
+| 当堂验证①：上次成功图像不得被标为本次成功 | 遮挡后 gallery 仍含 `req-201358-0006`，其 `img_status=ok`、`captured_ms=201997` 未变；`GET /api/camera/photo` 返回 200 且字节数 50195 一致；本次结果单独记为 `req-291085-0007 / too_dark` | ✅ PASS |
+| 当堂验证②：采集失败保持明确状态 | `unusable` 已实机验证；真实取帧失败 `failed` 未构造（无故障注入手段） | ⏳ **未验证** |
+
+> 说明：保留测试前存在 1 次准备阶段采集（`req-32180-0001`），故 `total` 从 5 起算、`evicted` 为 2；不改变「上限 3」结论。
+
+### J.2 样例与证据位置
+
+- 正常光照与遮挡 JPEG + 元数据（`request_id`、`captured_ms`、luma/contrast/detail）：保存于本机临时目录，未提交仓库（避免把场景图像与个人环境写入公开仓库）
+- 元数据可直接对照 `TEST_LOG` 上表；删除临时目录不影响本记录
+
+### J.3 未验证与限制（如实标注）
+
+- 真实取帧失败 `failed` 未构造；无故障注入或摄像头断开手段
+- 无独立持久化失败记录：失败/不可用仅存在于 RAM 状态、画廊元数据与串口日志
+- 阈值只经 1 个正常场景 + 1 个遮挡场景验证，**未做多光照分布校准，不得表述为准确率**
+- 采集与照片读取为现有无锁槽位访问模式，未做并发压力测试

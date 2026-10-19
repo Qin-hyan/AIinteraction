@@ -167,6 +167,7 @@ AIinteraction/
 
 - 保留策略：`capture_retention_apply()` 在每次保存后从环形最旧端释放，超出上限的图像不再可读
 - 质量指标存于任务级 `last_cap_*`，清除图像后仍保留最近一次评估结果（不冒充新采集）
+- 2026-10-19 实机确认：limit=3、第 4 张后 index=3 → 404；clear 后 photo → 404；启用定时抓拍 → 400 `course_policy_disabled`；正常光照 `ok` / 遮挡 `too_dark`，遮挡不覆盖上一张 ok 记录
 
 ### 采集任务状态机（Week 02）
 ```
