@@ -950,3 +950,246 @@ python -m pytest service/ -q
 - 本周「取消 / 澄清 / 迟到结果隔离 / 计时指标 / 仪表盘状态显示」均有代码、自动测试或实机证据。
 - **完整语音任务链路（真实 ASR 文本 → NL→JSON → 任务管道）仍未端到端验收**，阻塞点为 `service/nl_to_task.py` 缺失（见上一节 2026-10-16 诊断）。
 - 本轮未修改生产代码、未重新烧录/复位设备、未触发真实采集或要求用户说话。
+
+---
+
+## Week 07 — 按需环境图像采集与画面可用性识别 (2026-10-17)
+
+**分支**: `feature/week07-vision-capture` ｜ **基线**: `origin/main` `5aebea1`
+**课程来源**: 课程主页 Week 07「按需获取一张环境图像」（2026-10-17 核实）
+
+### A. 自动化测试结果（实际运行）
+
+命令（Python `D:\Anaconda3\python.exe` 3.11.7，pytest 7.4.4）：
+
+```bash
+python -m pytest service/test_image_quality.py -v
+python -m pytest service/ -q
+```
+
+| 测试范围 | 实际结果 |
+|----------|----------|
+| `service/test_image_quality.py` | ✅ **10 passed** |
+| `service/` 全量 | ✅ **260 passed**（基线 250 + 新增 10，0 失败） |
+
+明细：
+
+```
+service/test_image_quality.py::test_invalid_empty_bytes PASSED
+service/test_image_quality.py::test_invalid_garbage_data PASSED
+service/test_image_quality.py::test_all_black_too_dark PASSED
+service/test_image_quality.py::test_all_white_too_bright PASSED
+service/test_image_quality.py::test_uniform_gray_low_contrast PASSED
+service/test_image_quality.py::test_blurred_checkerboard_low_detail PASSED
+service/test_image_quality.py::test_checkerboard_ok PASSED
+service/test_image_quality.py::test_metrics_fields_complete_for_ok_image PASSED
+service/test_image_quality.py::test_metrics_empty_for_invalid_input PASSED
+service/test_image_quality.py::test_score_within_unit_interval PASSED
+============================= 10 passed in 0.35s ==============================
+```
+
+> 全量 260 passed；`pytest service/ -q` 运行过程中虽有 torch DLL 的
+> access violation 栈打印（进程退出阶段），但 pytest 汇总为 **260 passed，退出码 0**。
+> 已单独确认 `import torch` 在本机崩溃（`OSError WinError 1114`，`c10.dll`），
+> 属**预存环境问题**，与本次改动无关，不影响测试结果判定。
+
+### B. 固件构建结果（实际运行）
+
+```powershell
+. D:\esp\Espressif\frameworks\esp-idf-v5.4.3\export.ps1
+idf.py build
+```
+
+| 项目 | 结果 |
+|------|------|
+| 编译 | ✅ `Project build complete`，**无新增警告** |
+| 产物 | `build/week02-sensor-collect.bin` |
+| 体积 | `0x110950` bytes，app 分区剩余约 65% |
+
+**链接级符号验证**（`xtensa-esp32s3-elf-nm`）：
+
+| 符号 | 地址 | 说明 |
+|------|------|------|
+| `image_quality_assess` | `420131c4` | 端侧画面可用性评估入口 |
+| `esp_jpeg_decode` | `420208ac` | JPEG 解码器已链接 |
+| `capture_task_status_name` | `42011628` | 四态名称函数 |
+| `camera_status_handler` | `4201166c` | `GET /api/camera/status` 处理函数 |
+
+端点注册确认：`main/http_server.c:1397` `httpd_register_uri_handler(s_server, &uri_cam_status)`。
+
+### C. 与课程 Week 07 要求的对应
+
+| 课程要求 | 当前证据 | 状态 |
+|----------|----------|------|
+| 按需图像采集（请求触发） | `POST /api/camera/capture`（复用 Week 02 状态机） | ✅ 代码 |
+| 关联请求、图像记录、采集时间 | gallery 返回 `request_id` + `captured_ms`；`/api/camera/status` 返回 `last_request_id` + `updated_ms` | ✅ 代码 |
+| 只在请求/教学事件触发后取图 | `auto_cap.enabled` 默认 `false`（`main.c:411`） | ✅ 代码 |
+| 四态反馈（采集中/成功/不可用/失败） | `capture_task_status_t` + `main.c:506/263-264/531/548` | ✅ 代码 + 编译 |
+| 画面可用性/遮挡识别（保底任务） | PC 端 `assess_image()` + 端侧 `image_quality_assess()`，阈值两端对齐 | ✅ 单元测试 + 编译 |
+| 上次成功图像不得标为本次采集成功 | 每次采集重新评估新 JPEG，`captured_us` 取本次帧时间；失败不覆盖槽位 | ✅ 代码 |
+| 采集失败保持明确状态 | 两条失败路径固定写 `CAPTURE_TASK_FAILED` | ✅ 代码 |
+| 不推导精确位置/人身风险 | 仅暴露亮度/对比度/细节统计量 | ✅ 代码 |
+| 未经校准分数不写成正确率 | API/UI/文档均无"准确率"字样，`score` 注明仅作相对比较 | ✅ 代码 |
+| **带采集时间的输入样例** | — | ⛔ **需实机产出** |
+| **采集权限与失败记录** | — | ⛔ **需实机产出** |
+| **最少保留策略** | 9 槽位环形覆盖 | ⚠️ 未显式实现 |
+
+### D. 结论
+
+- 本周「按需采集 / 画面可用性识别 / 四态反馈 / 质量指标暴露」均有代码实现，并通过单元测试与固件构建验证。
+- **验证层级止于单元测试与固件构建**；**未烧录、未实机验证、未产出真实输入样例**。
+- 课程要求的两项实机交付物（带采集时间的输入样例、采集权限与失败记录）**待烧录后补验**。
+- 本轮未烧录/复位设备，未要求用户操作硬件。
+
+---
+
+## 2026-10-17 Week 07 实机验证（烧录授权后，操作者：WorkBuddy + 覃总授权）
+
+**设备**: ESP32-S3-EYE @ COM10（USB Serial/JTAG）｜ **固件**: `1abaa3d`+`6d6853a`（feature/week07-vision-capture）｜ **烧录**: `idf.py -p COM10 flash` 成功，Hash verified，耗时 2m34s
+
+### E. 端到端采集验证（真实硬件，真实证据）
+
+| 验证点 | 真实证据 | 结论 |
+|---|---|---|
+| 新固件运行 | `GET /api/camera/status` 返回 Week 07 新端点 JSON（初始 `cap_task_status:idle, total:0, slots:9`） | ✅ |
+| 按需采集受理 | `POST /api/camera/capture` → `{"request_id":"req-178737-0001","task_seq":1}` | ✅ |
+| capturing 中间态 | 串口: `[DIAG-CAP] status=capturing (capturing) req=req-178737-0001` (180316ms) | ✅ |
+| 真实取帧 | 串口: `Capture OK: 15210 bytes, fmt=4(JPEG), 800x600` | ✅ |
+| 端侧 esp_jpeg 评估 | 串口: `IMGQ: assess status=too_dark usable=0 200x150 mean=9.47 contrast=2.85 detail=0.89 score=0.015`（解码缩放至 200x150，评估耗时约 780ms） | ✅ |
+| 四态终态 | status 接口: `cap_task_status:unusable, last_img_status:too_dark`；环境照度低（mean_luma 9.47 < 阈值 25），判定合理 | ✅ |
+| 请求-图像-时间关联 | `last_request_id` 与受理 request_id 一致；`updated_ms` 记录采集时刻；槽位 `cap-00001.jpg 800x600` 带 `req_id` | ✅ |
+| 状态稳定保持 | 串口连接期间 7 次轮询 ×15s（105 秒）状态恒定不变 | ✅ |
+
+### F. 重大发现：设备脱机稳定性缺陷（预存问题，非 Week 07 引入）
+
+**现象**：PC 断开 COM10 串口后约 15-35 秒，设备自动重启（uptime 与 IMU cadence 编号回退，全部 RAM 状态清零）；保持串口连接则 150 秒连续运行无任何异常（299s→448.8s 日志无 panic）。
+
+**复现记录**：3 次断开复现 + 1 次连接反向验证（对照实验）。
+
+**初步定位**：`sdkconfig` 中 `CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y` 使日志同时写 USB 通道；主机断开 COM10 后 USB CDC 缓冲无人消费，写阻塞（IMU 每秒打印）→ 任务挂起 → `CONFIG_ESP_TASK_WDT_TIMEOUT_S=5` 超时复位。**待进一步实验确认**（需在断开状态下用 UART0 主通道或崩溃后立即重连抓 panic）。
+
+**影响**：所有无人值守场景设备周期性重启；此前各周未暴露因实机验证时 `idf.py monitor` 始终连接。对 Week 07 课堂演示构成风险（演示时不会连串口）。
+
+**处置建议**：作为独立原子任务修复（候选方案：禁用 USB 辅助控制台或配置 USB Serial/JTAG 非阻塞模式）。**待覃总决策是否纳入本周范围**。
+
+### G. 待覃总配合的实机验证项
+
+- 当前环境照度不足（mean_luma≈10），只能验证 `too_dark/unusable`；**正常光照采集（ok 态）、遮挡镜头（low_contrast 态）需覃总物理操作设备**。
+- 「上次成功图像不得被标为本次采集成功」需先有一次 ok 采集后再验证。
+
+---
+
+## 2026-10-18 H. 脱机重启根因更正实验（推翻 10-17 F 节推测）
+
+> ⚠️ **更正声明**: 10-17 F 节「USB 辅助控制台写阻塞触发 TWDT」的推测**已被实验证明错误**。真实根因为主机打开 COM 端口时的 DTR/RTS 复位（详见 DECISIONS.md D009）。F 节的现象记录（复现次数、状态清零）本身属实，仅归因错误。
+
+| 实验 | 方法 | 结果 |
+|---|---|---|
+| H1 无串口长跑 | 断串口后 HTTP 轮询 55 次×3s+采集 | uptime 2290s→2581s 单调增长，无重启 |
+| H2 复位时机定位 | 基线 uptime 574087ms → pyserial 默认打开 COM10 3s 关闭 → 立即测 | uptime=7640ms，**打开瞬间即复位** |
+| H3 安全打开对照 | uptime 80423ms → `dtr=False,rts=False` 预置后打开 5s 关闭 | uptime=90776ms，**连续无复位** |
+| H4 固件侧禁用 USB 控制台试修 | `CONFIG_ESP_CONSOLE_SECONDARY_NONE` 编译烧录后重复 H2 | 默认打开仍复位（uptime 78998→16971），证实复位与固件日志通道无关，方案回退 |
+
+**结论**: 设备无人值守运行稳定；复位仅由主机默认方式打开 COM 口触发。监视须用 `tools/serial_monitor_safe.py` 或 `idf.py monitor`；课堂演示期间不开串口。
+
+---
+
+## 2026-10-19 I. Week 07 最少保留策略与自动抓拍禁用（构建验证）
+
+**分支**: `feature/week07-vision-capture`（基线 `origin/main` `5aebea1`）
+**课程依据**: Week 07 后 2 学时「只在请求或教学事件触发后取图，设置最少保留」
+
+### I.1 实现内容
+
+| 项 | 实现 |
+|---|---|
+| 保留上限 | `cap_retain_limit`，默认 3，有效范围 1–9 |
+| 超限覆盖 | `capture_retention_apply()` 从环形最旧端释放 JPEG 缓冲，累计 `cap_evicted_count` |
+| 显式清除 | `POST /api/camera/clear` |
+| 配置接口 | `GET/POST /api/camera/retention`（越界 400） |
+| 自动抓拍 | `POST /api/auto_capture` 启用请求 → 400 `course_policy_disabled`；主循环守卫不执行自动抓拍 |
+| 路由容量 | `httpd max_uri_handlers` 16 → 24 |
+
+### I.2 构建验证（实际执行）
+
+```
+idf.py build
+```
+
+结果：`Project build complete`；日志中 `warning:|error:|FAILED` 无匹配（0 warning / 0 error）。
+
+> 说明：10-18 的 T29 构建日志（`.workbuddy/build_w07_t29.log`）止于 781/1062，**无完成行**，不能作为构建通过证据；本次构建覆盖 T28+T29 全部改动。
+
+### I.3 未验证（如实标注）
+
+| 项 | 状态 |
+|---|---|
+| 连续采集后只保留最近 3 张（第 4 张触发释放） | ⏳ 待烧录查验 |
+| `POST /api/camera/clear` 后 `/api/camera/photo` 返回 404 | ⏳ 待烧录查验 |
+| `POST /api/auto_capture {"enabled":true}` → 400 | ⏳ 待烧录查验 |
+| 正常光照 ok / 遮挡 low_contrast 样例 | ⏳ 待覃总物理操作 |
+| 清除图像与同时读取照片的并发边界 | ⚠️ 未测试（沿用现有无锁槽位访问模式） |
+
+**验证层级**：本次仅达到「固件构建」层，未实机验证，不得视为课程当堂验证通过。
+
+---
+
+## 2026-10-19 J. Week 07 真实硬件验收（保留 / 清除 / 自动抓拍 / 画面状态）
+
+**设备**: ESP32-S3-EYE（COM10，USB VID:PID `303A:1001`，烧录前重新核验）
+**固件**: `build/week02-sensor-collect.bin`（2026-10-19 13:16:41，1,118,400 字节）；esptool 写入后 **Hash of data verified**；运行后 `/api/camera/retention` 返回 200（旧固件无此端点）→ 确认为当前构建
+**方法**: 烧录后经 HTTP API 直连设备逐项核对；设备地址仅本机内部使用，未写入本记录
+
+### J.1 验收结果
+
+| 验收项 | 实测证据 | 结论 |
+|---|---|---|
+| 最少保留 | 4 次按需采集 `req-76430-0002`…`req-86711-0005`：`retained` 依次 1→2→3→3；`retention` = limit 3 / retained 3 / total 5 / evicted 2；`photo` index 0/1/2 = 200，index 3 = **404** | ✅ PASS |
+| 显式清空 | `POST /api/camera/clear` = cleared 3 / retained 0 / evicted 5；随后 `photo?index=0` = **404**；gallery `photos=0`，`total=5` 保留累计值 | ✅ PASS |
+| 定时自动抓拍禁用 | `POST /api/auto_capture {"enabled":true}` → **HTTP 400**，响应体 `{"result":"error","error":"course_policy_disabled","message":"课程要求只在请求触发后取图，定时自动抓拍已禁用"}`；`GET /api/auto_capture` 仍 `enabled=false` | ✅ PASS |
+| 正常光照 ok | `req-201358-0006`：cap_task_status=`ok`，img_status=`ok`，luma 117.64 / contrast 62.01 / detail 15.54，captured_ms=201997，JPEG 50195 B | ✅ PASS |
+| 镜头遮挡 | `req-291085-0007`：cap_task_status=`unusable`，img_status=`too_dark`，luma 5.31 / contrast 3.65 / detail 0.81，captured_ms=291857，JPEG 14261 B | ✅ PASS |
+| 当堂验证①：上次成功图像不得被标为本次成功 | 遮挡后 gallery 仍含 `req-201358-0006`，其 `img_status=ok`、`captured_ms=201997` 未变；`GET /api/camera/photo` 返回 200 且字节数 50195 一致；本次结果单独记为 `req-291085-0007 / too_dark` | ✅ PASS |
+| 当堂验证②：采集失败保持明确状态 | `unusable` 已实机验证；真实取帧失败 `failed` 未构造（无故障注入手段） | ⏳ **未验证** |
+
+> 说明：保留测试前存在 1 次准备阶段采集（`req-32180-0001`），故 `total` 从 5 起算、`evicted` 为 2；不改变「上限 3」结论。
+
+### J.2 样例与证据位置
+
+- 正常光照与遮挡 JPEG + 元数据（`request_id`、`captured_ms`、luma/contrast/detail）：保存于本机临时目录，未提交仓库（避免把场景图像与个人环境写入公开仓库）
+- 元数据可直接对照 `TEST_LOG` 上表；删除临时目录不影响本记录
+
+### J.3 未验证与限制（如实标注）
+
+- 真实取帧失败 `failed` 未构造；无故障注入或摄像头断开手段
+- 无独立持久化失败记录：失败/不可用仅存在于 RAM 状态、画廊元数据与串口日志
+- 阈值只经 1 个正常场景 + 1 个遮挡场景验证，**未做多光照分布校准，不得表述为准确率**
+- 采集与照片读取为现有无锁槽位访问模式，未做并发压力测试
+
+---
+
+## 2026-10-19 K. Week 07「采集权限与失败记录」原文核对与合规判定
+
+**核对来源**：课程官网 Week 07 卡（经官方 Markdown 下载源 `courses-ai-interaction-ux-plan.md` 核对，2026-10-19）
+
+**原文（提交与迁移）**：
+> 按需环境快照功能；带采集时间的输入样例；采集权限与失败记录。 明确个人项目中图像采集的触发条件和停止条件。
+
+**相关原文**：
+- 前 2 学时：「…讲解授权、图像输入与有效性…」
+- 后 2 学时：「…只在请求或教学事件触发后取图，设置最少保留。」
+- 课程标准·单元3 评价证据：「真实图像/模型记录、失败样例、中期原型、首轮完整测试。」
+
+**判定**：原文未规定失败记录的存储格式、独立接口或持久化，也未要求账户级鉴权 → **不新增功能**；补齐触发/停止条件与权限/失败记录说明。
+
+| 要求 | 现有实现/证据 | 结论 |
+|---|---|---|
+| 采集权限（仅授权触发） | 唯一触发入口 `POST /api/camera/capture`；定时抓拍启用返回 400；`source=manual` + `request_id` 关联 | ✅ 符合最小要求 |
+| 图像记录 + 采集时间 | gallery `request_id / captured_ms / img_status / size_bytes`；实机核对 | ✅ |
+| 失败记录 | `cap_task_status=failed`、`last_img_status=invalid`、串口 `[DIAG-CAP] status=failed req=<id>`；与 `unusable` 分离 | ✅ 能力具备 |
+| 真实失败样例 | 无故障注入手段，未构造 | ⏳ **未验证**（不得以 `unusable` 代替） |
+| 触发条件/停止条件 | 写入 README「Week 07」 | ✅ |
+| 持久化失败历史 | 未实现；原文未要求 | 不适用（不新增） |
+
+**代码变更**：无。**结论**：现有实现符合原文最小要求；失败样例属证据缺口，进入 PR 审查时须如实标注。
+

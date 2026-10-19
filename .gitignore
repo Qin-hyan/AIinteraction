@@ -36,6 +36,7 @@ tools/
 .pio-mcp-workspace/
 
 # Agent temporary scripts and debug artifacts
+.workbuddy/
 _*.py
 _*.ps1
 _*.bat

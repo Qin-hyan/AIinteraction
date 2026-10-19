@@ -1,6 +1,11 @@
 # Project Rules — 18-Week Agent Memory (Long-Term)
 
 > 精简规则。每个新 Agent 窗口应首先读取此文件。
+>
+> ⚠️ **2026-10-17 起，统一工作协议迁移至根目录 [`AGENTS.md`](../AGENTS.md)。**
+> 本文件保留硬件事实、环境条目等补充信息；**两者冲突时以 `AGENTS.md` 为准**。
+> 本文件第 3 节「Git 安全规则」中的"禁止 commit/push 除非用户明确授权"已被 `AGENTS.md` 第 4、5 节取代：
+> WorkBuddy 可在完成原子任务闭环与安全门禁后提交并推送**功能分支**，但**绝不合并到 `main`**。
 
 ---
 

@@ -29,6 +29,7 @@
 #include "wifi_app.h"
 #include "http_server.h"
 #include "camera_app.h"
+#include "image_quality.h"
 #include "esp_heap_caps.h"
 #include "help_event.h"
 #include "help_uplink.h"
@@ -199,6 +200,39 @@ static void push_record(collect_task_t *t)
 }
 
 /* ================================================================
+ * Week 7: 最少保留策略——只保留最近 N 张图像
+ * ================================================================ */
+void capture_retention_apply(collect_task_t *t)
+{
+    if (!t) return;
+
+    int limit = t->cap_retain_limit;
+    if (limit < 1) limit = 1;
+    if (limit > CAPTURE_SLOTS_MAX) limit = CAPTURE_SLOTS_MAX;
+
+    int retained = 0;
+    for (int i = 0; i < CAPTURE_SLOTS_MAX; i++) {
+        if (t->cap_slots[i].valid && t->cap_slots[i].jpeg_buf) retained++;
+    }
+
+    /* 从环形缓冲最旧的一端释放，直到只剩 limit 张 */
+    for (int k = CAPTURE_SLOTS_MAX - 1; k >= 0 && retained > limit; k--) {
+        int idx = (t->cap_head - 1 - k + CAPTURE_SLOTS_MAX * 2)
+                  % CAPTURE_SLOTS_MAX;
+        capture_slot_t *s = &t->cap_slots[idx];
+        if (!s->valid || !s->jpeg_buf) continue;
+        ESP_LOGW(TAG, "[DIAG-RETAIN] evict file=%s req=%s limit=%d retained=%d",
+                 s->file_name, s->request_id, limit, retained - 1);
+        heap_caps_free(s->jpeg_buf);
+        s->jpeg_buf = NULL;
+        s->jpeg_len = 0;
+        s->valid = false;
+        t->cap_evicted_count++;
+        retained--;
+    }
+}
+
+/* ================================================================
  * Week 3: 保存摄像头抓拍到照片槽位（环形缓冲）
  * ================================================================ */
 static void save_capture_slot(collect_task_t *t, camera_frame_t *f,
@@ -245,13 +279,41 @@ static void save_capture_slot(collect_task_t *t, camera_frame_t *f,
              t->cap_count + 1);
     snprintf(t->last_cap_request_id, sizeof(t->last_cap_request_id),
              "%s", t->request_id);
+
+    /* Week 7: 对本次 JPEG 做画面可用性评估，结果写入槽位 */
+    image_quality_t q = {0};
+    image_quality_assess(s->jpeg_buf, s->jpeg_len, &q);
+    s->img_status = q.status;
+    s->usable     = q.usable;
+    s->mean_luma  = q.mean_luma;
+    s->contrast   = q.contrast;
+    s->detail     = q.detail;
+
+    t->last_cap_status  = q.status;
+    t->last_cap_usable  = q.usable;
+    t->last_cap_mean_luma = q.mean_luma;
+    t->last_cap_contrast  = q.contrast;
+    t->last_cap_detail    = q.detail;
+
+    /* Week 7: 设置图像采集任务四态 */
+    t->cap_task_status = (q.status == IMG_STATUS_OK) ? CAPTURE_TASK_OK
+                                                     : CAPTURE_TASK_UNUSABLE;
+    t->cap_task_updated_us = esp_timer_get_time();
+
     t->cap_head++;
     t->cap_count++;
     ESP_LOGI(TAG, "[DIAG-CAP] save done: #%d file=%s req=%s %dx%d %d bytes "
-             "cap_head=%d cap_count=%d",
+             "img_status=%s usable=%d cap_task_status=%s cap_head=%d cap_count=%d",
              t->cap_count, s->file_name, s->request_id,
              s->width, s->height, (int)s->size_bytes,
+             image_quality_status_name(s->img_status), (int)s->usable,
+             capture_task_status_name(t->cap_task_status),
              t->cap_head, t->cap_count);
+    ESP_LOGI(TAG, "[DIAG-CAP] quality: mean_luma=%.2f contrast=%.2f detail=%.2f score=%.3f",
+             s->mean_luma, s->contrast, s->detail, q.score);
+
+    /* Week 7: 最少保留——超出上限的旧图像立即释放 */
+    capture_retention_apply(t);
 }
 
 /* ================================================================
@@ -377,6 +439,7 @@ void app_main(void)
     /* HTTP 服务器 — Week 2: 加入采集任务上下文 */
     static collect_task_t collect_task = {0};
     collect_task.auto_refresh = true;              /* 默认开启周期上报 */
+    collect_task.cap_retain_limit = CAPTURE_RETAIN_DEFAULT; /* Week 7: 最少保留默认上限 */
     collect_task.status = COLLECT_IDLE;
     snprintf(collect_task.last.source, sizeof(collect_task.last.source),
              "%s", OBS_SOURCE_NONE);
@@ -395,6 +458,8 @@ void app_main(void)
     collect_task.auto_cap.interval_s = 10;
     collect_task.auto_cap.batch_limit = 100;
     collect_task.capture_camera = false;
+    collect_task.cap_task_status = CAPTURE_TASK_IDLE;
+    collect_task.cap_task_updated_us = 0;
 
     ESP_LOGI(TAG, "READY! Open http://%s/ in browser (Week 2: +collect)", wifi_app_get_ip());
 
@@ -478,6 +543,11 @@ void app_main(void)
 
             /* ---- Week 3: Camera capture (if requested) ---- */
             if (collect_task.capture_camera && cam_handle) {
+                collect_task.cap_task_status = CAPTURE_TASK_CAPTURING;
+                collect_task.cap_task_updated_us = esp_timer_get_time();
+                ESP_LOGI(TAG, "[DIAG-CAP] status=%s (capturing) req=%s",
+                         capture_task_status_name(collect_task.cap_task_status),
+                         collect_task.request_id);
                 ESP_LOGI(TAG, "[DIAG-CAM] >>> START capture_camera=true req=%s", collect_task.request_id);
                 /* ---- heap before capture ---- */
                 ESP_LOGI(TAG, "[DIAG-HEAP] before cap: free_8bit=%u free_spiram=%u",
@@ -496,6 +566,16 @@ void app_main(void)
                     ESP_LOGI(TAG, "[DIAG-CAM] Camera captured OK: %d bytes", (int)frame.len);
                 } else {
                     ESP_LOGW(TAG, "[DIAG-CAM] camera_app_capture FAILED ret=0x%X for %s", cap_ret, collect_task.request_id);
+                    collect_task.last_cap_status = IMG_STATUS_INVALID;
+                    collect_task.last_cap_usable = false;
+                    collect_task.last_cap_mean_luma = 0.0f;
+                    collect_task.last_cap_contrast  = 0.0f;
+                    collect_task.last_cap_detail    = 0.0f;
+                    collect_task.cap_task_status = CAPTURE_TASK_FAILED;
+                    collect_task.cap_task_updated_us = esp_timer_get_time();
+                    ESP_LOGW(TAG, "[DIAG-CAP] status=%s (failed) req=%s",
+                             capture_task_status_name(collect_task.cap_task_status),
+                             collect_task.request_id);
                 }
                 ESP_LOGI(TAG, "[DIAG-CAM] clearing capture_camera flag");
                 collect_task.capture_camera = false;
@@ -506,6 +586,16 @@ void app_main(void)
                          heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
             } else if (collect_task.capture_camera && !cam_handle) {
                 ESP_LOGW(TAG, "[DIAG-CAM] SKIP: capture_camera=true but cam_handle=NULL");
+                collect_task.last_cap_status = IMG_STATUS_INVALID;
+                collect_task.last_cap_usable = false;
+                collect_task.last_cap_mean_luma = 0.0f;
+                collect_task.last_cap_contrast  = 0.0f;
+                collect_task.last_cap_detail    = 0.0f;
+                collect_task.cap_task_status = CAPTURE_TASK_FAILED;
+                collect_task.cap_task_updated_us = esp_timer_get_time();
+                ESP_LOGW(TAG, "[DIAG-CAP] status=%s (failed, cam_handle=NULL) req=%s",
+                         capture_task_status_name(collect_task.cap_task_status),
+                         collect_task.request_id);
                 collect_task.capture_camera = false;
             }
             /* 任务完成，复位状态 */
@@ -536,8 +626,18 @@ void app_main(void)
             }
         }
 
-        /* ---- Week 3: 定时自动抓拍 ---- */
-        if (collect_task.auto_cap.enabled && cam_handle &&
+        /* ---- Week 3: 定时自动抓拍 ----
+         * Week 7: 课程要求只在请求或教学事件触发后取图，定时自动抓拍已禁用。
+         * 保留代码结构，并加运行期守卫：即使 enabled 意外为 true 也不执行抓拍。 */
+        if (collect_task.auto_cap.enabled) {
+            static bool auto_cap_disabled_warned = false;
+            if (!auto_cap_disabled_warned) {
+                ESP_LOGW(TAG, "[DIAG-AUTO-CAP] 课程要求只在请求触发后取图，定时自动抓拍已禁用");
+                auto_cap_disabled_warned = true;
+            }
+        }
+        bool auto_capture_allowed = false; /* Week 7: 运行期守卫，明确禁用 */
+        if (collect_task.auto_cap.enabled && auto_capture_allowed && cam_handle &&
             !collect_task.capture_camera &&
             collect_task.status == COLLECT_IDLE) {
             int64_t now = esp_timer_get_time();

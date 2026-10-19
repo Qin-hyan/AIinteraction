@@ -239,6 +239,32 @@ idf.py -p COM端口 flash monitor
 
 > ⚠️ **Week 06 未验收项（如实记录，不得描述为失败）**：① **中文 ASR 准确率**——用户当前不方便进行语音输入，**尚未完成人工验收**，按「待补验收」记录，不宣称通过；② **完整 ASR→NL→JSON→任务链路**——`service/nl_to_task.py` 缺失，ASR 原始文本无法转为 TaskContract JSON，链路未端到端验收；③ **TTS 停止播报**——**项目无 TTS 实现**，不存在可中断的音频播报，该能力不适用。
 
+#### Week 07 — 按需获取一张环境图像 🟢（代码 + 构建 + 实机验收完成；真实取帧失败样例待补）2026-10-19
+
+| 能力 | 状态 | 验证方式 |
+|------|------|---------|
+| 按需抓拍 `POST /api/camera/capture` | ✅ 受理 → `capturing` → 终态；`request_id` + `captured_ms` 关联 | 实机 |
+| 四态反馈 | ✅ `capturing / ok / unusable / failed` 语义分离 | 实机（ok/unusable）+ 代码路径（failed） |
+| 画面可用性 / 遮挡识别 | ✅ 端侧 esp_jpeg（亮度、对比度、细节）；PC 端同阈值基线 | 实机 + 10 项单元测试 |
+| 只在请求后取图 | ✅ 定时自动抓拍禁用；启用请求返回 400 `course_policy_disabled` | 实机 |
+| 最少保留 | ✅ 默认上限 3（可配 1–9），超限释放最旧；`POST /api/camera/clear` 显式清除 | 实机（第 4 张后 index=3 → 404；清空后 404） |
+| 正常光照 / 遮挡样例 | ✅ `ok`（luma 117.64 / contrast 62.01 / detail 15.54）/ `too_dark`（luma 5.31） | 实机 |
+| 当堂验证：上次成功图像不得被改标 | ✅ 遮挡后原 `ok` 条目 request_id、采集时间、字节数均不变 | 实机 |
+| 采集失败 `failed` | ⏳ 状态与日志路径已实现，真实取帧失败未构造 | 仅代码 / 构建 |
+
+**触发条件（个人项目边界）**
+- 仅由用户显式 `POST /api/camera/capture`（或明确的教学事件）触发；定时/周期抓拍强制禁用，`POST /api/auto_capture {"enabled":true}` 返回 400。
+- 仅使用已授权教学设备与无个人敏感信息的场景；当前实现不把图像发送到外部服务。
+
+**停止条件**
+- 单次采集在 `ok` / `unusable` / `failed` 任一终态即停止，不自动重试。
+- 任务等待超时（5 s）不产生图像，不把旧图标记为本次结果。
+- 仅保留最近 3 张；超限或显式 `POST /api/camera/clear` 立即释放对应 JPEG。
+
+**采集权限与失败记录（按官网原文最小实现）**
+- 权限边界：无自动采集；只有显式请求触发，请求与图像通过 `request_id`、`captured_ms`、`source=manual` 关联；未实现账户级鉴权（官网原文未要求）。
+- 失败记录：`cap_task_status=failed` + `last_img_status=invalid` + 串口 `[DIAG-CAP] status=failed req=<id>`；**不得与 `unusable` 混同**。当前为运行时状态，无独立持久化失败历史（官网原文未要求持久化）。
+
 
 ### 仍待补验
 
@@ -249,6 +275,7 @@ idf.py -p COM端口 flash monitor
 | ⚠️ **Week 06 中文 ASR 准确率内容验收** | 用户当前不方便语音输入，实机中文语音识别质量**未完成验收**（非失败，属待补验收）；TTS 停止播报因项目无 TTS 不适用 |
 | ⚠️ **Week 06 完整 ASR→NL→JSON→任务链路** | `service/nl_to_task.py` 缺失，ASR 原始文本无法转为 TaskContract JSON；取消/澄清/计时链路已验收，但「真实语音 → 任务执行」未端到端验收 |
 | ⚠️ **Week 03 ESP32→VPS HTTP 上行端到端验收** | **软件集成已完成**：help_uplink 异步任务已集成至 `main.c`（初始化调用 `help_uplink_start`，事件状态机调用 `help_uplink_is_configured` / `help_uplink_request_send` / `help_uplink_poll`，见 `29dd72d`）；**仍未完成**真实 VPS URL 配置与 ESP32→VPS 端到端实机验收（HTTP POST 成功/失败路径未验证） |
+| ⚠️ **Week 07 真实取帧失败 `failed` 样例** | 四态中的 `failed` 代码路径与日志已实现，但无故障注入手段，**未构造真实失败**；不得用 `unusable` 代替 `failed`，也不得视为已通过 |
 
 > 所有测试记录详见 [TEST_LOG.md](TEST_LOG.md)（版本、输入、预期、实际、PASS/FAIL、运行位置和证据）。
 
@@ -323,6 +350,7 @@ AIinteraction/
 | [weeks/week04/STATE.md](weeks/week04/STATE.md) | Week 04 详细设计、测试覆盖、验证结果 |
 | [weeks/week05/STATE.md](weeks/week05/STATE.md) | Week 05 详细状态（分支 `feature/week05-voice-interaction`；按键说话链路 PLAY→录音→Whisper ASR→STOP→回 IDLE 已完成实机双端闭环验证；TTS/LLM/全链路未完成） |
 | [weeks/week06/STATE.md](weeks/week06/STATE.md) | Week 06 详细状态（分支 `feature/week06-voice-task-context`：任务上下文/取消/澄清/迟到结果隔离 + 生产计时 + ESP32 仪表盘取消按钮与状态显示；实机取消/反馈停止已复测；ASR 内容验收待补；NL→JSON 缺失） |
+| [weeks/week07/STATE.md](weeks/week07/STATE.md) | Week 07 详细状态（分支 `feature/week07-vision-capture`：按需抓拍、四态反馈、画面可用性/遮挡、最少保留与显式清除；实机验收含 ok/too_dark 与当堂验证①；真实 `failed` 样例待补） |
 | [每周计划/](每周计划/) | 18 周课程计划 HTML |
 
 ### HTTP API 速查
@@ -336,6 +364,13 @@ AIinteraction/
 | `GET /api/collect/status?request_id=xxx` | 查询任务状态 |
 | `GET /api/collect/history` | 设备端最近 6 条记录 |
 | `POST /api/auto_refresh?on=0|1` | 周期上报开关 |
+| `POST /api/camera/capture` | 按需抓拍（唯一图像采集触发入口） |
+| `GET /api/camera/status` | 图像采集四态 + 最近评估指标 + 保留状态 |
+| `GET /api/camera/gallery` | 照片元数据（request_id / captured_ms / img_status / 保留计数） |
+| `GET /api/camera/photo?index=N` | 返回 JPEG（index 0 = 最新；超出保留范围 404） |
+| `GET/POST /api/camera/retention` | 查询/设置保留上限（1–9，默认 3） |
+| `POST /api/camera/clear` | 显式清除全部已存图像 |
+| `GET/POST /api/auto_capture` | 定时抓拍已禁用；启用请求返回 400 `course_policy_disabled` |
 | `POST /api/voice/start` | PC 语音服务：开始录音 |
 | `POST /api/voice/stop` | PC 语音服务：停止录音（返回紧凑回执 ≤120B；自动后台 Whisper ASR） |
 | `GET /api/voice/status` | PC 语音服务：查询录音状态、WAV 元数据、ASR 结果 + `task` 块（request_id/state/generation/result/context/log） |
@@ -356,11 +391,12 @@ IDLE → SUBMITTED(已提交·已受理) → RECEIVED(设备已接收)
 
 | 引用 | 说明 |
 |------|------|
-| `main` | 远端 `origin/main` `6761db6`（PR #6，含 Week 06 至 `28aa45c`）；本地 `main` 仍为 `7dd788b`（未快进） |
+| `main` | `origin/main` `5aebea1`（PR #7，Week 06 已合并）；本地 `main` 非开发基线 |
 | `week02-stable` (tag) | **稳定基线** — 12 项实机验证全 PASS |
 | `feature/week04-natural-language` | 已合并的**历史分支**（PR #4 → `main` `7dd788b`；分支 HEAD `0b4b323` 保留） |
 | `feature/week05-voice-interaction` | **已收尾**（作为 Week 06 基线 `f0653f0`）— Week 05 开发分支（基线 `7dd788b`）；HEAD `91959fb`；含完整功能实现：PC 音频采集/录音 HTTP 控制服务/本地 Whisper ASR 模块 + ESP32 PLAY 按键语音控制 + **ESP32 仪表盘 🎙 语音交互面板**；语音输入链路实机双端闭环验证通过（Step 3I）；真实中文 ASR/简体中文输出待人工验收；TTS/LLM/全链路播报未完成 |
-| `feature/week06-voice-task-context` | **当前** — Week 06 开发分支（基线 `f0653f0` = Week 05 HEAD）；HEAD `66ecbb6` + 本次文档收尾提交（任务上下文/取消/澄清/迟到结果隔离 + 生产计时 + ESP32 仪表盘取消按钮与状态显示）；`test_voice_control_server.py` **99/99**、全量 **250 passed + 6 subtests** PASS；ESP32↔PC 实机取消复测（generation 5→6，取消→反馈停止 79 ms）与 2026-10-14 实机取消联动（7→8）均通过；`origin/main` 已合并 PR #6 至 `28aa45c`，后续 3 个功能提交及本次文档提交尚未合并；中文 ASR 准确率待补人工验收；NL→JSON 缺失，完整任务链路未验收 |
+| `feature/week06-voice-task-context` | Week 06 开发分支（基线 `f0653f0` = Week 05 HEAD）；`test_voice_control_server.py` **99/99**、全量 **250 passed + 6 subtests** PASS；ESP32↔PC 实机取消复测与 2026-10-14 实机取消联动均通过；已由 PR #7 合并至 `origin/main` `5aebea1`；中文 ASR 准确率待补人工验收；NL→JSON 缺失，完整任务链路未验收 |
+| `feature/week07-vision-capture` | **当前** — Week 07 开发分支（基线 `5aebea1`）；HEAD `54f0c66`，已推送且与远端一致；按需抓拍/四态反馈/画面可用性/最少保留；实机验收含 ok/too_dark 与当堂验证①；真实 `failed` 样例待补；**尚无 PR，是否创建与合并由用户决定** |
 
 ---
 

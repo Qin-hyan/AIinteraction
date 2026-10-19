@@ -9,6 +9,7 @@ idf_component_register(
         "help_event.c"
         "help_uplink.c"
         "voice_button.c"
+        "image_quality.c"
     INCLUDE_DIRS
         "."
     REQUIRES
@@ -22,4 +23,5 @@ idf_component_register(
         esp_psram
         esp32-camera
         json
+        esp_jpeg
 )
