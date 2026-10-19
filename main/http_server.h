@@ -106,6 +106,9 @@ typedef struct {
 /** @brief 照片槽位最大数量 */
 #define CAPTURE_SLOTS_MAX   9
 
+/** @brief 图像保留上限默认值（Week 7 最少保留：默认只留最近 3 张） */
+#define CAPTURE_RETAIN_DEFAULT  3
+
 /** @brief 照片槽位 */
 typedef struct {
     char     request_id[32];   /**< 关联请求号 */
@@ -162,12 +165,18 @@ typedef struct {
     bool              capture_camera;    /**< 本次任务是否需要摄像头抓拍 */
     capture_slot_t    cap_slots[CAPTURE_SLOTS_MAX]; /**< 照片槽位（环形） */
     int               cap_head;          /**< 照片写指针 */
-    int               cap_count;         /**< 已拍照片总数 */
+    int               cap_count;         /**< 已拍照片总数（累计） */
+    int               cap_retain_limit;  /**< Week 7: 图像保留上限（最少保留） */
+    int               cap_evicted_count; /**< Week 7: 已释放的旧图像张数（累计） */
     auto_capture_cfg_t auto_cap;         /**< 定时自动抓拍配置 */
     char              last_cap_request_id[32]; /**< 最后一次抓拍的请求号 */
     /* Week 7: 最近一次抓拍（含失败路径）的画面可用性状态 */
     image_status_t    last_cap_status;   /**< 最近一次抓拍状态 */
     bool              last_cap_usable;   /**< 最近一次抓拍是否可用 */
+    /* Week 7: 最近一次评估指标（与槽位解耦，清除图像后仍保留结果） */
+    float             last_cap_mean_luma;/**< 最近一次抓拍灰度均值 */
+    float             last_cap_contrast; /**< 最近一次抓拍灰度标准差 */
+    float             last_cap_detail;   /**< 最近一次抓拍梯度能量均值 */
     /* Week 7: 图像采集任务四态与状态更新时间 */
     capture_task_status_t cap_task_status;   /**< 当前图像采集任务状态 */
     int64_t           cap_task_updated_us;   /**< 状态最后更新时间 (µs since boot) */
@@ -195,6 +204,16 @@ typedef struct {
  * @brief 返回图像采集任务状态字符串名
  */
 const char *capture_task_status_name(capture_task_status_t st);
+
+/**
+ * @brief 应用「最少保留」策略：释放超出 cap_retain_limit 的旧图像
+ *
+ * 从环形缓冲最旧的一端开始释放 JPEG 缓冲，只保留最近 limit 张。
+ * 由抓拍保存路径与保留上限配置接口共同调用。
+ *
+ * @param[in,out] t 采集任务上下文（可为 NULL）
+ */
+void capture_retention_apply(collect_task_t *t);
 
 esp_err_t http_server_start(const sensor_ctx_t *ctx);
 

@@ -8,6 +8,7 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "cJSON.h"
 #include <string.h>
 #include <stdio.h>
@@ -356,12 +357,15 @@ static const char INDEX_HTML[] =
 "<div class=\"info-item\">批次上限 <b id=\"autoLimit\">100</b></div>"
 "<div class=\"info-item\">已拍 <b id=\"autoCount\">0</b></div></div>"
 "<div class=\"actions\" style=\"margin-top:14px\">"
-"<button class=\"act-btn cam\" id=\"btnAutoEnable\" onclick=\"setAutoCapture(true)\" style=\"min-width:120px\">▶ 启用定时抓拍</button>"
-"<button class=\"act-btn ghost\" id=\"btnAutoDisable\" onclick=\"setAutoCapture(false)\" style=\"min-width:120px\">⏸ 停用</button></div>"
-"<div id=\"autoCapNote\" class=\"hint\" style=\"margin-top:10px\">定时抓拍未启用。启用后板端将按周期自动调用摄像头拍摄 JPEG。</div>"
+"<button class=\"act-btn cam\" id=\"btnAutoEnable\" onclick=\"setAutoCapture(true)\" disabled style=\"min-width:120px;opacity:.5\">▶ 启用定时抓拍</button>"
+"<button class=\"act-btn ghost\" id=\"btnAutoDisable\" onclick=\"setAutoCapture(false)\" disabled style=\"min-width:120px;opacity:.5\">⏸ 停用</button>"
+"<span style=\"margin-left:10px;color:#8b949e;font-size:.85em\">按课程要求已禁用：只在请求后取图</span></div>"
+"<div id=\"autoCapNote\" class=\"hint\" style=\"margin-top:10px\">定时自动抓拍已按课程要求禁用，仅保留按需抓拍（/api/camera/capture）。</div>"
 "</div></div>"
 "<div class=\"card\" id=\"gallery-panel\"><h2>🖼 照片画廊与完整性检验<span class=\"panel-badge\" id=\"galBadge\">0 张</span></h2><div class=\"card-body\">"
-"<div class=\"actions\"><button class=\"act-btn ghost\" onclick=\"loadGallery()\" style=\"min-width:160px\">🔄 刷新画廊</button></div>"
+"<div class=\"actions\"><button class=\"act-btn ghost\" onclick=\"loadGallery()\" style=\"min-width:160px\">🔄 刷新画廊</button>"
+"<button class=\"act-btn ghost\" onclick=\"clearPhotos()\" style=\"min-width:140px\">🗑 清空图像</button>"
+"<span id=\"retainNote\" style=\"margin-left:10px;color:#8b949e;font-size:.85em\">最少保留：上限 3 张，超限自动覆盖</span></div>"
 "<div class=\"gal-grid\" id=\"galGrid\"><div class=\"gal-empty\">暂无照片：先点击\"📸 立即发送抓拍指令\"拍摄一张。</div></div>"
 "</div></div>"
 "<div class=\"card\" id=\"voice-panel\"><h2>🎙 语音交互<span class=\"panel-badge\" id=\"voiceBadge\">浏览器端</span></h2><div class=\"card-body\">"
@@ -583,7 +587,8 @@ static const char INDEX_HTML[] =
 "timer=setTimeout(chk,300);}"
 "function loadGallery(){"
 "fetch('/api/camera/gallery').then(function(r){return r.json();})"
-".then(function(d){var g=$('galGrid'),b=$('galBadge');b.textContent=(d.total||0)+' 张';"
+".then(function(d){var g=$('galGrid'),b=$('galBadge');b.textContent=(d.retained||0)+' 张';"
+"$('retainNote').textContent='最少保留：上限 '+(d.retain_limit||0)+' 张，当前保留 '+(d.retained||0)+' 张，累计释放 '+(d.evicted||0)+' 张';"
 "if(!d.photos||!d.photos.length){g.innerHTML='<div class=\"gal-empty\">暂无照片：先点击抓拍指令拍摄一张。</div>';return;}"
 "var h='';for(var i=0;i<d.photos.length;i++){var p=d.photos[i];"
 "var statusLabel=p.usable?'可用':(p.img_status==='invalid'?'失败':p.img_status);"
@@ -594,16 +599,14 @@ static const char INDEX_HTML[] =
 "h+='<div class=\"kv\">时间: '+(p.captured_ms?(p.captured_ms/1000).toFixed(1)+'s':'—')+' | 来源: '+(p.source==='manual'?'手动':(p.source==='auto'?'自动':'—'))+'</div>';"
 "h+='<div class=\"kv\">状态: '+statusLabel+' | luma='+(p.mean_luma!=null?p.mean_luma.toFixed(1):'—')+' c='+(p.contrast!=null?p.contrast.toFixed(1):'—')+' d='+(p.detail!=null?p.detail.toFixed(1):'—')+'</div></div></div>';}"
 "g.innerHTML=h;}).catch(function(e){$('galGrid').innerHTML='<div class=\"gal-empty\">画廊加载失败</div>';});}"
-"function setAutoCapture(on){fetch('/api/auto_capture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:on})})"
-".then(function(r){return r.json();}).then(function(d){if(d.result==='ok')refreshAutoCapStatus();})"
-".catch(function(){toast('定时抓拍配置失败');});}"
+"function setAutoCapture(on){return;}"
+"function clearPhotos(){if(!confirm('清空本机已保存的图像？此操作不可恢复。'))return;"
+"fetch('/api/camera/clear',{method:'POST'}).then(function(r){return r.json();})"
+".then(function(d){toast('已清除 '+(d.cleared||0)+' 张图像');loadGallery();})"
+".catch(function(){toast('清除失败');});}"
 "function refreshAutoCapStatus(){fetch('/api/auto_capture').then(function(r){return r.json();}).then(function(d){"
-"var b=$('autoBadge'),e=$('btnAutoEnable'),f=$('btnAutoDisable'),n=$('autoCapNote');"
 "txt('autoInterval',(d.interval_s||10)+' s');txt('autoLimit',d.batch_limit||100);txt('autoCount',d.batch_count||0);"
-"if(d.enabled){b.textContent='运行中';b.style.color='#7ee787';e.style.display='none';f.style.display='';"
-"n.textContent='定时抓拍运行中。板端每 '+d.interval_s+'s 自动调用摄像头拍摄 JPEG。';}"
-"else{b.textContent='已停用';b.style.color='#8b949e';e.style.display='';f.style.display='none';"
-"n.textContent='定时抓拍未启用。启用后板端将按周期自动调用摄像头拍摄 JPEG。';}}).catch(function(){});}"
+"$('autoCapNote').textContent='定时自动抓拍已按课程要求禁用，仅保留按需抓拍（/api/camera/capture）。';}).catch(function(){});}"
 "var VOICE_URL=\"__VOICE_PC_URL__\";var voicePolling=null;var voiceBusy=false;var voiceTaskGen=0;var voiceCancelBusy=false;"
 "function voiceToggle(){"
 "if(voiceBusy||!VOICE_URL||VOICE_URL.indexOf('__')===0)return;"
@@ -1021,6 +1024,18 @@ static esp_err_t camera_capture_handler(httpd_req_t *req)
 /* ================================================================
  * Week 3: GET /api/camera/gallery —— 照片列表（元数据）
  * ================================================================ */
+
+/** @brief 当前实际保留的图像张数 */
+static int capture_retained_count(const collect_task_t *t)
+{
+    if (!t) return 0;
+    int n = 0;
+    for (int i = 0; i < CAPTURE_SLOTS_MAX; i++) {
+        if (t->cap_slots[i].valid && t->cap_slots[i].jpeg_buf) n++;
+    }
+    return n;
+}
+
 static esp_err_t camera_gallery_handler(httpd_req_t *req)
 {
     if (!s_ctx.task) {
@@ -1031,6 +1046,10 @@ static esp_err_t camera_gallery_handler(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "total", t->cap_count);
     cJSON_AddNumberToObject(root, "slots", CAPTURE_SLOTS_MAX);
+    /* Week 7: 最少保留策略状态 */
+    cJSON_AddNumberToObject(root, "retain_limit", t->cap_retain_limit);
+    cJSON_AddNumberToObject(root, "retained", capture_retained_count(t));
+    cJSON_AddNumberToObject(root, "evicted", t->cap_evicted_count);
     cJSON *arr = cJSON_AddArrayToObject(root, "photos");
     /* 从最新到最旧遍历 */
     for (int k = 0; k < CAPTURE_SLOTS_MAX; k++) {
@@ -1081,26 +1100,15 @@ static esp_err_t camera_status_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "last_img_status",
         image_quality_status_name(t->last_cap_status));
     cJSON_AddBoolToObject(root, "usable", t->last_cap_usable);
-    /* 找到最近一次有效抓拍的槽位，取质量分数 */
-    capture_slot_t *latest = NULL;
-    for (int k = 0; k < CAPTURE_SLOTS_MAX; k++) {
-        int idx = (t->cap_head - 1 - k + CAPTURE_SLOTS_MAX * 2) % CAPTURE_SLOTS_MAX;
-        if (t->cap_slots[idx].valid && t->cap_slots[idx].jpeg_buf) {
-            latest = &t->cap_slots[idx];
-            break;
-        }
-    }
-    if (latest) {
-        cJSON_AddNumberToObject(root, "mean_luma", latest->mean_luma);
-        cJSON_AddNumberToObject(root, "contrast", latest->contrast);
-        cJSON_AddNumberToObject(root, "detail", latest->detail);
-    } else {
-        cJSON_AddNumberToObject(root, "mean_luma", 0);
-        cJSON_AddNumberToObject(root, "contrast", 0);
-        cJSON_AddNumberToObject(root, "detail", 0);
-    }
+    /* Week 7: 质量指标与槽位解耦，清除图像后仍保留最近一次评估结果 */
+    cJSON_AddNumberToObject(root, "mean_luma", t->last_cap_mean_luma);
+    cJSON_AddNumberToObject(root, "contrast", t->last_cap_contrast);
+    cJSON_AddNumberToObject(root, "detail", t->last_cap_detail);
     cJSON_AddNumberToObject(root, "slots", CAPTURE_SLOTS_MAX);
     cJSON_AddNumberToObject(root, "total", t->cap_count);
+    cJSON_AddNumberToObject(root, "retain_limit", t->cap_retain_limit);
+    cJSON_AddNumberToObject(root, "retained", capture_retained_count(t));
+    cJSON_AddNumberToObject(root, "evicted", t->cap_evicted_count);
     return send_json(req, root);
 }
 
@@ -1133,6 +1141,97 @@ static esp_err_t camera_photo_handler(httpd_req_t *req)
     httpd_resp_send(req, (const char *)t->cap_slots[slot].jpeg_buf,
                     (int)t->cap_slots[slot].jpeg_len);
     return ESP_OK;
+}
+
+/* ================================================================
+ * Week 7: GET/POST /api/camera/retention —— 最少保留上限
+ * ================================================================ */
+static esp_err_t camera_retention_get_handler(httpd_req_t *req)
+{
+    if (!s_ctx.task) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No task");
+        return ESP_FAIL;
+    }
+    collect_task_t *t = s_ctx.task;
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "policy", "minimal_retention");
+    cJSON_AddNumberToObject(root, "limit", t->cap_retain_limit);
+    cJSON_AddNumberToObject(root, "max_slots", CAPTURE_SLOTS_MAX);
+    cJSON_AddNumberToObject(root, "retained", capture_retained_count(t));
+    cJSON_AddNumberToObject(root, "total", t->cap_count);
+    cJSON_AddNumberToObject(root, "evicted", t->cap_evicted_count);
+    return send_json(req, root);
+}
+
+static esp_err_t camera_retention_post_handler(httpd_req_t *req)
+{
+    if (!s_ctx.task) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No task");
+        return ESP_FAIL;
+    }
+    char body[128] = {0};
+    int recv = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (recv <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
+        return ESP_FAIL;
+    }
+    body[recv] = 0;
+    cJSON *in = cJSON_Parse(body);
+    if (!in) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+    cJSON *jl = cJSON_GetObjectItem(in, "limit");
+    bool has_limit = (jl && cJSON_IsNumber(jl));
+    int limit = has_limit ? jl->valueint : 0;
+    cJSON_Delete(in);
+    if (!has_limit || limit < 1 || limit > CAPTURE_SLOTS_MAX) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "limit must be 1..9");
+        return ESP_FAIL;
+    }
+
+    collect_task_t *t = s_ctx.task;
+    t->cap_retain_limit = limit;
+    capture_retention_apply(t);
+    ESP_LOGI(TAG, "[DIAG-RETAIN] limit set to %d, retained=%d",
+             limit, capture_retained_count(t));
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "result", "ok");
+    cJSON_AddNumberToObject(root, "limit", limit);
+    cJSON_AddNumberToObject(root, "retained", capture_retained_count(t));
+    cJSON_AddNumberToObject(root, "evicted", t->cap_evicted_count);
+    return send_json(req, root);
+}
+
+/* ================================================================
+ * Week 7: POST /api/camera/clear —— 显式清除已保存图像
+ * ================================================================ */
+static esp_err_t camera_clear_handler(httpd_req_t *req)
+{
+    if (!s_ctx.task) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No task");
+        return ESP_FAIL;
+    }
+    collect_task_t *t = s_ctx.task;
+    int cleared = 0;
+    for (int i = 0; i < CAPTURE_SLOTS_MAX; i++) {
+        capture_slot_t *s = &t->cap_slots[i];
+        if (!s->valid && !s->jpeg_buf) continue;
+        if (s->jpeg_buf) heap_caps_free(s->jpeg_buf);
+        memset(s, 0, sizeof(*s));
+        cleared++;
+    }
+    t->cap_evicted_count += cleared;
+    ESP_LOGW(TAG, "[DIAG-RETAIN] explicit clear: cleared=%d retained=%d",
+             cleared, capture_retained_count(t));
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "result", "ok");
+    cJSON_AddNumberToObject(root, "cleared", cleared);
+    cJSON_AddNumberToObject(root, "retained", capture_retained_count(t));
+    cJSON_AddNumberToObject(root, "evicted", t->cap_evicted_count);
+    return send_json(req, root);
 }
 
 /* ================================================================
@@ -1173,14 +1272,24 @@ static esp_err_t auto_capture_post_handler(httpd_req_t *req)
     }
     auto_capture_cfg_t *ac = &s_ctx.task->auto_cap;
     cJSON *je = cJSON_GetObjectItem(in, "enabled");
-    if (je) ac->enabled = cJSON_IsTrue(je);
+
+    /* Week 7: 课程要求只在请求或教学事件触发后取图，明确禁用定时自动抓拍 */
+    if (je && cJSON_IsTrue(je)) {
+        cJSON_Delete(in);
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json; charset=utf-8");
+        const char *err_body = "{\"result\":\"error\",\"error\":\"course_policy_disabled\",\"message\":\"课程要求只在请求触发后取图，定时自动抓拍已禁用\"}";
+        httpd_resp_send(req, err_body, strlen(err_body));
+        return ESP_OK;
+    }
+
+    if (je) ac->enabled = false;
     cJSON *ji = cJSON_GetObjectItem(in, "interval_s");
     if (ji) ac->interval_s = ji->valueint;
     cJSON *jb = cJSON_GetObjectItem(in, "batch_limit");
     if (jb) ac->batch_limit = jb->valueint;
     if (ac->interval_s < 2) ac->interval_s = 2;
     if (ac->batch_limit < 1) ac->batch_limit = 10;
-    if (ac->enabled) { ac->batch_count = 0; ac->last_capture_us = 0; }
     cJSON_Delete(in);
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "result", "ok");
@@ -1342,6 +1451,19 @@ static const httpd_uri_t uri_cam_photo = {
     .uri = "/api/camera/photo", .method = HTTP_GET,
     .handler = camera_photo_handler, .user_ctx = NULL,
 };
+/* Week 7: 最少保留策略与显式清除 */
+static const httpd_uri_t uri_cam_retention_get = {
+    .uri = "/api/camera/retention", .method = HTTP_GET,
+    .handler = camera_retention_get_handler, .user_ctx = NULL,
+};
+static const httpd_uri_t uri_cam_retention_post = {
+    .uri = "/api/camera/retention", .method = HTTP_POST,
+    .handler = camera_retention_post_handler, .user_ctx = NULL,
+};
+static const httpd_uri_t uri_cam_clear = {
+    .uri = "/api/camera/clear", .method = HTTP_POST,
+    .handler = camera_clear_handler, .user_ctx = NULL,
+};
 static const httpd_uri_t uri_auto_cap_get = {
     .uri = "/api/auto_capture", .method = HTTP_GET,
     .handler = auto_capture_get_handler, .user_ctx = NULL,
@@ -1381,7 +1503,8 @@ esp_err_t http_server_start(const sensor_ctx_t *ctx)
     }
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
-    config.max_uri_handlers = 16;
+    /* Week 7: 基础 14 + help 3 + 保留/清除 3，留足余量 */
+    config.max_uri_handlers = 24;
     esp_err_t ret = httpd_start(&s_server, &config);
     if (ret != ESP_OK) { ESP_LOGE(TAG, "HTTP start fail"); return ret; }
     httpd_register_uri_handler(s_server, &uri_root);
@@ -1396,6 +1519,9 @@ esp_err_t http_server_start(const sensor_ctx_t *ctx)
     httpd_register_uri_handler(s_server, &uri_cam_gallery);
     httpd_register_uri_handler(s_server, &uri_cam_status);
     httpd_register_uri_handler(s_server, &uri_cam_photo);
+    httpd_register_uri_handler(s_server, &uri_cam_retention_get);
+    httpd_register_uri_handler(s_server, &uri_cam_retention_post);
+    httpd_register_uri_handler(s_server, &uri_cam_clear);
     httpd_register_uri_handler(s_server, &uri_auto_cap_get);
     httpd_register_uri_handler(s_server, &uri_auto_cap_post);
     if (s_ctx.help) {
