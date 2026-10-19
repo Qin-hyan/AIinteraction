@@ -1076,3 +1076,57 @@ idf.py build
 
 - 当前环境照度不足（mean_luma≈10），只能验证 `too_dark/unusable`；**正常光照采集（ok 态）、遮挡镜头（low_contrast 态）需覃总物理操作设备**。
 - 「上次成功图像不得被标为本次采集成功」需先有一次 ok 采集后再验证。
+
+---
+
+## 2026-10-18 H. 脱机重启根因更正实验（推翻 10-17 F 节推测）
+
+> ⚠️ **更正声明**: 10-17 F 节「USB 辅助控制台写阻塞触发 TWDT」的推测**已被实验证明错误**。真实根因为主机打开 COM 端口时的 DTR/RTS 复位（详见 DECISIONS.md D009）。F 节的现象记录（复现次数、状态清零）本身属实，仅归因错误。
+
+| 实验 | 方法 | 结果 |
+|---|---|---|
+| H1 无串口长跑 | 断串口后 HTTP 轮询 55 次×3s+采集 | uptime 2290s→2581s 单调增长，无重启 |
+| H2 复位时机定位 | 基线 uptime 574087ms → pyserial 默认打开 COM10 3s 关闭 → 立即测 | uptime=7640ms，**打开瞬间即复位** |
+| H3 安全打开对照 | uptime 80423ms → `dtr=False,rts=False` 预置后打开 5s 关闭 | uptime=90776ms，**连续无复位** |
+| H4 固件侧禁用 USB 控制台试修 | `CONFIG_ESP_CONSOLE_SECONDARY_NONE` 编译烧录后重复 H2 | 默认打开仍复位（uptime 78998→16971），证实复位与固件日志通道无关，方案回退 |
+
+**结论**: 设备无人值守运行稳定；复位仅由主机默认方式打开 COM 口触发。监视须用 `tools/serial_monitor_safe.py` 或 `idf.py monitor`；课堂演示期间不开串口。
+
+---
+
+## 2026-10-19 I. Week 07 最少保留策略与自动抓拍禁用（构建验证）
+
+**分支**: `feature/week07-vision-capture`（基线 `origin/main` `5aebea1`）
+**课程依据**: Week 07 后 2 学时「只在请求或教学事件触发后取图，设置最少保留」
+
+### I.1 实现内容
+
+| 项 | 实现 |
+|---|---|
+| 保留上限 | `cap_retain_limit`，默认 3，有效范围 1–9 |
+| 超限覆盖 | `capture_retention_apply()` 从环形最旧端释放 JPEG 缓冲，累计 `cap_evicted_count` |
+| 显式清除 | `POST /api/camera/clear` |
+| 配置接口 | `GET/POST /api/camera/retention`（越界 400） |
+| 自动抓拍 | `POST /api/auto_capture` 启用请求 → 400 `course_policy_disabled`；主循环守卫不执行自动抓拍 |
+| 路由容量 | `httpd max_uri_handlers` 16 → 24 |
+
+### I.2 构建验证（实际执行）
+
+```
+idf.py build
+```
+
+结果：`Project build complete`；日志中 `warning:|error:|FAILED` 无匹配（0 warning / 0 error）。
+
+> 说明：10-18 的 T29 构建日志（`.workbuddy/build_w07_t29.log`）止于 781/1062，**无完成行**，不能作为构建通过证据；本次构建覆盖 T28+T29 全部改动。
+
+### I.3 未验证（如实标注）
+
+| 项 | 状态 |
+|---|---|
+| 连续采集后只保留最近 3 张（第 4 张触发释放） | ⏳ 待烧录查验 |
+| `POST /api/camera/clear` 后 `/api/camera/photo` 返回 404 | ⏳ 待烧录查验 |
+| `POST /api/auto_capture {"enabled":true}` → 400 | ⏳ 待烧录查验 |
+| 正常光照 ok / 遮挡 low_contrast 样例 | ⏳ 待覃总物理操作 |
+
+**验证层级**：本次仅达到「固件构建」层，未实机验证，不得视为课程当堂验证通过。

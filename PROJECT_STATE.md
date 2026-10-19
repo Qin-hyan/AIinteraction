@@ -4,26 +4,28 @@
 
 ---
 
-## 当前：Week 07 — 按需获取一张环境图像（代码与构建完成，实机验证待补）
+## 当前：Week 07 — 按需获取一张环境图像（代码与构建完成；实机首轮已验证，光照/遮挡待补）
 
-**分支**: `feature/week07-vision-capture`（基线 `origin/main` `5aebea1`，4 个原子提交）
-**阶段**: 🟡 **代码实现 + 单元测试 + 固件构建通过**；⛔ **未烧录、未实机验证**
+**分支**: `feature/week07-vision-capture`（基线 `origin/main` `5aebea1`）
+**阶段**: 🟢 **代码 + 单元测试 + 固件构建通过**；✅ **2026-10-17 已烧录并完成首轮实机验证**；⏳ 保留策略实机查验与光照/遮挡样例待补
 **详见**: `weeks/week07/STATE.md`
 
 **已完成（有证据）**:
 - **PC 端画面可用性基线**（`b682cee`）：`service/image_quality.py` `assess_image()`，指标 `mean_luma/contrast/detail`，10 项测试全通过；全量 `pytest service/` **260 passed**（基线 250 + 新增 10）
 - **端侧画面可用性评估**（`1abaa3d`）：`main/image_quality.c/h` 用 `esp_jpeg` 解码（RGB888+1/4 缩放，PSRAM），**阈值与 PC 端逐一对齐**
-- **四态采集反馈**（`6d6853a`）：`capture_task_status_t`（`capturing/ok/unusable/failed`）与图像质量状态（`too_dark/too_bright/low_contrast/low_detail/invalid`）**语义分离**，映射实现于 `main.c:506/263-264/531/548`
-- **API/UI**：新增 `GET /api/camera/status`；gallery 暴露 `img_status/usable/mean_luma/contrast/detail`；Web UI 四态标签 + 画面不可用原因显示
-- **构建证据**：`idf.py build` 成功无新增警告；固件符号 `image_quality_assess@420131c4`、`capture_task_status_name@42011628`、`camera_status_handler@4201166c` 已链接
+- **四态采集反馈**（`6d6853a`）：`capture_task_status_t`（`capturing/ok/unusable/failed`）与图像质量状态（`too_dark/too_bright/low_contrast/low_detail/invalid`）**语义分离**，映射实现于 `main.c`
+- **API/UI**：`GET /api/camera/status`；gallery 暴露 `img_status/usable/mean_luma/contrast/detail`；Web UI 四态标签 + 画面不可用原因显示
+- **最少保留策略**（2026-10-19）：默认上限 3（可配 1–9），超限释放最旧图像，`POST /api/camera/clear` 显式清除；`GET/POST /api/camera/retention`
+- **只在触发后取图**（2026-10-19）：`POST /api/auto_capture` 启用请求返回 400 `course_policy_disabled`，主循环运行期守卫不执行自动抓拍
+- **构建证据**：2026-10-19 `idf.py build` → `Project build complete`，0 warning / 0 error
 
 **未完成（如实标注）**:
-- ⛔ **未烧录、未实机验证**；课程当堂验证项未通过
-- ⛔ **带采集时间的输入样例 / 采集权限与失败记录**：需实机产出
-- ⚠️ **"最少保留"未显式实现**（当前仅 9 槽位环形覆盖）
+- ⏳ **正常光照 ok 态、遮挡镜头 low_contrast 态**：需覃总物理操作设备
+- ⏳ **当堂验证项**：「上次成功图像不得被标为本次采集成功」需先有一次 ok 采集；「采集失败保持明确状态」需构造真实失败场景
+- ⏳ **保留上限 / 显式清除 / 自动抓拍拒绝**：仅构建层验证，待烧录查验
 - ⚠️ 阈值基于合成图像，**真实场景需现场校准**
 
-**待用户决策**: `auto_capture` 是否保留（默认关闭）；"最少保留"含义确认（最小化留存 vs 至少保留 N 张）；烧录授权
+**待用户决策**: 烧录授权（用于查验保留策略与补验光照/遮挡样例）
 
 ---
 

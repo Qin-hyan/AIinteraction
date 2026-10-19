@@ -154,6 +154,20 @@ AIinteraction/
 | `GET /api/collect/history` | 设备端最近 6 条记录 |
 | `POST /api/auto_refresh?on=0\|1` | 周期上报开关 |
 
+### HTTP API（Week 07 图像采集）
+| 端点 | 作用 |
+|------|------|
+| `POST /api/camera/capture` | 按需抓拍（受理即 `capturing`，结果四态） |
+| `GET /api/camera/status` | 四态 + 最近评估指标 + 保留状态 |
+| `GET /api/camera/gallery` | 照片元数据（`img_status/usable/retain_limit/retained/evicted`） |
+| `GET /api/camera/photo?index=N` | 返回 JPEG（index 0=最新） |
+| `GET/POST /api/camera/retention` | 查询/设置保留上限（1–9，默认 3） |
+| `POST /api/camera/clear` | 显式清除全部已存图像 |
+| `GET/POST /api/auto_capture` | 定时抓拍已禁用；启用请求返回 400 `course_policy_disabled` |
+
+- 保留策略：`capture_retention_apply()` 在每次保存后从环形最旧端释放，超出上限的图像不再可读
+- 质量指标存于任务级 `last_cap_*`，清除图像后仍保留最近一次评估结果（不冒充新采集）
+
 ### 采集任务状态机（Week 02）
 ```
 IDLE → SUBMITTED → RECEIVED → COMPLETED / FAILED
