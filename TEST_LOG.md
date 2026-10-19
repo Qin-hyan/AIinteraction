@@ -1128,5 +1128,6 @@ idf.py build
 | `POST /api/camera/clear` 后 `/api/camera/photo` 返回 404 | ⏳ 待烧录查验 |
 | `POST /api/auto_capture {"enabled":true}` → 400 | ⏳ 待烧录查验 |
 | 正常光照 ok / 遮挡 low_contrast 样例 | ⏳ 待覃总物理操作 |
+| 清除图像与同时读取照片的并发边界 | ⚠️ 未测试（沿用现有无锁槽位访问模式） |
 
 **验证层级**：本次仅达到「固件构建」层，未实机验证，不得视为课程当堂验证通过。
