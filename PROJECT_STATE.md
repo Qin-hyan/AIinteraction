@@ -4,20 +4,29 @@
 
 ---
 
-## 当前：Week 08 W8-1 — 结构化视觉结果契约与拒识语义（代码 + 单元测试完成）
+## 当前：Week 08 W8-2 — 本地 DBCNN 真实模型接入完成（阈值/反馈闭环待做）
 
 **分支**: `feature/week08-vision-feedback`（基线 `origin/main` `333a697`，PR #8 已合并 Week 07）
-**阶段**: 🟡 **W8-1 完成**（契约 + 52 项单元测试；含 `image_quality` 回归共 **62 passed**）；⏳ W8-2 真实模型接入待资源
-**详见**: `weeks/week08/STATE.md` 第 4 节 / `TEST_LOG.md`「L」/ `DECISIONS.md` D011
+**阶段**: 🟡 **W8-1 完成**（契约 + 52 项单元测试）；**W8-2 完成本地 DBCNN ONNX 真实推理接入**；⏳ 阈值校准、W8-3 反馈/重采/纠错未完成
+**详见**: `weeks/week08/STATE.md` 第 4/5 节 / `TEST_LOG.md`「L」「M」/ `DECISIONS.md` D011、D012 / `docs/vision-dbcnn.md`
 
 **W8-1 已完成（有证据）**:
-- `service/vision_result.py::build_vision_result()`：`request_id / label / score / model_version / decision / reject_reason / created_at` 契约；`decision ∈ {ok, low_score, unknown}`
-- 拒识语义：`no_result / parse_error / missing_label / unsupported_label / missing_score / invalid_score / image_invalid / score_below_threshold`
+- `service/vision_result.py::build_vision_result()`：`request_id / label / score / model_version / decision / reject_reason / created_at` 契约；`decision ∈ {ok, low_score, needs_review, unknown}`（`needs_review` 仅由仅分数模型在阈值未配置时产生）
+- 拒识语义：`no_result / parse_error / missing_label / unsupported_label / missing_score / invalid_score / image_invalid / score_below_threshold`；W8-2 增加 `threshold_not_configured`
 - 标签词汇复用 `image_quality.IMAGE_STATUSES`；低分阈值必须由调用方显式提供（未校准，不设默认）
 - `score` 为相对可用性原值，`score_kind=relative_usability`；不得称准确率
 - 测试：`python -m pytest service/test_vision_result.py service/test_image_quality.py -q` → **62 passed**（2026-10-19）
 
-**W8-2 尚缺资源**: 真实模型推理入口与接口约定、真实失败/验证样本与标签语义、校准后的低分阈值、正式模型版本号
+**W8-2 已完成（有证据）**:
+- `service/vision_dbcnn.py`：本地 DBCNN ONNX + `.onnx.data`，ONNX Runtime 1.22.1 CPU；预处理复用 RGB/224×224/ImageNet mean/std/NCHW float32；返回原始 0~1 分数、`dbcnn_onnx_v1`、权重 SHA-256、推理耗时
+- 模型路径 `VISION_DBCNN_MODEL_PATH`（缺失/加载失败明确报错，**不退回规则**）；可选 `VISION_DBCNN_MODEL_VERSION`
+- `service/vision_result.py::build_score_vision_result()`：`label=None`、`score_source` 显式；阈值未配置 → `needs_review` / `threshold_not_configured` / `review_required=true`；阈值仍无默认值
+- `service/vision_analysis.py`：组合入口 + CLI（不新开端口）；DBCNN 与 Week 07 `rule_diagnostics` 来源分离；规则依赖缺失标记 `available=false`
+- 真实输出：`ok.jpg` = `0.7561315298080444`，`occluded.jpg` = `0.25810927152633667`；规则诊断分别为 `ok` / `too_dark`；无阈值时均为 `needs_review`
+- 测试：Anaconda 相关单元测试 **124 passed, 1 skipped**；隔离 venv 含真实 ONNX 冒烟 **125 passed**
+- 依赖：`requirements-vision.txt` 增加 `onnxruntime==1.22.1`、`opencv-python-headless==5.0.0.93`；模型/外部权重留在 `.workbuddy/`（不提交）
+
+**W8-2 未完成 / W8-3 待做**: 阈值校准与正式默认值（**不得自造**）、更多带真值的真实样本、模型卡 0–100 与实测 0–1 差异解释、原始权重许可核实、低分/未知反馈、重新采集、人工纠正 UI、HTTP/设备端集成
 
 ---
 

@@ -151,9 +151,24 @@
 - **决定**:
   1. `label` 词汇表直接复用 `service/image_quality.py` 的 `IMAGE_STATUSES`（`ok/too_dark/too_bright/low_contrast/low_detail/invalid`），新增具名常量避免两处漂移；**不另造场景标签**。
   2. `score_threshold` 在 `build_vision_result()` 中**无默认值**，必须由调用方显式提供且位于 `(0, 1]`；W8-1 未做校准，**不编造阈值**。
-  3. `decision` 仅 `ok / low_score / unknown`；`decision=ok` 只表示结果可采纳，**不表示画面可用**，画面语义由 `label` 表达；`label=invalid` 归入 `unknown/image_invalid`，不得当作低分。
+  3. `decision` 仅 `ok / low_score / unknown`（W8-2 由 D012 为仅分数模型扩展 `needs_review`）；`decision=ok` 只表示结果可采纳，**不表示画面可用**，画面语义由 `label` 表达；`label=invalid` 归入 `unknown/image_invalid`，不得当作低分。
   4. `score` 保留原始 0~1 相对值，字段 `score_kind=relative_usability`；不得称准确率/置信度。
   5. `created_at` 为 PC 端 UTC ISO-8601，`time_quality=pc_utc`，不与设备相对时间混用（D002）。
 - **原因**: 课程要求讲解预测标签、分数、拒识与模型版本；未经校准的分数不得表述为正确率。复用既有词表与阈值显式化可避免伪造校准结论。
 - **影响**: W8-2 模型适配器必须提供真实模型版本、阈值配置与样本；未提供时无法产生 `low_score` 判定。
 - **证据**: `service/vision_result.py`、`service/test_vision_result.py`；TEST_LOG 2026-10-19 L 节。
+
+## D012 — Week 08 W8-2 DBCNN 接入：仅分数契约、来源分离、阈值未配置不判定 ——【已确认】
+
+- **日期**: 2026-10-19
+- **决定**:
+  1. DBCNN 只作为「仅分数」模型接入：`build_score_vision_result()` 返回 `label=None` / `label_source=None` / `score_source=dbcnn_onnx`；**不把规则诊断或分数高低伪装成分类标签**。
+  2. `decision` 增加 `needs_review`：分数合法但 `score_threshold` 未配置时使用；`reject_reason=threshold_not_configured`、`threshold_status=not_configured`、`review_required=true`；**不设生产默认阈值**。
+  3. 阈值仍无默认值；显式参数优先于 `VISION_DBCNN_SCORE_THRESHOLD`；非法值抛 `ValueError`，不静默忽略；等于门槛视为达标（闭区间）。
+  4. Week 07 `image_quality` 仅作为 `rule_diagnostics` 附带，`source=week07_image_quality_rules`；其 `label/score` 不是 DBCNN 输出；依赖缺失时 `available=false`，不冒充 `invalid`。
+  5. 模型路径 `VISION_DBCNN_MODEL_PATH` 必需；加载/推理失败抛明确 `DbcnnError`，**不退回规则判断**；固定 `CPUExecutionProvider`，不调用云端推理 API。
+  6. 模型与外部权重留在本地忽略目录 `.workbuddy/`，**不纳入 Git**；DBCNN 输出保留原始 0~1，不乘 100；模型卡 0–100 差异记录为已知元数据不一致。
+  7. 许可：Hugging Face 仓库的 Apache-2.0 标签**不代表原始 DBCNN 权重许可已核实**；不作法律结论。
+- **原因**: 课程要求区分预测标签、分数、拒识和模型版本；未校准的模型分数不得当作准确率，也不得把规则诊断混作模型分类。阈值未校准时最诚实的表达是「需要复核」，而不是自造默认门槛。
+- **影响**: W8-3 的反馈/重采/纠错必须读取 `decision` / `reject_reason` / `review_required`，不得把 `needs_review` 显示为 `ok`；正式阈值需用户提供校准依据后再配置。
+- **证据**: `service/vision_dbcnn.py`、`service/vision_analysis.py`、`service/vision_result.py`、`docs/vision-dbcnn.md`；TEST_LOG 2026-10-19 M 节。

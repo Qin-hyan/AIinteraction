@@ -29,8 +29,12 @@ from .vision_result import (
     DEFAULT_MODEL_VERSION,
     DecisionEnum,
     IMAGE_INVALID_LABEL,
+    RejectReason,
     SCORE_KIND,
+    THRESHOLD_STATUS_CONFIGURED,
+    THRESHOLD_STATUS_NOT_CONFIGURED,
     VISION_LABELS,
+    build_score_vision_result,
     build_vision_result,
 )
 
@@ -79,8 +83,13 @@ def test_contract_contains_required_fields() -> None:
 
 
 def test_decision_enum_has_exactly_required_values() -> None:
-    """decision 只有 ok / low_score / unknown 三种取值。"""
-    assert DecisionEnum.all_values() == ["ok", "low_score", "unknown"]
+    """decision 取值固定；needs_review 表示分数合法但阈值未配置。"""
+    assert DecisionEnum.all_values() == [
+        "ok",
+        "low_score",
+        "needs_review",
+        "unknown",
+    ]
 
 
 def test_model_version_and_threshold_are_recorded() -> None:
@@ -383,3 +392,117 @@ def test_default_created_at_is_recent_utc() -> None:
 
     assert parsed.tzinfo is not None
     assert before <= parsed <= after
+
+
+# ──────────────────────────────────────────────
+# 9. 仅分数模型（DBCNN）：来源分离与阈值未配置
+# ──────────────────────────────────────────────
+
+
+def _build_score(**overrides: Any) -> dict:
+    """构造仅分数结果；默认不配置阈值（W8-2 生产默认状态）。"""
+    params: dict[str, Any] = {
+        "request_id": REQUEST_ID,
+        "score": 0.7561315298080444,
+        "model_version": "dbcnn_onnx_v1",
+        "score_threshold": None,
+        "score_source": "dbcnn_onnx",
+    }
+    params.update(overrides)
+    return build_score_vision_result(**params)
+
+
+def test_score_only_without_threshold_needs_review() -> None:
+    """未配置阈值时不得自造门槛，也不得标记 ok。"""
+    result = _build_score()
+
+    assert result["score"] == 0.7561315298080444
+    assert result["model_version"] == "dbcnn_onnx_v1"
+    assert result["score_source"] == "dbcnn_onnx"
+    assert result["score_kind"] == SCORE_KIND
+    assert result["decision"] == DecisionEnum.NEEDS_REVIEW.value
+    assert result["reject_reason"] == RejectReason.THRESHOLD_NOT_CONFIGURED.value
+    assert result["threshold_status"] == THRESHOLD_STATUS_NOT_CONFIGURED
+    assert result["score_threshold"] is None
+    assert result["review_required"] is True
+
+
+def test_score_only_never_invents_a_label() -> None:
+    """DBCNN 不产生类别标签；规则标签不得写入该字段。"""
+    result = _build_score()
+
+    assert result["label"] is None
+    assert result["label_source"] is None
+
+
+def test_score_only_threshold_configured_is_ok() -> None:
+    """调用方显式提供阈值且分数达标时，才允许 decision=ok。"""
+    result = _build_score(score=0.7561, score_threshold=0.5)
+
+    assert result["decision"] == DecisionEnum.OK.value
+    assert result["reject_reason"] is None
+    assert result["threshold_status"] == THRESHOLD_STATUS_CONFIGURED
+    assert result["score_threshold"] == 0.5
+    assert result["review_required"] is False
+
+
+def test_score_only_below_threshold_is_low_score() -> None:
+    """低于显式阈值时保留原始分数并标记 low_score。"""
+    result = _build_score(score=0.2581, score_threshold=0.5)
+
+    assert result["score"] == 0.2581
+    assert result["decision"] == DecisionEnum.LOW_SCORE.value
+    assert result["reject_reason"] == RejectReason.SCORE_BELOW_THRESHOLD.value
+    assert result["review_required"] is True
+
+
+def test_score_only_equal_to_threshold_is_ok() -> None:
+    result = _build_score(score=0.5, score_threshold=0.5)
+    assert result["decision"] == DecisionEnum.OK.value
+
+
+def test_score_is_not_rescaled_or_rounded() -> None:
+    """保持模型原始 0~1 数值；不乘 100、不四舍五入。"""
+    result = _build_score(score=0.7561315298080444, score_threshold=0.5)
+
+    assert result["score"] == 0.7561315298080444
+    assert result["score"] < 1.0
+
+
+@pytest.mark.parametrize(
+    "score",
+    [float("nan"), float("inf"), -0.1, 1.1, True, "0.5", None],
+    ids=["nan", "inf", "negative", "above-1", "bool", "string", "null"],
+)
+def test_score_only_invalid_score_is_unknown(score: Any) -> None:
+    result = _build_score(score=score)
+
+    assert result["score"] is None
+    assert result["decision"] == DecisionEnum.UNKNOWN.value
+    assert result["reject_reason"] == RejectReason.INVALID_SCORE.value
+    assert result["label"] is None
+
+
+@pytest.mark.parametrize(
+    "threshold",
+    [0, 0.0, 1.5, -0.1, float("nan"), float("inf"), True, "0.5"],
+    ids=["zero-int", "zero-float", "above-1", "negative", "nan", "inf", "bool", "string"],
+)
+def test_score_only_invalid_threshold_raises(threshold: Any) -> None:
+    with pytest.raises(ValueError):
+        _build_score(score_threshold=threshold)
+
+
+@pytest.mark.parametrize("source", ["", "   ", None])
+def test_score_only_invalid_source_raises(source: Any) -> None:
+    with pytest.raises(ValueError):
+        _build_score(score_source=source)
+
+
+def test_score_only_created_at_and_json_serialisable() -> None:
+    moment = datetime(2026, 10, 19, 8, 30, 0, 123000, tzinfo=timezone.utc)
+    result = _build_score(created_at=moment)
+
+    assert result["created_at"] == "2026-10-19T08:30:00.123Z"
+    assert result["time_quality"] == "pc_utc"
+    json.dumps(result, ensure_ascii=False, allow_nan=False)

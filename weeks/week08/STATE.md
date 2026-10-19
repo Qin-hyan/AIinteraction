@@ -2,7 +2,7 @@
 
 **分支**: `feature/week08-vision-feedback`（基线 `origin/main` `333a697`，PR #8 已合并 Week 07）
 **日期**: 2026-10-18（官方要求核实日）；W8-1 实施 2026-10-19
-**阶段**: 🟡 **W8-1 完成（契约 + 单元测试）**；W8-2 等待真实模型资源
+**阶段**: 🟡 **W8-1 完成（契约 + 单元测试）**；**W8-2 完成本地 DBCNN 真实模型接入（阈值校准未完成）**；W8-3 反馈/重采/纠错未开始
 
 ---
 
@@ -55,7 +55,7 @@
 
 - [x] 待 Week 07 分支合并后创建本周分支（`origin/main` `333a697`）
 - [x] W8-1 结构化视觉结果契约与拒识语义
-- [ ] W8-2 接入真实模型推理（等待模型资源，见第 4 节）
+- [x] W8-2 接入真实模型推理（本地 DBCNN ONNX；**阈值校准仍未完成**，见第 5 节）
 - [ ] W8-3 低分/未知反馈、重新采集与人工纠正闭环
 
 ---
@@ -68,7 +68,7 @@
 - `service/vision_result.py`：`build_vision_result(request_id, raw_output, score_threshold, model_version="iq_v1", created_at=None)`
   - 契约字段：`request_id / label / score / model_version / decision / reject_reason / created_at`
   - 附带解释性元数据：`time_quality="pc_utc"`、`score_kind="relative_usability"`、`score_threshold`
-  - `decision`：`ok`（结构合法、标签受支持、分数达门槛；**不表示画面可用**）/ `low_score` / `unknown`
+  - `decision`：`ok`（结构合法、标签受支持、分数达门槛；**不表示画面可用**）/ `low_score` / `unknown`；W8-2 为仅分数模型增加 `needs_review`（阈值未配置，见第 5 节）
   - 拒识原因：`no_result`、`parse_error`、`missing_label`、`unsupported_label`、`missing_score`、`invalid_score`、`image_invalid`、`score_below_threshold`
   - `label` 词汇表复用 `image_quality.IMAGE_STATUSES`（新增具名常量），**未新造标签**
   - **阈值不内置**：`score_threshold` 无默认值，调用方必须显式提供且位于 `(0, 1]`；W8-1 未校准，不编造阈值
@@ -85,8 +85,57 @@
 
 **范围外（未做，不做宣称）**：真实模型推理、模型适配器、HTTP API、持久化、反馈文案/界面、人工纠正、重采闭环。
 
-**W8-2 尚缺资源（阻塞点）**：
-1. 教师基线/学生候选模型的**真实推理入口与接口约定**（当前仅有 Week 07 规则型 `image_quality`，不是训练模型）
-2. **真实失败样本/验证样本**及标签、分数语义说明（课程要求「模型课提供真实失败样本与分数语义」）
-3. 校准后的**低分阈值**（W8-1 刻意不设默认值；无校准时不得擅自给出 `low_score` 门槛）
-4. 模型**版本号**正式命名（当前 `iq_v1` 仅标识 Week 07 规则算法）
+**W8-2 原阻塞点（2026-10-19 更新）**：
+1. ✅ **真实推理入口**：已接入本地 DBCNN ONNX（`service/vision_dbcnn.py`），ONNX Runtime CPU；见第 5 节。
+2. ⏳ **真实失败/验证样本与真值**：仅有 `ok.jpg` / `occluded.jpg` 两张既有样例，**无质量真值/标签**，不能评估准确率或泛化。
+3. ⏳ **校准后的低分阈值**：仍未校准；未配置时返回 `needs_review`，**不设生产默认值**。
+4. ✅ **模型版本标识**：使用 `dbcnn_onnx_v1` 作为本适配器/权重快照标识；上游模型无可用语义版本，未伪造。
+
+---
+
+## 5. W8-2 本地 DBCNN 真实模型接入（2026-10-19）
+
+**目标**：用已验证的 DBCNN ONNX 权重替换「仅规则判断」，让本地视觉流程返回真实质量分数，并严格区分模型分数与规则诊断。
+
+**实现**：
+- `service/vision_dbcnn.py`：独立 DBCNN 适配器
+  - 本地 `.onnx` + 外部 `.onnx.data`；`onnxruntime==1.22.1` 仅 `CPUExecutionProvider`
+  - 预处理复用已验证约定：BGR→RGB、`cv2.INTER_CUBIC` 224×224、`/255.0`、ImageNet mean/std、NCHW float32
+  - 返回原始 0~1 分数（不乘 100、不裁剪）、`model_version`、`.onnx`/`.onnx.data` SHA-256、推理耗时
+  - 模型路径缺失/文件不存在/加载失败/推理失败 → 明确 `DbcnnError` 子类，**不静默退回规则**
+  - 配置：`VISION_DBCNN_MODEL_PATH`（必需）、`VISION_DBCNN_MODEL_VERSION`（可选，默认 `dbcnn_onnx_v1`）
+- `service/vision_result.py`：新增 `build_score_vision_result()`
+  - 仅分数模型：`label=None`、`label_source=None`、`score_source` 显式
+  - 未配置阈值 → `decision=needs_review` / `reject_reason=threshold_not_configured` / `review_required=true`
+  - 新增 `threshold_status=configured|not_configured`；阈值仍无默认值
+- `service/vision_analysis.py`：现有本地视觉模块之上的组合入口 / CLI（**不新开端口**）
+  - DBCNN 结果与 `rule_diagnostics` 分开；规则诊断 `source=week07_image_quality_rules`
+  - 规则依赖缺失时 `available=false` + `label=null`，不冒充 `invalid`
+  - 配置：`VISION_DBCNN_SCORE_THRESHOLD`（可选，未设置即不判定）
+- `service/image_quality.py`：新增 `is_available()`，用于区分「规则依赖缺失」与「图像无效」
+- 依赖：`requirements-vision.txt` 增加 `onnxruntime==1.22.1`、`opencv-python-headless==5.0.0.93`
+- 文档：`docs/vision-dbcnn.md`（配置、来源、许可注意事项、限制、测试命令）
+
+**真实推理证据（隔离 venv，本地权重）**：
+
+| 样例 | DBCNN 原始分数 | 规则诊断 | `decision` |
+|---|---:|---|---|
+| `.workbuddy/week07_acceptance/ok.jpg` | `0.7561315298080444` | `ok`（luma 118.57 / contrast 63.41 / detail 8.32） | `needs_review` |
+| `.workbuddy/week07_acceptance/occluded.jpg` | `0.25810927152633667` | `too_dark`（luma 5.99 / contrast 3.71 / detail 0.37） | `needs_review` |
+
+- 未配置阈值：两张均为 `needs_review` / `threshold_not_configured`；
+- 显式测试阈值 `0.5`：`ok.jpg` → `ok`，`occluded.jpg` → `low_score`（**仅契约行为验证，不是生产默认值**）；
+- 缺少 `VISION_DBCNN_MODEL_PATH` 时 CLI 返回 `DbcnnConfigError` 且退出码 2，没有规则结果冒充模型；
+- 在 ONNX Runtime 导入失败的 Anaconda 环境中，CLI 返回 `DbcnnDependencyError` 且退出码 2，同样不回退规则判断（真实推理使用隔离 venv）。
+
+**验证证据**：
+- 单元测试（Anaconda）：`service/test_vision_result.py` + `test_vision_dbcnn.py` + `test_vision_analysis.py` + `test_image_quality.py` → **124 passed, 1 skipped**
+- 真实集成（隔离 venv）：同一组测试 + `VISION_DBCNN_RUN_INTEGRATION=1` → **125 passed**
+- 验证层级：单元测试 + 本地真实 ONNX 推理；**未烧录、未改固件、未做 HTTP/UI/设备端集成、未做阈值校准**
+
+**W8-2 未完成（如实记录）**：
+- ⏳ 校准后的正式阈值；当前没有生产默认值；
+- ⏳ 更多真实失败/正常样例与质量真值；当前只有 2 张；
+- ⏳ 模型卡 0–100 与实测 0–1 的差异未解释；
+- ⏳ 原始 DBCNN 权重许可未核实（HF 仓库标签不自动证明）；
+- ⏳ 未接入 HTTP 端点/反馈 UI；W8-3 的低分/未知反馈、重采、人工纠正均未开始。

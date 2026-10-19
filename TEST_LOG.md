@@ -1220,3 +1220,59 @@ idf.py build
 **证据位置**: `.workbuddy/logs/w8-1-tests.log`（本地忽略，未提交）
 **未覆盖**: 真实模型推理、阈值校准、持久化/API/界面（均不在 W8-1 范围）。`score` 为相对可用性，**不得解释为准确率**。
 
+---
+
+## 2026-10-19 M. Week 08 W8-2 本地 DBCNN ONNX 真实模型接入
+
+**分支**: `feature/week08-vision-feedback`（本任务开始时 HEAD `865e78b`；基线 `origin/main` `333a697`）
+**验证层级**: 单元测试（第 2 级）+ **本地真实 ONNX 推理（第 5 级，离线）**；**未编译、未烧录、未接入 HTTP/UI/设备端**，不得据此声称端侧或用户体验已验证。
+
+### M.1 环境
+
+| 项 | 值 |
+|---|---|
+| 单元测试环境 | Anaconda Python 3.11.7（numpy 2.4.4 / Pillow 10.2.0 / pytest 7.4.4；onnxruntime 导入失败：`DLL load failed while importing onnxruntime_pybind11_state`，预存环境问题） |
+| 真实推理环境 | `.workbuddy/venvs/camera-health-nano`（Python 3.11.7；numpy 2.4.6 / onnxruntime 1.22.1 / opencv-python-headless 5.0.0.93 / Pillow 10.2.0 / pytest 7.4.4） |
+| 模型 | `.workbuddy/artifacts/dbcnn-iqa-test/weights/dbcnn_model.onnx` + `.onnx.data` |
+| 配置 | `VISION_DBCNN_MODEL_PATH` 指向上述 `.onnx`；`VISION_DBCNN_SCORE_THRESHOLD` 未设置（除显式阈值用例） |
+
+### M.2 自动化测试
+
+| 命令 | 预期 | 实际 | 结论 |
+|---|---|---|---|
+| `python -m pytest service/test_vision_result.py service/test_vision_dbcnn.py service/test_vision_analysis.py service/test_image_quality.py -q`（Anaconda 环境） | 契约/适配器/组合入口测试通过；真实冒烟跳过 | **124 passed, 1 skipped in 0.90s** | ✅ PASS |
+| 隔离 venv + `VISION_DBCNN_RUN_INTEGRATION=1` 运行同一组测试 | 含真实 ONNX 冒烟全部通过 | **125 passed in 1.16s** | ✅ PASS |
+
+覆盖要点：
+
+- 阈值未配置 → `decision=needs_review` / `reject_reason=threshold_not_configured` / `review_required=true`；
+- DBCNN `label=null`、`label_source=null`、`score_source=dbcnn_onnx`；规则标签只出现在 `rule_diagnostics`；
+- 模型路径缺失/文件不存在/版本为空 → 明确异常；推理失败 → `DbcnnInferenceError`，**规则评估器未被调用**（无回退）；
+- 非法阈值/非有限分数/多值输出 → 明确拒绝；
+- 规则依赖缺失 → `rule_diagnostics.available=false`，不冒充 `invalid`；
+- 结果可 JSON 序列化（`allow_nan=False`）。
+
+### M.3 真实推理与 CLI 接口冒烟
+
+| 输入 | 预期 | 实际 | 结论 |
+|---|---|---|---|
+| `ok.jpg`，未配置阈值 | 返回原始分数、模型版本；`needs_review` | `score=0.7561315298080444`；`model_version=dbcnn_onnx_v1`；`decision=needs_review`；`rule_diagnostics.label=ok`（luma 118.57 / contrast 63.41 / detail 8.32）；`inference_ms=36.069` | ✅ PASS |
+| `occluded.jpg`，未配置阈值 | 分数低于 ok；仍为 `needs_review`；规则诊断可独立为 `too_dark` | `score=0.25810927152633667`；`decision=needs_review`；`rule_diagnostics.label=too_dark`（luma 5.99 / contrast 3.71 / detail 0.37）；`inference_ms=37.684` | ✅ PASS |
+| 模型路径环境变量缺失 | 明确配置错误，退出码非 0；不得返回规则结果 | `{"error":"DbcnnConfigError","message":"未配置 DBCNN 模型路径..."}`；`exit=2` | ✅ PASS |
+| Anaconda 环境 ONNX Runtime 导入失败 | 明确依赖错误，退出码非 0；不得退回规则判断 | `DbcnnDependencyError: onnxruntime 不可用: ImportError: DLL load failed ...`；`exit=2`；未返回任何规则结果 | ✅ PASS |
+| 显式测试阈值 `0.5`（**非生产默认值**） | ok → `ok`；occluded → `low_score` | `ok.jpg` → `decision=ok` / `threshold_status=configured`；`occluded.jpg` → `decision=low_score` / `reject_reason=score_below_threshold` | ✅ PASS |
+
+- 权重 SHA-256：`.onnx` = `2a679a6264bfc188e623e9a937ad214dd761f7deb9469442a37107560557bc3f`；`.onnx.data` = `ed3e6df9109aa30323bcd2006a098023aa57fbcb98bfe1d2767227fc71c5382f`（与隔离测试报告一致）。
+- 分数与 `.workbuddy/artifacts/dbcnn-iqa-test/report.md` 已验证值一致；未乘 100。
+- `inference_ms` 随环境波动，仅记录本次观测，不构成性能基准。
+
+**证据位置**: `.workbuddy/logs/w8-2-tests.log`、`.workbuddy/logs/w8-2-smoke.log`（本地忽略，未提交）。
+
+**未覆盖（不得宣称完成）**:
+
+- 阈值校准与正式默认值（当前无；未配置只返回 `needs_review`）；
+- 模型准确率/泛化/遮挡识别能力（仅 2 张样例，无质量真值）；
+- HTTP 端点、反馈文案/UI、重新采集、人工纠正（W8-3）；
+- ESP32 端或设备端集成、连续帧/并发/长时间稳定性；
+- 原始 DBCNN 权重许可核实（HF 仓库标签不自动证明）。
+

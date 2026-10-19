@@ -265,6 +265,21 @@ idf.py -p COM端口 flash monitor
 - 权限边界：无自动采集；只有显式请求触发，请求与图像通过 `request_id`、`captured_ms`、`source=manual` 关联；未实现账户级鉴权（官网原文未要求）。
 - 失败记录：`cap_task_status=failed` + `last_img_status=invalid` + 串口 `[DIAG-CAP] status=failed req=<id>`；**不得与 `unusable` 混同**。当前为运行时状态，无独立持久化失败历史（官网原文未要求持久化）。
 
+#### Week 08 — 把视觉推理结果变成可理解反馈 🟡（W8-1 契约 + W8-2 真实模型接入完成；反馈闭环待做）2026-10-19
+
+| 能力 | 状态 | 验证方式 |
+|------|------|---------|
+| 结构化视觉结果契约（`service/vision_result.py`） | ✅ `ok / low_score / needs_review / unknown` + 拒识原因；`score` 为 0~1 相对值 | 单元测试 |
+| DBCNN ONNX 适配器（`service/vision_dbcnn.py`） | ✅ 本地权重 + ONNX Runtime CPU；真实分数 `0.7561` / `0.2581` | 真实推理（2 张样例） |
+| 本地组合入口 / CLI（`service/vision_analysis.py`） | ✅ 复用既有视觉模块，不新开端口；输出分数、模型版本、阈值状态、规则诊断 | 集成冒烟 |
+| 来源分离 | ✅ DBCNN `label=null`、`score_source=dbcnn_onnx`；规则诊断 `source=week07_image_quality_rules` | 集成冒烟 |
+| 阈值判定 | ⏳ **未校准**；未配置返回 `needs_review` / `threshold_not_configured`；测试中的 `0.5` 不是生产默认值 | 单元 + 集成 |
+| 低分/未知反馈、重新采集、人工纠正 UI | ⏳ W8-3 未开始 | — |
+
+- 模型权重与外部数据文件留在本地忽略目录 `.workbuddy/`，**不纳入 Git**；源码不依赖提交模型二进制。
+- 模型来源、配置、许可注意事项与限制见 [docs/vision-dbcnn.md](docs/vision-dbcnn.md)。
+- DBCNN 只输出通用质量分数，**不是遮挡类别或准确率**；0~1 实际输出与模型卡 0~100 标称的差异未解释，记录为已知元数据不一致。
+
 
 ### 仍待补验
 
@@ -276,12 +291,15 @@ idf.py -p COM端口 flash monitor
 | ⚠️ **Week 06 完整 ASR→NL→JSON→任务链路** | `service/nl_to_task.py` 缺失，ASR 原始文本无法转为 TaskContract JSON；取消/澄清/计时链路已验收，但「真实语音 → 任务执行」未端到端验收 |
 | ⚠️ **Week 03 ESP32→VPS HTTP 上行端到端验收** | **软件集成已完成**：help_uplink 异步任务已集成至 `main.c`（初始化调用 `help_uplink_start`，事件状态机调用 `help_uplink_is_configured` / `help_uplink_request_send` / `help_uplink_poll`，见 `29dd72d`）；**仍未完成**真实 VPS URL 配置与 ESP32→VPS 端到端实机验收（HTTP POST 成功/失败路径未验证） |
 | ⚠️ **Week 07 真实取帧失败 `failed` 样例** | 四态中的 `failed` 代码路径与日志已实现，但无故障注入手段，**未构造真实失败**；不得用 `unusable` 代替 `failed`，也不得视为已通过 |
+| ⚠️ **Week 08 DBCNN 阈值校准与反馈闭环** | 尚未校准质量分数阈值，因此**未配置时不产生 `ok`/`low_score`**，只返回 `needs_review`；低分/未知反馈、重新采集、人工纠正 UI 均未实现 |
+| ⚠️ **Week 08 模型能力与许可边界** | 仅用 2 张本地样例做可运行性冒烟，**不能证明准确率/泛化/遮挡识别能力**；Hugging Face 仓库的 Apache-2.0 标签**不自动证明**原始 DBCNN 权重许可，未作法律结论 |
 
 > 所有测试记录详见 [TEST_LOG.md](TEST_LOG.md)（版本、输入、预期、实际、PASS/FAIL、运行位置和证据）。
 
 ### 状态标记
 
 - ✅ 已完成且经实机或人工验证
+- 🟡 部分完成（核心能力有证据，仍有明确未完成项）
 - 🔀 已合并但部分环节待验收
 - ⚙️ 开发中 / 仅在 mock 层通过
 - ⏳ 未开始
@@ -318,8 +336,12 @@ AIinteraction/
 │   ├── audio_capture.py      # Week 05：PC 音频采集（sounddevice + stdlib wave）
 │   ├── voice_control_server.py # Week 05/06：PC 录音 HTTP 控制服务 + 后台自动 Whisper ASR + 任务上下文/取消/澄清/代次隔离
 │   ├── asr_whisper.py        # Week 05：本地 Whisper ASR 模块（base/zh/transcribe）
-│   ├── requirements-*.txt    # Week 05：PC 端音频/ASR 依赖清单
-│   └── test_*.py             # 单元/集成测试（Week 04 共 102 项；Week 05 追加 ASR/录音/服务；Week 06 voice server 99/99、全量 250 passed + 6 subtests）
+│   ├── image_quality.py      # Week 07：画面可用性/遮挡规则诊断
+│   ├── vision_result.py      # Week 08：结构化视觉结果契约与拒识语义
+│   ├── vision_dbcnn.py       # Week 08：DBCNN ONNX 质量分数适配器（CPU）
+│   ├── vision_analysis.py    # Week 08：DBCNN + 规则诊断组合入口 / 本地 CLI
+│   ├── requirements-*.txt    # Week 05/07/08：PC 端音频/ASR/视觉依赖清单
+│   └── test_*.py             # 单元/集成测试（Week 04 共 102 项；Week 05 追加 ASR/录音/服务；Week 06 voice server 99/99、全量 250 passed + 6 subtests；Week 08 相关测试 125 passed）
 ├── partitions.csv            # 8MB Flash 分区表
 ├── CMakeLists.txt            # 顶层 CMake 项目
 ├── sdkconfig.defaults        # 公开配置模板（含 Wi-Fi 占位符）
@@ -329,13 +351,17 @@ AIinteraction/
 ├── AGENT_MEMORY.md           # 项目持久事实
 ├── PROJECT_STATE.md          # 当前进度
 ├── DECISIONS.md              # 技术决策
+├── docs/
+│   └── vision-dbcnn.md       # Week 08：DBCNN 模型配置/来源/许可/限制
 └── weeks/                    # 每周详细状态
     ├── week01/STATE.md
     ├── week02/STATE.md
     ├── week03/STATE.md
     ├── week04/STATE.md
     ├── week05/STATE.md
-    └── week06/STATE.md
+    ├── week06/STATE.md
+    ├── week07/STATE.md
+    └── week08/STATE.md
 ```
 ---
 
@@ -351,6 +377,8 @@ AIinteraction/
 | [weeks/week05/STATE.md](weeks/week05/STATE.md) | Week 05 详细状态（分支 `feature/week05-voice-interaction`；按键说话链路 PLAY→录音→Whisper ASR→STOP→回 IDLE 已完成实机双端闭环验证；TTS/LLM/全链路未完成） |
 | [weeks/week06/STATE.md](weeks/week06/STATE.md) | Week 06 详细状态（分支 `feature/week06-voice-task-context`：任务上下文/取消/澄清/迟到结果隔离 + 生产计时 + ESP32 仪表盘取消按钮与状态显示；实机取消/反馈停止已复测；ASR 内容验收待补；NL→JSON 缺失） |
 | [weeks/week07/STATE.md](weeks/week07/STATE.md) | Week 07 详细状态（分支 `feature/week07-vision-capture`：按需抓拍、四态反馈、画面可用性/遮挡、最少保留与显式清除；实机验收含 ok/too_dark 与当堂验证①；真实 `failed` 样例待补） |
+| [weeks/week08/STATE.md](weeks/week08/STATE.md) | Week 08 详细状态（结构化视觉结果契约、DBCNN ONNX 真实分数接入、来源分离与阈值未配置语义；反馈闭环/校正 UI 待做） |
+| [docs/vision-dbcnn.md](docs/vision-dbcnn.md) | DBCNN 模型配置、来源、许可注意事项、真实推理证据与已知限制 |
 | [每周计划/](每周计划/) | 18 周课程计划 HTML |
 
 ### HTTP API 速查

@@ -3,15 +3,18 @@ vision_result.py — Week 08 W8-1: 结构化视觉结果契约与拒识语义
 
 职责：
   把模型侧返回的「标签 + 分数」解析为一份可追踪、可审计的结构化结果，
-  并明确区分三种决策：`ok` / `low_score` / `unknown`。
+  并明确区分决策：`ok` / `low_score` / `needs_review` / `unknown`。
 
-范围（仅 W8-1）：
+范围：
   - 只定义契约与解析/拒识语义；不接入模型推理、不提供 HTTP API、
     不做持久化、不生成用户界面或反馈文案（留给后续任务）。
   - **不发明标签集合**：`label` 词汇表直接复用 Week 07
     `service/image_quality.py` 的 `IMAGE_STATUSES`（画面可用性/遮挡判断）。
-  - **不发明分数阈值**：`score_threshold` 必须由调用方显式提供；W8-1
-    未做任何校准，因此模块不设默认阈值。
+  - **不发明分数阈值**：`score_threshold` 没有默认值；未配置时返回
+    `needs_review` / `threshold_not_configured`，不设生产默认门槛。
+  - W8-2 增加 `build_score_vision_result()`：用于 DBCNN 等**只输出分数、
+    不输出类别标签**的模型。该入口的 `label` / `label_source` 恒为 None，
+    并显式记录 `score_source`，避免把规则诊断或分数高低伪装成分类输出。
 
 字段语义：
   - `request_id`：输入（本次采集请求）与结果之间的关联键。
@@ -22,11 +25,17 @@ vision_result.py — Week 08 W8-1: 结构化视觉结果契约与拒识语义
   - `model_version`：产生该结果的算法版本标识，默认 `iq_v1`
     （Week 07 相对可用性算法，非训练模型）。
   - `decision`：该结果能否被采纳。
-      `ok`        结构合法、标签受支持、分数达到门槛。
+      `ok`          结构合法、标签受支持（如适用）、分数达到门槛。
                   **不表示画面可用**——画面语义由 `label` 表达。
-      `low_score` 分数低于调用方提供的门槛，应提示重新采集。
-      `unknown`   无结果 / 解析失败 / 标签不受支持 / 分数非法 / 图像无效。
+      `low_score`   分数低于调用方提供的门槛，应提示重新采集。
+      `needs_review` 分数合法但尚未配置门槛，无法自动判定，需要复核。
+      `unknown`     无结果 / 解析失败 / 标签不受支持 / 分数非法 / 图像无效。
   - `reject_reason`：`decision != ok` 时的机器可读原因，否则为 None。
+   - `score_source`（仅分数模型）：分数由谁产生（如 `dbcnn_onnx`）。
+   - `label_source`（仅分数模型）：恒为 None，表示模型未产生类别标签。
+   - `threshold_status` / `review_required`：阈值是否已配置，以及结果是否
+     仍需人工复核；未配置阈值时不得把 `needs_review` 降级为 `ok`。
+
   - `created_at`：PC 端契约创建时间（UTC，ISO-8601 毫秒精度），
     `time_quality="pc_utc"`，不冒充设备时钟（设备时间见 D002）。
 
@@ -58,6 +67,12 @@ DEFAULT_MODEL_VERSION = "iq_v1"
 SCORE_KIND = "relative_usability"
 """`score` 的语义标签，防止展示层把它写成准确率或置信度。"""
 
+THRESHOLD_STATUS_CONFIGURED = "configured"
+"""调用方已显式配置分数门槛。"""
+
+THRESHOLD_STATUS_NOT_CONFIGURED = "not_configured"
+"""尚未配置分数门槛；不得用任何隐含默认值替代。"""
+
 VISION_LABELS = frozenset(IMAGE_STATUSES)
 """受支持的标签集合（复用 Week 07 画面状态词表）。"""
 
@@ -66,10 +81,11 @@ IMAGE_INVALID_LABEL = "invalid"
 
 
 class DecisionEnum(str, enum.Enum):
-    """视觉结果决策枚举（与课程 W8-1 要求一致）。"""
+    """视觉结果决策枚举。"""
 
     OK = "ok"
     LOW_SCORE = "low_score"
+    NEEDS_REVIEW = "needs_review"
     UNKNOWN = "unknown"
 
     @classmethod
@@ -88,6 +104,7 @@ class RejectReason(str, enum.Enum):
     INVALID_SCORE = "invalid_score"
     IMAGE_INVALID = "image_invalid"
     SCORE_BELOW_THRESHOLD = "score_below_threshold"
+    THRESHOLD_NOT_CONFIGURED = "threshold_not_configured"
 
     @classmethod
     def all_values(cls) -> list[str]:
@@ -111,6 +128,13 @@ def _require_model_version(model_version: Any) -> str:
     if not isinstance(model_version, str) or not model_version.strip():
         raise ValueError("model_version 必须是非空字符串")
     return model_version
+
+
+def _require_score_source(score_source: Any) -> str:
+    """校验分数来源标识；缺失会让结果无法与规则诊断区分。"""
+    if not isinstance(score_source, str) or not score_source.strip():
+        raise ValueError("score_source 必须是非空字符串")
+    return score_source
 
 
 def _require_threshold(score_threshold: Any) -> float:
@@ -265,12 +289,87 @@ def build_vision_result(
     }
 
 
+def build_score_vision_result(
+    *,
+    request_id: str,
+    score: Any,
+    model_version: str,
+    score_threshold: Optional[float] = None,
+    score_source: str = "model_output",
+    created_at: Optional[datetime] = None,
+) -> dict[str, Any]:
+    """把「仅分数」模型的原始输出解析为结构化视觉结果契约。
+
+    与 `build_vision_result()` 的区别：
+      - 不产生 `label`：`label` 与 `label_source` 恒为 None，避免把规则
+        诊断或分数高低伪装成模型分类输出。
+      - `score_threshold` 可选：未配置时返回 `needs_review` /
+        `threshold_not_configured`，不设任何默认门槛。
+      - `score_source` 标明分数来源（如 `dbcnn_onnx`），便于与 Week 07
+        规则诊断区分。
+      - `score` 只接受有限数值且位于 [0, 1]；不做 ×100、裁剪或四舍五入。
+
+    Raises:
+        ValueError: `request_id` / `model_version` / `score_source` /
+            阈值非法。
+    """
+    request_id = _require_request_id(request_id)
+    model_version = _require_model_version(model_version)
+    score_source = _require_score_source(score_source)
+    threshold = (
+        _require_threshold(score_threshold)
+        if score_threshold is not None
+        else None
+    )
+
+    normalised_score, score_valid = _normalise_score(score)
+    threshold_status = (
+        THRESHOLD_STATUS_CONFIGURED
+        if threshold is not None
+        else THRESHOLD_STATUS_NOT_CONFIGURED
+    )
+
+    if not score_valid:
+        normalised_score = None
+        decision = DecisionEnum.UNKNOWN.value
+        reject_reason = RejectReason.INVALID_SCORE.value
+    elif threshold is None:
+        decision = DecisionEnum.NEEDS_REVIEW.value
+        reject_reason = RejectReason.THRESHOLD_NOT_CONFIGURED.value
+    elif float(normalised_score) < threshold:
+        decision = DecisionEnum.LOW_SCORE.value
+        reject_reason = RejectReason.SCORE_BELOW_THRESHOLD.value
+    else:
+        decision = DecisionEnum.OK.value
+        reject_reason = None
+
+    return {
+        "request_id": request_id,
+        "label": None,
+        "label_source": None,
+        "score": normalised_score,
+        "score_source": score_source,
+        "model_version": model_version,
+        "decision": decision,
+        "reject_reason": reject_reason,
+        "review_required": decision != DecisionEnum.OK.value,
+        "score_threshold": threshold,
+        "threshold_status": threshold_status,
+        "created_at": _format_created_at(created_at),
+        "time_quality": "pc_utc",
+        "score_kind": SCORE_KIND,
+    }
+
+
 __all__ = [
     "build_vision_result",
+    "build_score_vision_result",
     "DecisionEnum",
     "RejectReason",
     "VISION_LABELS",
     "DEFAULT_MODEL_VERSION",
     "SCORE_KIND",
     "IMAGE_INVALID_LABEL",
+    "THRESHOLD_STATUS_CONFIGURED",
+    "THRESHOLD_STATUS_NOT_CONFIGURED",
 ]

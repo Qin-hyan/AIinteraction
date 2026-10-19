@@ -100,6 +100,16 @@ def _require_pil() -> Any:
     return Image
 
 
+def is_available() -> bool:
+    """返回依赖是否可用。
+
+    `assess_image()` 在 numpy/Pillow 缺失时会返回 `status="invalid"`，
+    这与「图像本身无法解码」不可区分。组合入口应先用本函数判断，
+    依赖缺失时标记为「规则诊断不可用」，不得冒充一次真实的规则判断。
+    """
+    return np is not None and Image is not None
+
+
 def _decode_gray(jpeg_bytes: bytes) -> Any:
     """把 JPEG 字节解码为灰度图，并在需要时降采样。
 
@@ -253,6 +263,7 @@ def assess_image(jpeg_bytes: bytes) -> Dict[str, Any]:
 
 __all__ = [
     "assess_image",
+    "is_available",
     "IMAGE_STATUSES",
     "JPEG_MAGIC",
     "MAX_LONG_EDGE",

@@ -9,3 +9,9 @@
 
 Pillow==10.2.0
 numpy==2.4.4
+
+# Week 08 W8-2 — DBCNN ONNX 质量分数适配器（仅 CPU，不启用网络/云端）
+# 已验证: onnxruntime 1.22.1（CPUExecutionProvider）+ opencv-python-headless 5.0.0.93
+# 说明: 适配器只接受本地权重；模型与外部数据文件不纳入 Git。
+onnxruntime==1.22.1
+opencv-python-headless==5.0.0.93
