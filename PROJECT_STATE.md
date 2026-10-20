@@ -4,10 +4,10 @@
 
 ---
 
-## 当前：Week 08 W8-4 — 视觉反馈已并入 ESP32 Dashboard（阈值校准与真机端到端待做）
+## 当前：Week 08 W8-4 — 视觉反馈并入 Dashboard 并完成真实设备验收（阈值校准与多真值样本待做）
 
 **分支**: `feature/week08-vision-feedback`（基线 `origin/main` `333a697`，PR #8 已合并 Week 07）
-**阶段**: 🟢 **W8-1 契约 / W8-2 本地 DBCNN 推理 / W8-3 反馈闭环 / W8-4 并入 Dashboard 均已实现**；⏳ 阈值校准、真实设备端到端、更多真值样例未完成
+**阶段**: 🟢 **W8-1 契约 / W8-2 本地 DBCNN 推理 / W8-3 反馈闭环 / W8-4 并入 Dashboard 均已实现，并通过用户实机验收**；⏳ 阈值校准、多真值样本、权重许可、稳定性未完成
 **详见**: `weeks/week08/STATE.md` 第 4/5/6 节 / `TEST_LOG.md`「L」「M」「N」/ `DECISIONS.md` D011–D013 / `docs/vision-dbcnn.md`、`docs/vision-feedback.md`
 
 **W8-1 已完成（有证据）**:
@@ -34,14 +34,15 @@
 - 测试：Anaconda 视觉相关 **204 passed, 2 skipped**；隔离 venv 含真实 ONNX **206 passed**
 - 未改固件、未改 Week 07 定时抓拍策略、未新增依赖、未上传图片/未调用云端
 
-**W8-3 未完成 / Week 08 仍开放**: 阈值校准与正式默认值（**不得自造**）、真实设备端到端（需设备地址与人工操作）、更多带真值的样例、模型卡 0–100 与实测 0–1 差异解释、原始权重许可核实
+**Week 08 仍开放（未完成，不得宣称全部通过）**: 正式阈值校准与默认值（**不得自造**）、更多带质量真值的正常/低分/错误/未知样例、模型卡 0–100 与实测 0–1 差异解释、原始权重许可核实、连续帧/并发/长期运行稳定性验证（未执行）
 
 **W8-4 已完成（有证据）**:
 - 视觉反馈自然并入原有 ESP32 Dashboard（`main/http_server.c`「🔍 视觉反馈」导航 + 内嵌面板），地址栏不变、不新增第二个网页、无 iframe/跳转
 - `service/vision_feedback_server.py` 转为 API-only（移除独立页面 `INDEX_HTML`），新增有边界 Origin 校验 + CORS + Private Network Access 处理（绝不 `*`），仍只监听 `127.0.0.1`
 - 本地 API 地址经 Kconfig `CONFIG_VISION_API_URL`（默认 `http://127.0.0.1:8090`，回环、非设备/电脑局域网 IP）模板注入；设备照片/重采走同源相对路径
 - 测试：Anaconda **224 passed, 2 skipped**；隔离 venv + 真实 ONNX **226 passed**；`idf.py build` **成功**（无 warning/error）；内嵌 JS `node --check` 通过
-- 详见 `weeks/week08/STATE.md` 第 7 节 / `TEST_LOG.md`「O」/ `docs/vision-feedback.md`
+- **真实设备验收（2026-10-21，用户实机提供）**：固件 `27e1d42` 已烧录（Hash 验证通过）并启动，原 Dashboard 内嵌面板正常；设备照片 `cap-00001.jpg` 真实 DBCNN 推理 `0.34175166487693787` / `dbcnn_onnx_v1` / `needs_review` / 规则 `low_detail`；提交「不可用/遮挡」后 revision 1 保存且历史列显示 `unusable`（记录关联通过）；对照正常样例 `0.7561315298080444` / `ok` / 无反馈
+- 详见 `weeks/week08/STATE.md` 第 7、8 节 / `TEST_LOG.md`「O」「P」/ `docs/vision-feedback.md`
 
 ---
 

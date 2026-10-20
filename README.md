@@ -17,6 +17,7 @@
 - **周期上报开关**：暂停后板端停止采样、页面停止刷新，但命令通道保持可用
 - **CSV 导出按钮**：将浏览器本地持久化的有效观测一键导出为 `esp32_obs_YYYY-MM-DD_hh-mm-ss.csv`
 - **🎙 语音交互面板**：仪表盘内置语音控制（开始/停止录音/取消任务），实时显示录音帧数、时长、ASR 识别文本与语音任务状态（`state`/`generation`/`request_id`）；直接调用 PC 端语音服务 `/api/voice/{start,stop,status,cancel}`
+- **🔍 视觉反馈面板**：在原仪表盘内对设备照片或本地 JPEG 做一次真实 DBCNN 质量评分，展示原始分数 / 模型版本 / Week 07 规则诊断 / 未校准状态，并支持「可用 / 不可用 / 无法判断 + 原因」人工反馈与重新采集；分数未校准，不代表准确率或遮挡分类
 
 仪表盘使用深色主题，所有字段缺失或空值时显示 `—`，不会出现 `undefined` 或 `NaN`。
 
@@ -42,6 +43,7 @@
 | **按键物理反馈** | Week 03：独立 FreeRTOS 按键扫描任务 (30 Hz)，事件驱动 LED 反馈与 HTTP 上行 |
 | **语音交互面板** | Week 05：ESP32 仪表盘内置 🎙 语音控制面板，通过 PC 语音服务实现录音/ASR 状态显示与按钮控制；语音输入链路（PLAY→PC 录音→Whisper ASR→STOP 回执→ESP32 回 IDLE）已实机双端闭环验证通过（Step 3I） |
 | **语音任务上下文与取消** | Week 06：PC 语音服务全面增加 request_id 全链路追踪、任务状态机、任务取消 `/api/voice/cancel`、澄清/重新输入 `/api/voice/clarify` 与迟到结果代次隔离（generation 单调递增，旧代次结果丢弃）；ESP32 仪表盘新增取消按钮与任务状态显示；新增任务计时（首次反馈/完成/终止/取消→反馈停止，单次实测 79 ms） |
+| **视觉反馈（Week 08）** | ESP32 仪表盘内嵌「🔍 视觉反馈」面板；PC 端本地 DBCNN ONNX CPU 推理（仅 `127.0.0.1:8090`），返回原始质量分数 / 模型版本 / Week 07 规则诊断；未配置阈值时判定恒为 `needs_review`；支持人工反馈（可用/不可用/无法判断 + 原因）与重新采集；不新增第二个网页、不上传图片、不调用云端 |
 
 > ⚠️ **Week 05 语音识别待人工验收**：真实中文语音识别准确率和简体中文输出质量**尚未经人工审阅**，不得宣称已通过。静音/背景噪声导致的空转录不得记录为识别成功。
 
@@ -377,7 +379,7 @@ AIinteraction/
 | [weeks/week05/STATE.md](weeks/week05/STATE.md) | Week 05 详细状态（分支 `feature/week05-voice-interaction`；按键说话链路 PLAY→录音→Whisper ASR→STOP→回 IDLE 已完成实机双端闭环验证；TTS/LLM/全链路未完成） |
 | [weeks/week06/STATE.md](weeks/week06/STATE.md) | Week 06 详细状态（分支 `feature/week06-voice-task-context`：任务上下文/取消/澄清/迟到结果隔离 + 生产计时 + ESP32 仪表盘取消按钮与状态显示；实机取消/反馈停止已复测；ASR 内容验收待补；NL→JSON 缺失） |
 | [weeks/week07/STATE.md](weeks/week07/STATE.md) | Week 07 详细状态（分支 `feature/week07-vision-capture`：按需抓拍、四态反馈、画面可用性/遮挡、最少保留与显式清除；实机验收含 ok/too_dark 与当堂验证①；真实 `failed` 样例待补） |
-| [weeks/week08/STATE.md](weeks/week08/STATE.md) | Week 08 详细状态（结构化视觉结果契约、DBCNN ONNX 真实分数接入、来源分离与阈值未配置语义；反馈闭环/校正 UI 待做） |
+| [weeks/week08/STATE.md](weeks/week08/STATE.md) | Week 08 详细状态（结构化视觉结果契约、DBCNN ONNX 真实分数、来源分离与阈值未配置语义、反馈闭环、并入原 Dashboard；真实设备验收已记录；阈值校准 / 多真值样本 / 权重许可 / 稳定性仍未完成） |
 | [docs/vision-dbcnn.md](docs/vision-dbcnn.md) | DBCNN 模型配置、来源、许可注意事项、真实推理证据与已知限制 |
 | [每周计划/](每周计划/) | 18 周课程计划 HTML |
 
@@ -419,12 +421,13 @@ IDLE → SUBMITTED(已提交·已受理) → RECEIVED(设备已接收)
 
 | 引用 | 说明 |
 |------|------|
-| `main` | `origin/main` `5aebea1`（PR #7，Week 06 已合并）；本地 `main` 非开发基线 |
+| `main` | `origin/main` `333a697`（PR #8，Week 07 已合并）；本地 `main` 非开发基线 |
 | `week02-stable` (tag) | **稳定基线** — 12 项实机验证全 PASS |
 | `feature/week04-natural-language` | 已合并的**历史分支**（PR #4 → `main` `7dd788b`；分支 HEAD `0b4b323` 保留） |
 | `feature/week05-voice-interaction` | **已收尾**（作为 Week 06 基线 `f0653f0`）— Week 05 开发分支（基线 `7dd788b`）；HEAD `91959fb`；含完整功能实现：PC 音频采集/录音 HTTP 控制服务/本地 Whisper ASR 模块 + ESP32 PLAY 按键语音控制 + **ESP32 仪表盘 🎙 语音交互面板**；语音输入链路实机双端闭环验证通过（Step 3I）；真实中文 ASR/简体中文输出待人工验收；TTS/LLM/全链路播报未完成 |
 | `feature/week06-voice-task-context` | Week 06 开发分支（基线 `f0653f0` = Week 05 HEAD）；`test_voice_control_server.py` **99/99**、全量 **250 passed + 6 subtests** PASS；ESP32↔PC 实机取消复测与 2026-10-14 实机取消联动均通过；已由 PR #7 合并至 `origin/main` `5aebea1`；中文 ASR 准确率待补人工验收；NL→JSON 缺失，完整任务链路未验收 |
-| `feature/week07-vision-capture` | **当前** — Week 07 开发分支（基线 `5aebea1`）；HEAD `54f0c66`，已推送且与远端一致；按需抓拍/四态反馈/画面可用性/最少保留；实机验收含 ok/too_dark 与当堂验证①；真实 `failed` 样例待补；**尚无 PR，是否创建与合并由用户决定** |
+| `feature/week07-vision-capture` | 已由 PR #8 合并至 `origin/main` `333a697`；按需抓拍/四态反馈/画面可用性/最少保留已实机验收 |
+| `feature/week08-vision-feedback` | **当前** — Week 08 开发分支（基线 `origin/main` `333a697`）；HEAD `27e1d42`；W8-1 契约 + W8-2 本地 DBCNN + W8-3 反馈闭环 + W8-4 并入原 Dashboard；固件已烧录并完成用户实机验收；**未推送、未合并**；阈值校准 / 多真值样本 / 权重许可 / 稳定性待补 |
 
 ---
 
