@@ -2,7 +2,7 @@
 
 **分支**: `feature/week08-vision-feedback`（基线 `origin/main` `333a697`，PR #8 已合并 Week 07）
 **日期**: 2026-10-18（官方要求核实日）；W8-1 实施 2026-10-19；W8-2 实施 2026-10-19；W8-3 实施 2026-10-20
-**阶段**: 🟢 **W8-1 / W8-2 / W8-3 均已实现并有测试证据**；⚠️ 阈值校准、真机设备端到端、更多真值样例仍未完成
+**阶段**: 🟢 **W8-1 / W8-2 / W8-3 / W8-4 均已实现并有测试证据**；⚠️ 阈值校准、真机设备端到端、更多真值样例仍未完成
 
 ---
 
@@ -57,6 +57,7 @@
 - [x] W8-1 结构化视觉结果契约与拒识语义
 - [x] W8-2 接入真实模型推理（本地 DBCNN ONNX；**阈值校准仍未完成**，见第 5 节）
 - [x] W8-3 低分/未知反馈、重新采集与人工纠正闭环（独立本地服务，见第 6 节）
+- [x] W8-4 将视觉反馈自然并入 ESP32 Dashboard（API-only 本地服务 + 内嵌面板 + CORS/PNA，见第 7 节）
 - [ ] 阈值校准与正式默认值（**不得自造**；需用户提供校准依据）
 - [ ] 真实设备端到端（设备地址 + 人工操作）
 - [ ] 更多带真值的正常/低分/错误/未知样例对照
@@ -189,3 +190,26 @@
 - ⏳ 只有两张真实样例；模型卡 0–100 与实测 0–1 差异未解释；
 - ⏳ 原始 DBCNN 权重许可未核实；
 - ℹ️ 存储为单进程 JSONL，无多进程并发保护与清理策略；服务无认证（默认仅回环）。
+
+---
+
+## 7. W8-4 将视觉反馈并入 ESP32 Dashboard（2026-10-21）
+
+**目标**：不再新增第二个用户可见网页；把 W8-3 的视觉反馈功能自然整合进原有 ESP32 Dashboard 页面。
+
+**实现**：
+- `main/http_server.c`：Dashboard 新增「🔍 视觉反馈」导航 + 内嵌面板（沿用既有 `.card`/`.cmp`/`.kv` 样式与锚点滚动）；面板展示 DBCNN 原始分数/模型版本/判定状态/Week 07 规则诊断/输入引用，含未校准警告；支持本地 JPEG 选择、设备照片分析（同源 `fetch('/api/camera/photo')`）、「可用/不可用/无法判断」人工反馈（原因+说明）、反馈历史、重新采集（复用 `doCameraCapture()`）；
+- 设备 API 全部相对路径；本地视觉 API 地址经 Kconfig `CONFIG_VISION_API_URL`（默认 `http://127.0.0.1:8090`）模板注入，置空隐藏面板；`root_handler()` 改为双占位符替换；
+- `service/vision_feedback_server.py`：**移除独立页面**（`INDEX_HTML` 删除、`GET /` 改为 JSON 说明、`GET /index.html` → 404）；新增有边界 Origin 校验 + CORS + PNA（`allowed_origin()` 仅放行回环/私网/链路本地 IP 字面量与显式配置来源，绝不 `*`）；仍只监听 `127.0.0.1`、不改固件/不自动启动；
+- 设备代理接口（`/api/vision/gallery|photo|status|recapture`）保留但内嵌面板不再依赖（基本功能不需 `VISION_DEVICE_BASE_URL`）。
+
+**验证证据（详见 TEST_LOG「O」）**：
+- Anaconda 视觉相关 `pytest` **224 passed, 2 skipped**；
+- 隔离 venv + 真实 ONNX `VISION_DBCNN_RUN_INTEGRATION=1` **226 passed**；
+- 固件 `idf.py build` **成功**（`Project build complete`，`week02-sensor-collect.bin` 0x113ad0，64% free，无 warning/error）；
+- 内嵌 JS 提取后 `node --check` 通过；无 `window.open`/`location.href`/`iframe`/独立 HTML。
+
+**W8-4 未完成（如实记录）**：
+- ⏳ 真实设备端到端：未烧录、未在真机浏览器上点击验证跨源/PNA 实际生效；
+- ⏳ 阈值校准与正式默认值（仍无生产阈值）；只有两张真实样例；权重许可未核实。
+

@@ -4,10 +4,10 @@
 
 ---
 
-## 当前：Week 08 W8-3 — 本地视觉反馈闭环完成（阈值校准与真机端到端待做）
+## 当前：Week 08 W8-4 — 视觉反馈已并入 ESP32 Dashboard（阈值校准与真机端到端待做）
 
 **分支**: `feature/week08-vision-feedback`（基线 `origin/main` `333a697`，PR #8 已合并 Week 07）
-**阶段**: 🟢 **W8-1 契约 / W8-2 本地 DBCNN 推理 / W8-3 反馈闭环均已实现**；⏳ 阈值校准、真实设备端到端、更多真值样例未完成
+**阶段**: 🟢 **W8-1 契约 / W8-2 本地 DBCNN 推理 / W8-3 反馈闭环 / W8-4 并入 Dashboard 均已实现**；⏳ 阈值校准、真实设备端到端、更多真值样例未完成
 **详见**: `weeks/week08/STATE.md` 第 4/5/6 节 / `TEST_LOG.md`「L」「M」「N」/ `DECISIONS.md` D011–D013 / `docs/vision-dbcnn.md`、`docs/vision-feedback.md`
 
 **W8-1 已完成（有证据）**:
@@ -35,6 +35,13 @@
 - 未改固件、未改 Week 07 定时抓拍策略、未新增依赖、未上传图片/未调用云端
 
 **W8-3 未完成 / Week 08 仍开放**: 阈值校准与正式默认值（**不得自造**）、真实设备端到端（需设备地址与人工操作）、更多带真值的样例、模型卡 0–100 与实测 0–1 差异解释、原始权重许可核实
+
+**W8-4 已完成（有证据）**:
+- 视觉反馈自然并入原有 ESP32 Dashboard（`main/http_server.c`「🔍 视觉反馈」导航 + 内嵌面板），地址栏不变、不新增第二个网页、无 iframe/跳转
+- `service/vision_feedback_server.py` 转为 API-only（移除独立页面 `INDEX_HTML`），新增有边界 Origin 校验 + CORS + Private Network Access 处理（绝不 `*`），仍只监听 `127.0.0.1`
+- 本地 API 地址经 Kconfig `CONFIG_VISION_API_URL`（默认 `http://127.0.0.1:8090`，回环、非设备/电脑局域网 IP）模板注入；设备照片/重采走同源相对路径
+- 测试：Anaconda **224 passed, 2 skipped**；隔离 venv + 真实 ONNX **226 passed**；`idf.py build` **成功**（无 warning/error）；内嵌 JS `node --check` 通过
+- 详见 `weeks/week08/STATE.md` 第 7 节 / `TEST_LOG.md`「O」/ `docs/vision-feedback.md`
 
 ---
 

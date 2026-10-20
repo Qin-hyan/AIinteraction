@@ -68,3 +68,21 @@ menu "Week 03 Help Uplink Configuration"
             Default: 10000 (10 seconds).
 
 endmenu
+
+menu "Week 08 Vision Feedback Configuration"
+
+    config VISION_API_URL
+        string "Local vision API base URL"
+        default "http://127.0.0.1:8090"
+        help
+            Base URL of the local vision feedback API service
+            (service/vision_feedback_server.py, default 127.0.0.1:8090).
+            The ESP32 Dashboard's embedded vision panel calls this local API
+            from the browser (which runs on the same computer), so the
+            loopback address 127.0.0.1 is the correct default and does not
+            leak any device or computer LAN IP.
+
+            Do NOT put a device IP or a computer's DHCP/LAN IP here. Leave
+            empty to hide/disable the vision panel.
+
+endmenu

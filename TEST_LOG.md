@@ -1359,6 +1359,49 @@ idf.py build
 
 **证据位置**: `.workbuddy/logs/w8-2-tests.log`、`.workbuddy/logs/w8-2-smoke.log`（本地忽略，未提交）。
 
+---
+
+## 2026-10-21 O. Week 08 W8-4 视觉反馈并入 ESP32 Dashboard（API-only + 内嵌面板 + CORS/PNA）
+
+### O.1 环境
+
+- Python 3.11.7（Anaconda 主环境，无 ONNX Runtime，真实冒烟跳过）；隔离 venv `.workbuddy/venvs/camera-health-nano`（onnxruntime 1.22.1 CPU）。
+- 固件：ESP-IDF v5.4.3，`idf.py build`（未烧录、未复位设备）。
+
+### O.2 自动化测试
+
+| 命令/方式 | 结果 | 说明 |
+|---|---|---|
+| Anaconda `pytest`（6 个视觉测试文件） | **224 passed, 2 skipped** | 含新增 CORS/PNA 边界、API-only 根路径、`allowed_origin` 参数化测试 |
+| 隔离 venv + `VISION_DBCNN_RUN_INTEGRATION=1` + 真实权重 | **226 passed** | 真实 DBCNN 推理冒烟通过（`ok.jpg≈0.7561`，`needs_review`） |
+
+新增针对性测试（`service/test_vision_feedback_server.py`）：
+
+- `test_index_is_api_only_without_html` / `test_index_html_path_is_not_served`：根路径返回 JSON 服务说明、`/index.html` 404，**无用户可见页面**；
+- `test_allowed_origin_boundary`（15 组参数化）：回环/私网/链路本地 IP 与 localhost 放行、`null`/公网/非 http(s)/带路径/查询/片段来源拒绝；
+- `test_allowed_origin_extra_origins_env`：`VISION_ALLOWED_ORIGINS` 显式追加（mDNS 主机名）；
+- `test_preflight_allows_private_origin_with_pna`：OPTIONS 预检 204，回显 `Access-Control-Allow-Origin`、`Access-Control-Allow-Private-Network: true`；
+- `test_actual_response_echoes_allowed_origin`：实际响应回显允许来源 + `Vary: Origin`；
+- `test_cors_rejects_public_origin_and_never_uses_wildcard`：公网来源不回显 CORS 头、绝不 `*`。
+
+### O.3 固件构建（实际执行）
+
+- 命令：`idf.py build`（日志 `.workbuddy/logs/w8-4-build.log`）。
+- 结果：**`Project build complete`**；`week02-sensor-collect.bin` 大小 0x113ad0，app 分区余 64%；无 warning/error。
+- `build/config/sdkconfig.h` 确认 `CONFIG_VISION_API_URL` = `http://127.0.0.1:8090`（回环默认值，未写入任何设备/电脑局域网 IP）。
+
+### O.4 内嵌面板 JS 语法（实际执行）
+
+- 提取 `main/http_server.c` 的 `INDEX_HTML` 后运行 `node --check` → **退出码 0**（JS 语法通过，27870 字节）。
+- 人工核对：无 `window.open`、无 `location.href`、无 `iframe`、无独立 HTML 页面；地址栏保持 Dashboard 地址。
+
+### O.5 能证明 / 不能证明
+
+**能证明**：本地服务已转为 API-only（无第二个页面）；CORS/PNA 有边界处理且绝不 `*`；固件编译通过且内嵌面板 JS 语法正确；设备照片/重采走同源相对路径，不写死设备 IP。
+
+**不能证明**：真实浏览器从 ESP32 页面跨源调用 127.0.0.1 的 PNA/CORS 实际生效、真实设备端到端（未烧录、未在真机浏览器点击）；阈值正确性（仍无生产阈值）。
+
+
 **未覆盖（不得宣称完成）**:
 
 - 阈值校准与正式默认值（当前无；未配置只返回 `needs_review`）；

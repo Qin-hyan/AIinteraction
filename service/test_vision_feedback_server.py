@@ -2,12 +2,13 @@
 test_vision_feedback_server.py — Week 08 W8-3: 本地反馈服务 HTTP 接口测试
 
 覆盖：
-  1. 页面与 health（无外部资源、阈值未配置提示）；
-  2. 本地 JPEG / 设备照片两种分析入口；
-  3. 模型缺失、推理失败、设备未配置/404、请求体非法、过大、方法错误；
-  4. 反馈保存、重复冲突、无效输入、记录不存在、保存失败；
-  5. 设备代理（gallery/photo/status/recapture）；
-  6. 可选真实 DBCNN 推理冒烟（隔离 venv + 本地权重）。
+  1. API-only 根路径、health（无用户页面、阈值未配置提示）；
+  2. CORS / Private Network Access（回显私有来源、拒绝公网、绝不 `*`）；
+  3. 本地 JPEG / 设备照片两种分析入口；
+  4. 模型缺失、推理失败、设备未配置/404、请求体非法、过大、方法错误；
+  5. 反馈保存、重复冲突、无效输入、记录不存在、保存失败；
+  6. 设备代理（gallery/photo/status/recapture）；
+  7. 可选真实 DBCNN 推理冒烟（隔离 venv + 本地权重）。
 
 单元测试全部注入替身，不访问真实设备；HTTP 服务绑定 127.0.0.1 临时端口。
 """
@@ -19,7 +20,7 @@ import json
 import os
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import pytest
 
@@ -197,20 +198,109 @@ def request_json(
 # ──────────────────────────────────────────────
 
 
-def test_index_page_states_uncalibrated_and_separated_sources(live) -> None:
+def test_index_is_api_only_without_html(live) -> None:
     port, _ = live
     status, headers, data = request(port, "GET", "/")
-    html = data.decode("utf-8")
+    payload = json.loads(data.decode("utf-8"))
 
     assert status == 200
-    assert headers["Content-Type"].startswith("text/html")
-    assert html.count("<script>") == 1
-    assert "cdn." not in html and "https://" not in html
-    assert "needs_review" in html
-    assert "不代表准确率或正确概率" in html
-    assert "rule_diagnostics" not in html or "规则诊断" in html
-    assert "无法判断" in html
-    assert "user_feedback" in html
+    assert headers["Content-Type"].startswith("application/json")
+    assert payload["service"] == "vision_feedback_api"
+    assert "/api/vision/health" in payload["endpoints"]
+    # 不提供用户可见页面：根路径不再返回 HTML
+    assert b"<html" not in data and b"<script" not in data
+
+
+def test_index_html_path_is_not_served(live) -> None:
+    port, _ = live
+    status, _, data = request(port, "GET", "/index.html")
+
+    assert status == 404
+    assert json.loads(data.decode("utf-8"))["error"] == "not_found"
+
+
+# ──────────────────────────────────────────────
+# CORS / Private Network Access
+# ──────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("origin", "expected"),
+    [
+        (None, None),
+        ("null", None),
+        ("http://127.0.0.1", "http://127.0.0.1"),
+        ("http://localhost:8090", "http://localhost:8090"),
+        ("http://192.168.1.10", "http://192.168.1.10"),
+        ("http://10.0.0.5:8080", "http://10.0.0.5:8080"),
+        ("http://172.16.0.1", "http://172.16.0.1"),
+        ("http://169.254.0.1", "http://169.254.0.1"),
+        ("http://[::1]:8090", "http://[::1]:8090"),
+        ("https://evil.example.com", None),
+        ("http://8.8.8.8", None),
+        ("ftp://192.168.1.10", None),
+        ("http://192.168.1.10/path", None),
+        ("http://192.168.1.10?x=1", None),
+        ("http://192.168.1.10#frag", None),
+    ],
+)
+def test_allowed_origin_boundary(
+    origin: Optional[str], expected: Optional[str]
+) -> None:
+    assert server.allowed_origin(origin) == expected
+
+
+def test_allowed_origin_extra_origins_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        server.ENV_ALLOWED_ORIGINS, "http://esp32s3.local, http://mydev.home"
+    )
+    assert server.allowed_origin("http://esp32s3.local") == "http://esp32s3.local"
+    assert server.allowed_origin("http://mydev.home") == "http://mydev.home"
+    assert server.allowed_origin("http://evil.example.com") is None
+
+
+def test_preflight_allows_private_origin_with_pna(live) -> None:
+    port, _ = live
+    status, headers, _ = request(
+        port,
+        "OPTIONS",
+        "/api/vision/analyze",
+        headers={
+            "Origin": "http://192.168.1.10",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Private-Network": "true",
+        },
+    )
+
+    assert status == 204
+    assert headers["Access-Control-Allow-Origin"] == "http://192.168.1.10"
+    assert "POST" in headers["Access-Control-Allow-Methods"]
+    assert "Content-Type" in headers["Access-Control-Allow-Headers"]
+    assert headers["Access-Control-Allow-Private-Network"] == "true"
+
+
+def test_actual_response_echoes_allowed_origin(live) -> None:
+    port, _ = live
+    status, headers, _ = request(
+        port, "GET", "/api/vision/health", headers={"Origin": "http://10.0.0.5"}
+    )
+
+    assert status == 200
+    assert headers["Access-Control-Allow-Origin"] == "http://10.0.0.5"
+    assert headers["Vary"] == "Origin"
+
+
+def test_cors_rejects_public_origin_and_never_uses_wildcard(live) -> None:
+    port, _ = live
+    status, headers, _ = request(
+        port,
+        "GET",
+        "/api/vision/health",
+        headers={"Origin": "https://evil.example.com"},
+    )
+
+    assert status == 200
+    assert headers.get("Access-Control-Allow-Origin") is None
 
 
 def test_health_endpoint_reports_config_without_secrets(live) -> None:

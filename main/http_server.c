@@ -12,6 +12,7 @@
 #include "cJSON.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 static const char *TAG = "HTTP";
 static httpd_handle_t s_server = NULL;
 static sensor_ctx_t  s_ctx = {0};
@@ -274,7 +275,7 @@ static const char INDEX_HTML[] =
 "<div id=\"toast\" style=\"position:fixed;top:60px;left:50%;transform:translateX(-50%);background:#1a2332;color:#a5d6ff;padding:10px 24px;border-radius:8px;font-size:.88em;z-index:99;opacity:0;transition:opacity .3s;pointer-events:none;border:1px solid #1f6feb\"></div>"
 "<nav class=\"topnav\"><span class=\"brand\">ESP32-S3-EYE · WK2+3 v3</span>"
 "<a href=\"#live-monitor\">传感器示波器</a><a href=\"#evidence-log\">报文监视</a>"
-"<a class=\"act\" href=\"#collect-console\">控制中心</a><a href=\"#camera-console\">📷 抓拍</a><a href=\"#voice-panel\">🎙 语音</a>"
+"<a class=\"act\" href=\"#collect-console\">控制中心</a><a href=\"#camera-console\">📷 抓拍</a><a href=\"#voice-panel\">🎙 语音</a><a href=\"#vision-panel\">🔍 视觉反馈</a>"
 "<a href=\"#auto-cap-panel\">⏱ 自动</a><a href=\"#gallery-panel\">🖼 画廊</a>"
 "<a href=\"#\" onclick=\"toast('外场与导出 — 功能开发中');return false\">外场与导出</a></nav>"
 "<div class=\"card\" id=\"collect-console\"><h2>📡 远程采集控制台<span class=\"panel-badge\" id=\"taskBadge\">手动指令 v2.0</span></h2><div class=\"card-body\">"
@@ -375,6 +376,53 @@ static const char INDEX_HTML[] =
 "<div class=\"voice-task\" id=\"voiceTask\"></div>"
 "<div class=\"voice-meta\" id=\"voiceMeta\">准备就绪 — 点击按钮开始或停止录音</div>"
 "<div class=\"voice-asr\" id=\"voiceAsr\">（尚未识别语音）</div>"
+"</div></div>"
+"<div class=\"card\" id=\"vision-panel\"><h2>🔍 视觉反馈<span class=\"panel-badge\" id=\"visionBadge\">本地 DBCNN</span></h2><div class=\"card-body\">"
+"<div class=\"infostrip\">"
+"<div class=\"info-item\">本地服务 <b id=\"visionSvc\">检查中…</b></div>"
+"<div class=\"info-item\">模型版本 <b id=\"visionModel\">—</b></div>"
+"<div class=\"info-item\">判定 <b id=\"visionDecision\">—</b></div></div>"
+"<div class=\"hint warn\" id=\"visionUncalibrated\">⚠️ 分数未校准：DBCNN 分数仅为相对可用性原值，不代表准确率或正确概率；未配置阈值时判定恒为 needs_review，不得据此判断遮挡。</div>"
+"<div class=\"actions\" style=\"margin-top:12px\">"
+"<button class=\"act-btn ghost\" onclick=\"visionHealth()\">🩺 检查服务</button>"
+"<button class=\"act-btn ghost\" onclick=\"loadVisionGallery()\">🔄 刷新照片</button>"
+"<button class=\"act-btn cam\" onclick=\"visionRecapture()\">📸 重新采集</button>"
+"<label class=\"act-btn ghost\" style=\"cursor:pointer\">📁 本地图片<input type=\"file\" id=\"visionFile\" accept=\"image/jpeg\" onchange=\"analyzeLocalFile()\" style=\"display:none\"></label>"
+"</div>"
+"<div id=\"visionStatus\" class=\"hint\"></div>"
+"<div class=\"cmp\">"
+"<div class=\"cmp-col\">"
+"<h4>🖼 待分析照片 <span class=\"badge none\" id=\"visionGalBadge\">0 张</span></h4>"
+"<div id=\"visionShot\" style=\"display:none;background:#000;border:1px solid #21262d;border-radius:8px;text-align:center;margin-bottom:10px\"><img id=\"visionImg\" alt=\"\" style=\"max-width:100%;max-height:240px;display:block;margin:0 auto\"></div>"
+"<div class=\"gal-grid\" id=\"visionGal\"><div class=\"gal-empty\">暂无照片：点击「📸 重新采集」拍摄一张。</div></div>"
+"</div>"
+"<div class=\"cmp-col\">"
+"<h4>🧮 DBCNN 分析结果</h4>"
+"<div class=\"kv\"><span>原始分数</span><span id=\"visionScore\">—</span></div>"
+"<div class=\"kv\"><span>模型版本</span><span id=\"visionModelVer\">—</span></div>"
+"<div class=\"kv\"><span>判定状态</span><span id=\"visionDecision2\">—</span></div>"
+"<div class=\"kv\"><span>Week 07 规则诊断</span><span id=\"visionRules\">—</span></div>"
+"<div class=\"kv\"><span>输入引用</span><span id=\"visionRef\">—</span></div>"
+"<div class=\"kv\"><span>记录 ID</span><span id=\"visionRecordIdDisplay\">—</span></div>"
+"</div>"
+"</div>"
+"<div id=\"visionFeedbackBox\" style=\"display:none;margin-top:14px\">"
+"<div class=\"cmp-col new\">"
+"<h4>✍️ 人工反馈</h4>"
+"<div class=\"voice-row\">"
+"<button class=\"act-btn ghost\" id=\"vfV-usable\" onclick=\"setVisionVerdict('usable')\">可用</button>"
+"<button class=\"act-btn ghost\" id=\"vfV-unusable\" onclick=\"setVisionVerdict('unusable')\">不可用</button>"
+"<button class=\"act-btn ghost\" id=\"vfV-undetermined\" onclick=\"setVisionVerdict('undetermined')\">无法判断</button>"
+"</div>"
+"<div class=\"voice-row\">"
+"<select id=\"visionReason\" style=\"background:#161b22;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:6px 8px\"><option value=\"\">原因（可选）</option><option value=\"score_mismatch\">分数与观察不符</option><option value=\"too_dark\">过暗</option><option value=\"too_bright\">过亮</option><option value=\"blurred\">模糊</option><option value=\"occluded\">遮挡</option><option value=\"wrong_scene\">场景不符</option><option value=\"other\">其他（需说明）</option></select>"
+"<input id=\"visionNoteInput\" placeholder=\"说明（选择「其他」时必填）\" style=\"background:#161b22;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:6px 8px;flex:1;min-width:160px\">"
+"<button class=\"act-btn primary\" onclick=\"submitVisionFeedback()\">提交反馈</button>"
+"</div>"
+"<div id=\"visionFeedbackStatus\" class=\"hint\"></div>"
+"</div>"
+"</div>"
+"<div class=\"table-wrap\" style=\"margin-top:14px\"><table class=\"log\"><thead><tr><th>时间</th><th>分数</th><th>判定</th><th>规则</th><th>人工反馈</th></tr></thead><tbody id=\"visionHistory\"><tr><td class=\"mut\" colspan=\"5\">暂无记录</td></tr></tbody></table></div>"
 "</div></div>"
 
 "<script>"
@@ -661,7 +709,126 @@ static const char INDEX_HTML[] =
 "function voicePollStart(){if(voicePolling)return;voiceRefresh();voicePolling=setInterval(voiceRefresh,1500);}"
 "function voicePollStop(){if(voicePolling){clearInterval(voicePolling);voicePolling=null;}}"
 "function refreshCapStatus(){fetch('/api/camera/status').then(function(r){return r.json();}).then(function(d){updateCapTaskStatus(d.cap_task_status,(d.cap_task_status==='unusable'?d.last_img_status:null));}).catch(function(){});}"
-"function init(){startAuto();restoreLatest();refreshStored();loadRecords();loadGallery();refreshAutoCapStatus();refreshCapStatus();voicePollStart();ageTimer=setInterval(tick,1000);}"
+"var VISION_URL=\"__VISION_API_URL__\";var visionRecordId=null;var visionVerdict=null;"
+"function visionEnabled(){return VISION_URL&&VISION_URL.indexOf('__')!==0;}"
+"function setVisionHint(msg,cls){var e=$('visionStatus');if(e){e.textContent=msg;e.className='hint '+(cls||'');}}"
+"function visionHealth(){"
+"var s=$('visionSvc'),m=$('visionModel');"
+"if(!visionEnabled()){if(s)s.textContent='未配置';if(m)m.textContent='—';return;}"
+"fetch(VISION_URL+'/api/vision/health')"
+".then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})"
+".then(function(d){"
+"if(s)s.textContent='运行中';"
+"var mo=d.model||{},th=d.threshold||{};"
+"if(m)m.textContent=mo.model_version||'—';"
+"var dt=$('visionDecision');"
+"if(dt)dt.textContent=(th.status==='not_configured')?'needs_review（未校准）':(th.status||'—');"
+"setVisionHint('本地视觉服务已就绪。','ok');})"
+".catch(function(e){"
+"if(s)s.textContent='本地视觉服务未启动';"
+"if(m)m.textContent='—';"
+"setVisionHint('无法连接本地视觉服务，请确认 PC 端已启动（默认端口 8090）。','err');});}"
+"function visionPhotoStatus(p){"
+"if(p.usable)return '可用';"
+"if(p.img_status==='invalid')return '失败';"
+"return p.img_status||'—';}"
+"function loadVisionGallery(){"
+"fetch('/api/camera/gallery').then(function(r){return r.json();})"
+".then(function(d){"
+"var g=$('visionGal'),b=$('visionGalBadge');"
+"if(b)b.textContent=(d.retained||0)+' 张';"
+"if(!d.photos||!d.photos.length){g.innerHTML='<div class=\"gal-empty\">暂无照片：点击「📸 重新采集」拍摄一张。</div>';return;}"
+"var h='';for(var i=0;i<d.photos.length;i++){var p=d.photos[i];"
+"h+='<div class=\"gal-card\"><img src=\"/api/camera/photo?index='+p.index+'&_t='+Date.now()+'\" alt=\"'+p.file_name+'\" onerror=\"this.hidden=true\">';"
+"h+='<div class=\"gal-meta\"><div class=\"fn\">'+p.file_name+'</div>';"
+"h+='<div class=\"kv\">'+orDash(p.request_id)+'</div>';"
+"h+='<div class=\"kv\">'+visionPhotoStatus(p)+'</div>';"
+"h+='<div class=\"kv\"><button class=\"act-btn primary\" style=\"margin-top:6px\" onclick=\"analyzeDevicePhoto('+p.index+')\">🔍 分析此图</button></div></div></div>';}"
+"g.innerHTML=h;})"
+".catch(function(e){var g=$('visionGal');if(g)g.innerHTML='<div class=\"gal-empty\">照片加载失败</div>';});}"
+"function visionRecapture(){doCameraCapture();setVisionHint('已下发抓拍指令，稍后自动刷新照片列表。','ok');setTimeout(loadVisionGallery,2500);}"
+"function analyzeLocalFile(){"
+"var f=$('visionFile');if(!f||!f.files||!f.files.length)return;"
+"var file=f.files[0];var rd=new FileReader();"
+"rd.onload=function(e){visionAnalyzeBytes(new Uint8Array(e.target.result),'本地图片 '+file.name);};"
+"rd.readAsArrayBuffer(file);}"
+"function analyzeDevicePhoto(index){"
+"fetch('/api/camera/photo?index='+index)"
+".then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.arrayBuffer();})"
+".then(function(buf){visionAnalyzeBytes(new Uint8Array(buf),'设备照片 index='+index);})"
+".catch(function(e){setVisionHint('读取设备照片失败：'+e.message,'err');});}"
+"function visionAnalyzeBytes(bytes,label){"
+"if(!visionEnabled()){setVisionHint('本地视觉服务未配置。','err');return;}"
+"var blob=new Blob([bytes],{type:'image/jpeg'});"
+"var img=$('visionImg'),shot=$('visionShot');"
+"if(img)img.src=URL.createObjectURL(blob);"
+"if(shot)shot.style.display='';"
+"setVisionHint('分析中：'+label+' …','');"
+"fetch(VISION_URL+'/api/vision/analyze',{method:'POST',headers:{'Content-Type':'image/jpeg'},body:blob})"
+".then(function(r){return r.json();})"
+".then(function(rec){"
+"if(rec.error)throw new Error(rec.error);"
+"renderVisionRecord(rec);setVisionHint('分析完成。','ok');loadVisionHistory();})"
+".catch(function(e){setVisionHint('分析失败：'+e.message,'err');});}"
+"function decisionLabel(a){"
+"if(a.decision==='ok')return 'ok';"
+"if(a.decision==='low_score')return 'low_score';"
+"if(a.decision==='unknown')return 'unknown（'+orDash(a.reject_reason)+'）';"
+"if(a.decision==='needs_review')return 'needs_review（未校准）';"
+"return orDash(a.decision);}"
+"function ruleLabel(r){"
+"if(!r||!r.available)return '不可用';"
+"return r.label||'—';}"
+"function renderVisionRecord(rec){"
+"var a=rec.analysis||{};"
+"txt('visionScore',(a.score!=null?a.score:'—'));"
+"txt('visionModelVer',a.model_version||'—');"
+"txt('visionDecision2',decisionLabel(a));"
+"txt('visionRules',ruleLabel(a.rule_diagnostics||{}));"
+"var inp=rec.input||{},ir=inp.image_ref||{};"
+"var sha=ir.sha256||'';var short=sha?sha.slice(0,12)+'…':'—';"
+"txt('visionRef',(inp.source||'—')+' · '+(ir.bytes_len||0)+'B · '+short);"
+"visionRecordId=rec.record_id||null;"
+"txt('visionRecordIdDisplay',visionRecordId||'—');"
+"var box=$('visionFeedbackBox');if(box)box.style.display='';"
+"visionVerdict=null;updateVisionVerdictButtons();"
+"var fs=$('visionFeedbackStatus');if(fs)fs.textContent='';}"
+"function updateVisionVerdictButtons(){"
+"var vs=['usable','unusable','undetermined'];"
+"for(var i=0;i<vs.length;i++){var b=$('vfV-'+vs[i]);if(b)b.className='act-btn '+(visionVerdict===vs[i]?'primary':'ghost');}}"
+"function setVisionVerdict(v){visionVerdict=v;updateVisionVerdictButtons();}"
+"function submitVisionFeedback(){"
+"if(!visionEnabled()){setVisionHint('本地视觉服务未配置。','err');return;}"
+"var fs=$('visionFeedbackStatus');"
+"if(!visionRecordId){if(fs)fs.textContent='请先分析一张图片。';return;}"
+"if(!visionVerdict){if(fs)fs.textContent='请选择「可用 / 不可用 / 无法判断」。';return;}"
+"var reason=$('visionReason').value||null;"
+"var note=$('visionNoteInput').value||'';"
+"if(reason==='other'&&!note){if(fs)fs.textContent='选择「其他」时必须填写说明。';return;}"
+"var payload={record_id:visionRecordId,verdict:visionVerdict,reason:reason,note:note};"
+"fetch(VISION_URL+'/api/vision/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})"
+".then(function(r){return r.json();})"
+".then(function(d){"
+"if(d.error){if(fs)fs.textContent='提交失败：'+(d.message||d.error);return;}"
+"if(fs)fs.textContent='反馈已保存（revision '+((d.feedback&&d.feedback.revision)||1)+'）。';"
+"loadVisionHistory();})"
+".catch(function(e){if(fs)fs.textContent='提交失败：'+e.message;});}"
+"function loadVisionHistory(){"
+"if(!visionEnabled()){var t=$('visionHistory');if(t)t.innerHTML='<tr><td class=\"mut\" colspan=\"5\">本地视觉服务未配置</td></tr>';return;}"
+"fetch(VISION_URL+'/api/vision/records?limit=20')"
+".then(function(r){return r.json();})"
+".then(function(d){"
+"var t=$('visionHistory');if(!t)return;"
+"if(!d.records||!d.records.length){t.innerHTML='<tr><td class=\"mut\" colspan=\"5\">暂无记录</td></tr>';return;}"
+"var h='';for(var i=0;i<d.records.length;i++){var rec=d.records[i],a=rec.analysis||{},fb=(rec.feedback&&rec.feedback.latest)||{};"
+"h+='<tr><td>'+orDash((rec.created_at||'').slice(11,19))+'</td>';"
+"h+='<td>'+(a.score!=null?a.score:'—')+'</td>';"
+"h+='<td>'+decisionLabel(a)+'</td>';"
+"h+='<td>'+ruleLabel(a.rule_diagnostics||{})+'</td>';"
+"h+='<td>'+orDash(fb.verdict)+'</td></tr>';}"
+"t.innerHTML=h;})"
+".catch(function(e){var t=$('visionHistory');if(t)t.innerHTML='<tr><td class=\"mut\" colspan=\"5\">历史加载失败</td></tr>';});}"
+"function init(){startAuto();restoreLatest();refreshStored();loadRecords();loadGallery();refreshAutoCapStatus();refreshCapStatus();voicePollStart();visionHealth();loadVisionGallery();loadVisionHistory();ageTimer=setInterval(tick,1000);}"
 "init();</script></body></html>";
 /* ================================================================
  * HTTP Request Handlers
@@ -671,19 +838,60 @@ static esp_err_t root_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
 
-    const char *placeholder = "__VOICE_PC_URL__";
-    const char *pos = strstr(INDEX_HTML, placeholder);
+    /* 依次替换 __VOICE_PC_URL__ 与 __VISION_API_URL__ 两个模板占位符。
+     * 一次性拼装到堆缓冲后整体发送，避免多次分块发送的复杂度。 */
+    const char *src = INDEX_HTML;
+    size_t src_len = strlen(src);
 
-    if (pos == NULL || CONFIG_VOICE_PC_URL[0] == '\0') {
-        httpd_resp_send(req, INDEX_HTML, strlen(INDEX_HTML));
-        return ESP_OK;
+    static const char *placeholders[2] = {
+        "__VOICE_PC_URL__",
+        "__VISION_API_URL__",
+    };
+    const char *values[2] = {
+        CONFIG_VOICE_PC_URL,
+        CONFIG_VISION_API_URL,
+    };
+
+    size_t total = src_len;
+    for (int i = 0; i < 2; i++) {
+        if (strstr(src, placeholders[i]) != NULL) {
+            total += strlen(values[i]) - strlen(placeholders[i]);
+        }
     }
 
-    httpd_resp_send_chunk(req, INDEX_HTML, pos - INDEX_HTML);
-    httpd_resp_send_chunk(req, CONFIG_VOICE_PC_URL, strlen(CONFIG_VOICE_PC_URL));
-    const char *rest = pos + strlen(placeholder);
-    httpd_resp_send_chunk(req, rest, strlen(rest));
-    httpd_resp_send_chunk(req, NULL, 0);
+    char *buf = heap_caps_malloc(total + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (buf == NULL) {
+        buf = malloc(total + 1);
+    }
+    if (buf == NULL) {
+        const char *oom = "memory allocation failed";
+        httpd_resp_set_status(req, HTTPD_500_INTERNAL_SERVER_ERROR);
+        httpd_resp_send(req, oom, strlen(oom));
+        return ESP_FAIL;
+    }
+
+    size_t out = 0;
+    const char *cursor = src;
+    for (int i = 0; i < 2; i++) {
+        const char *pos = strstr(cursor, placeholders[i]);
+        if (pos == NULL) {
+            continue;
+        }
+        size_t seg = (size_t)(pos - cursor);
+        memcpy(buf + out, cursor, seg);
+        out += seg;
+        size_t vlen = strlen(values[i]);
+        memcpy(buf + out, values[i], vlen);
+        out += vlen;
+        cursor = pos + strlen(placeholders[i]);
+    }
+    size_t tail = src_len - (size_t)(cursor - src);
+    memcpy(buf + out, cursor, tail);
+    out += tail;
+    buf[out] = '\0';
+
+    httpd_resp_send(req, buf, out);
+    free(buf);
     return ESP_OK;
 }
 

@@ -1,9 +1,9 @@
 """
-vision_feedback_server.py — Week 08 W8-3: 本地视觉反馈闭环 HTTP 服务
+vision_feedback_server.py — Week 08 W8-3: 本地视觉反馈闭环 API 服务
 
 作用：
-  - 在 `127.0.0.1` 上提供一个**仅服务本功能**的最小 HTTP 接口与页面：
-      GET  /                         反馈界面（单页，无外部 CDN）
+  - 在 `127.0.0.1` 上提供一个**仅 API、无用户可见页面**的本地接口，
+    由 ESP32 Dashboard 内嵌的「视觉反馈」面板调用（面板本身不在本服务）：
       GET  /api/vision/health        模型/阈值/设备/存储配置摘要（脱敏）
       GET  /api/vision/gallery       代理设备 `/api/camera/gallery`
       GET  /api/vision/status        代理设备 `/api/camera/status`
@@ -13,16 +13,24 @@ vision_feedback_server.py — Week 08 W8-3: 本地视觉反馈闭环 HTTP 服务
       GET  /api/vision/records       最近分析记录 + 人工反馈历史
       POST /api/vision/feedback      保存人工反馈（可用/不可用/无法判断 + 原因）
 
+跨源：
+  - 服务由浏览器从 ESP32 Dashboard 页面（非 127.0.0.1 源）调用，属跨源访问；
+  - 通过 `allowed_origin()` 做有边界的 Origin 校验（仅回环/私网/链路本地
+    IP 字面量 + 显式配置来源），命中时原样回显，**绝不返回 `*`**；
+  - 预检（OPTIONS）同时处理 Chrome 的 Private Network Access，回显
+    `Access-Control-Allow-Private-Network: true`（仅当请求声明时）。
+
 边界：
-  - 独立进程、独立端口（默认 8090），**不并入**语音服务（8080）或设备仪表盘；
+  - 独立进程、独立端口（默认 8090），**不并入**语音服务（8080）；
   - 默认只监听 `127.0.0.1`；改用其他绑定地址时会在启动日志中明确告警；
   - 不修改固件、不修改 Week 07 定时抓拍策略、不自动启动常驻服务；
-  - 不改设备地址：设备地址必须由 `VISION_DEVICE_BASE_URL` 或 `--device-url`
-    显式提供，未配置时设备相关接口返回 `503 device_not_configured`；
+  - 设备地址必须由 `VISION_DEVICE_BASE_URL` 或 `--device-url` 显式提供，
+    未配置时设备相关接口返回 `503 device_not_configured`（基本功能不依赖它，
+    内嵌面板优先直接调用 Dashboard 同源设备 API）；
   - 图像不持久化；仅保存 SHA-256/字节数与设备侧引用；
   - 模型不可用/推理失败时返回明确错误，**不降级**为规则判断；
   - 不设生产阈值：未配置 `VISION_DBCNN_SCORE_THRESHOLD` 时判定恒为
-    `needs_review`，界面明确提示分数尚未校准。
+    `needs_review`，面板明确提示分数尚未校准。
 
 启动（使用已验证的隔离 venv，见 `docs/vision-feedback.md`）：
   <venv>\\Scripts\\python.exe -m service.vision_feedback_server --port 8090
@@ -31,6 +39,7 @@ vision_feedback_server.py — Week 08 W8-3: 本地视觉反馈闭环 HTTP 服务
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import logging
 import os
@@ -70,8 +79,6 @@ JSON_ROUTES = {
     "/api/vision/feedback",
 }
 GET_ROUTES = {
-    "/",
-    "/index.html",
     "/api/vision/health",
     "/api/vision/gallery",
     "/api/vision/status",
@@ -80,6 +87,70 @@ GET_ROUTES = {
 }
 
 LOGGER = logging.getLogger("vision.feedback")
+
+
+# ──────────────────────────────────────────────
+# CORS / Private Network Access（跨源安全边界）
+# ──────────────────────────────────────────────
+
+CORS_ALLOW_METHODS = "GET, POST, OPTIONS"
+CORS_ALLOW_HEADERS = "Content-Type"
+CORS_PNA_HEADER = "Access-Control-Allow-Private-Network"
+ENV_ALLOWED_ORIGINS = "VISION_ALLOWED_ORIGINS"
+
+
+def _extra_allowed_origins() -> set[str]:
+    """读取显式追加的来源（逗号分隔），默认空。"""
+    raw = os.environ.get(ENV_ALLOWED_ORIGINS, "") or ""
+    return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+def _is_loopback_host(host: str) -> bool:
+    """回环主机：localhost 或任意回环 IP（127.0.0.1、::1 等）。"""
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _is_private_host(host: str) -> bool:
+    """私网/链路本地 IP（局域网地址），构成浏览器来源的明确边界。"""
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_link_local
+
+
+def allowed_origin(origin: Optional[str]) -> Optional[str]:
+    """校验浏览器 `Origin` 是否落在允许边界内。
+
+    允许：回环地址、私网/链路本地 IP 字面量，以及显式配置的来源；
+    拒绝：`null`、公网地址、非 http(s) 协议、带路径/查询/片段的来源。
+    命中时原样回显该 origin（绝不返回 `*`）；否则返回 `None`。
+    """
+    if not origin or origin == "null":
+        return None
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        return None
+    if parsed.scheme not in ("http", "https"):
+        return None
+    if parsed.path not in ("", "/"):
+        return None
+    if parsed.query or parsed.fragment:
+        return None
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return None
+    if _is_loopback_host(host) or _is_private_host(host):
+        return origin
+    if origin in _extra_allowed_origins():
+        return origin
+    return None
 
 
 # ──────────────────────────────────────────────
@@ -128,7 +199,6 @@ def map_exception(exc: BaseException) -> tuple[int, str, dict[str, Any]]:
     return 500, "internal_error", {}
 
 
-
 class UnsupportedMediaType(ValueError):
     """请求的 Content-Type 不被支持（对应 HTTP 415）。"""
 
@@ -153,6 +223,25 @@ class VisionFeedbackHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
 
+    def _apply_cors_headers(self) -> None:
+        """按明确边界回显允许的 Origin，并处理 Private Network Access 预检。"""
+        allowed = allowed_origin(self.headers.get("Origin"))
+        if allowed:
+            self.send_header("Access-Control-Allow-Origin", allowed)
+            self.send_header("Vary", "Origin")
+        self.send_header("Access-Control-Allow-Methods", CORS_ALLOW_METHODS)
+        self.send_header("Access-Control-Allow-Headers", CORS_ALLOW_HEADERS)
+        if self.headers.get("Access-Control-Request-Private-Network") == "true":
+            self.send_header(CORS_PNA_HEADER, "true")
+
+    def do_OPTIONS(self) -> None:  # noqa: N802
+        """处理跨源预检（含 Private Network Access）。"""
+        self.send_response(204)
+        self._common_headers()
+        self._apply_cors_headers()
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _send_json(
         self,
         status: int,
@@ -165,6 +254,7 @@ class VisionFeedbackHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self._common_headers()
+        self._apply_cors_headers()
         if headers:
             for key, value in headers.items():
                 self.send_header(key, value)
@@ -175,19 +265,11 @@ class VisionFeedbackHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_html(self, html: str) -> None:
-        body = html.encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self._common_headers()
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
     def _send_bytes(self, status: int, content_type: str, body: bytes) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self._common_headers()
+        self._apply_cors_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -283,8 +365,18 @@ class VisionFeedbackHandler(BaseHTTPRequestHandler):
             return
 
         if method == "GET":
-            if path in ("/", "/index.html"):
-                self._send_html(INDEX_HTML)
+            if path == "/":
+                self._send_json(
+                    200,
+                    {
+                        "service": "vision_feedback_api",
+                        "note": (
+                            "API-only 服务：不提供用户可见页面，"
+                            "仅供 ESP32 Dashboard 内嵌面板调用。"
+                        ),
+                        "endpoints": sorted(GET_ROUTES | JSON_ROUTES),
+                    },
+                )
                 return
             if path == "/api/vision/health":
                 self._send_json(200, self.service.health())
@@ -398,529 +490,6 @@ def create_server(
     httpd.daemon_threads = True
     httpd.service = service or vf.VisionFeedbackService()  # type: ignore[attr-defined]
     return httpd
-
-
-
-# ──────────────────────────────────────────────
-# 单页界面（无外部资源，离线可用）
-# ──────────────────────────────────────────────
-
-INDEX_HTML = """<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Week 08 · 视觉反馈闭环</title>
-<style>
-:root{--bg:#0d1117;--panel:#161b22;--line:#30363d;--fg:#e6edf3;--dim:#8b949e;
---accent:#58a6ff;--ok:#3fb950;--warn:#d29922;--err:#f85149;--chip:#21262d}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);
-font:14px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
-header{padding:18px 22px 10px;border-bottom:1px solid var(--line)}
-h1{margin:0 0 4px;font-size:19px}
-h2{margin:18px 0 8px;font-size:15px;color:var(--accent)}
-.sub{color:var(--dim);font-size:12px}
-main{padding:14px 18px 40px}
-.chips{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
-.chip{background:var(--chip);border:1px solid var(--line);border-radius:14px;
-padding:3px 10px;font-size:12px;color:var(--dim)}
-.chip b{color:var(--fg);font-weight:600}
-.banner{border:1px solid var(--warn);background:#2d2210;color:#f0d58c;
-border-radius:8px;padding:10px 12px;font-size:13px;margin:10px 0}
-.banner.err{border-color:var(--err);background:#2d1216;color:#ffb4ae}
-.banner.info{border-color:var(--line);background:var(--panel);color:var(--dim)}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
-.hint{color:var(--dim);font-size:12px}
-.tabs{display:flex;gap:6px;margin-bottom:10px}
-.tab{flex:1;padding:6px 8px;border:1px solid var(--line);border-radius:6px;
-background:var(--chip);color:var(--dim);cursor:pointer;font-size:13px}
-.tab.on{border-color:var(--accent);color:var(--fg);background:#1f2a3a}
-.gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
-.gal-card{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#0b0f14}
-.gal-card img{width:100%;height:96px;object-fit:cover;display:block;background:#000}
-.gal-meta{padding:6px;font-size:11px;color:var(--dim);word-break:break-all}
-button{border:1px solid var(--line);background:var(--chip);color:var(--fg);
-border-radius:6px;padding:6px 10px;cursor:pointer;font-size:12.5px}
-button:hover:not(:disabled){border-color:var(--accent)}
-button:disabled{opacity:.45;cursor:not-allowed}
-button.primary{background:#1f6feb;border-color:#1f6feb;color:#fff}
-button.warn{background:#8b2c2c;border-color:#b34747;color:#ffd7d7}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
-.shot{background:#000;border:1px solid var(--line);border-radius:8px;text-align:center}
-.shot img{max-width:100%;max-height:240px;display:block;margin:0 auto}
-.kv{display:grid;grid-template-columns:132px 1fr;gap:4px 10px;font-size:12.5px;margin:6px 0}
-.kv div:nth-child(odd){color:var(--dim)}
-.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;
-border:1px solid var(--line);background:var(--chip)}
-.badge.ok{color:#7ee787;border-color:#2ea043}
-.badge.warn{color:#f0d58c;border-color:var(--warn)}
-.badge.err{color:#ffb4ae;border-color:var(--err)}
-.badge.dim{color:var(--dim)}
-.block{border-top:1px dashed var(--line);margin-top:12px;padding-top:8px}
-.block h3{margin:0 0 4px;font-size:13px;color:var(--fg)}
-.note{font-size:11.5px;color:var(--dim)}
-.score{font-size:22px;font-weight:600;letter-spacing:.4px}
-.verdicts{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
-.verdicts label{border:1px solid var(--line);border-radius:6px;padding:6px 10px;
-cursor:pointer;background:var(--chip);font-size:12.5px}
-select,textarea{width:100%;background:#0b0f14;color:var(--fg);border:1px solid var(--line);
-border-radius:6px;padding:6px;font-size:12.5px;font-family:inherit}
-textarea{min-height:56px;resize:vertical}
-.rec{width:100%;border-collapse:collapse;font-size:11.5px}
-.rec th,.rec td{border-bottom:1px solid var(--line);padding:5px 4px;text-align:left;
-vertical-align:top;color:var(--fg)}
-.rec th{color:var(--dim);font-weight:500}
-.rec tr:hover td{background:#1b2129;cursor:pointer}
-.mono{font-family:Consolas,monospace;font-size:11.5px;word-break:break-all}
-.warn-text{color:#f0d58c}
-.err-text{color:#ffb4ae}
-.ok-text{color:#7ee787}
-</style>
-</head>
-
-
-<body>
-<header>
-  <h1>Week 08 · 视觉反馈闭环（本地 DBCNN + 规则诊断 + 人工反馈）</h1>
-  <div class="sub">DBCNN 只输出质量分数；Week 07 规则诊断与模型输出分开展示；人工反馈单独保存，不写回模型结果。</div>
-  <div id="chips" class="chips"></div>
-</header>
-<main>
-  <div id="banner" class="banner info">正在读取服务状态…</div>
-  <div class="grid">
-    <section class="card">
-      <h2>1 · 选择输入</h2>
-      <div class="tabs">
-        <button id="tabDevice" class="tab on" type="button">设备照片</button>
-        <button id="tabLocal" class="tab" type="button">本地图片</button>
-      </div>
-      <div id="devicePane">
-        <div class="row">
-          <button id="btnRefreshGal" type="button">刷新照片</button>
-          <button id="btnRecapture" class="warn" type="button">重新采集</button>
-        </div>
-        <div id="galMsg" class="hint">尚未读取。</div>
-        <div id="galGrid" class="gal"></div>
-        <div class="note">重新采集复用设备既有 <span class="mono">POST /api/camera/capture</span>，
-          不改变 Week 07 定时抓拍策略；不会自动重复抓拍。</div>
-      </div>
-      <div id="localPane" style="display:none">
-        <div class="row">
-          <input id="fileInput" type="file" accept="image/jpeg">
-          <button id="btnLocalAnalyze" class="primary" type="button">分析这张图片</button>
-        </div>
-        <div id="localMsg" class="hint">图片只发送到本机 127.0.0.1 服务，不上传云端。</div>
-      </div>
-    </section>
-
-    <section class="card">
-      <h2>2 · 结果（模型 / 规则 / 判定分列）</h2>
-      <div id="resultPane"><div class="hint">尚未分析。选择设备照片或本地图片后开始。</div></div>
-    </section>
-
-    <section class="card">
-      <h2>3 · 人工反馈</h2>
-      <div id="fbTarget" class="hint">尚未选择记录。</div>
-      <div id="verdictBox" class="verdicts">
-        <label><input type="radio" name="verdict" value="usable"> 可用</label>
-        <label><input type="radio" name="verdict" value="unusable"> 不可用</label>
-        <label><input type="radio" name="verdict" value="undetermined"> 无法判断</label>
-      </div>
-      <select id="fbReason" disabled>
-        <option value="">（可选）纠正原因</option>
-        <option value="score_mismatch">模型分数与画面不符</option>
-        <option value="too_dark">画面过暗</option>
-        <option value="too_bright">画面过曝</option>
-        <option value="blurred">画面模糊 / 失焦</option>
-        <option value="occluded">镜头被遮挡（我的观察）</option>
-        <option value="wrong_scene">拍错场景 / 目标</option>
-        <option value="other">其他（需填写说明）</option>
-      </select>
-      <div class="row"><textarea id="fbNote" maxlength="500" disabled
-        placeholder="可选说明；选择“其他”时必填"></textarea></div>
-      <div class="row"><button id="btnFeedback" class="primary" disabled type="button">保存反馈</button></div>
-      <div id="fbMsg" class="hint"></div>
-      <div id="fbHistory" class="block"><h3>已保存的反馈</h3>
-        <div class="hint">尚未保存。</div></div>
-      <div class="note">反馈来源标记为 <span class="mono">user_feedback</span>；
-        “镜头被遮挡”只代表你的观察，不会由低分自动推断。</div>
-
-      <h2>4 · 最近记录</h2>
-      <div class="hint">点击一行可重新查看该次结果的对应关系。</div>
-      <table class="rec"><thead><tr>
-        <th>时间</th><th>记录 / 设备请求</th><th>分数</th><th>判定</th>
-        <th>规则</th><th>人工反馈</th>
-      </tr></thead><tbody id="recordsBody">
-        <tr><td colspan="6" class="hint">尚未读取。</td></tr>
-      </tbody></table>
-    </section>
-  </div>
-</main>
-<script>
-'use strict';
-var $=function(id){return document.getElementById(id);};
-var esc=function(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){
-  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});};
-var state={health:null,gallery:null,current:null,currentImg:null,records:{}};
-
-function api(url,opts){
-  return fetch(url,opts).then(function(r){
-    return r.text().then(function(t){
-      var d;
-      try{d=JSON.parse(t);}catch(e){d={error:'bad_response',message:t.slice(0,200)};}
-      if(!r.ok){
-        var msg=d.error||('HTTP '+r.status);
-        if(d.message){msg+=': '+d.message;}
-        throw new Error(msg);
-      }
-      return d;
-    });
-  });
-}
-function fmtTime(iso){return iso?String(iso).replace('T',' '):'—';}
-function fmtRel(ms){return (ms==null)?'—':((Number(ms)/1000).toFixed(1)+' s');}
-function capLabel(st,reason){
-  var labels={idle:'空闲',capturing:'采集中',ok:'采集成功',unusable:'画面不可用',failed:'采集失败'};
-  var text=labels[st]||('状态 '+(st||'—'));
-  if(st==='unusable'&&reason){text+='（'+reason+'）';}
-  return text;
-}
-
-function loadHealth(){
-  return api('/api/vision/health').then(function(h){
-    state.health=h;
-    var chips=[
-      '模型版本 <b>'+esc(h.model.model_version)+'</b>',
-      '模型文件 <b>'+(h.model.file_exists?'已找到':(h.model.path_configured?'缺失':'未配置'))+'</b>',
-      '阈值 <b>'+(h.threshold.configured?esc(String(h.threshold.value)):'未配置')+'</b>',
-      '设备 <b>'+(h.device.configured?esc(h.device.endpoint_masked||'已配置'):'未配置')+'</b>',
-      '本地记录 <b>'+esc(h.storage.data_dir)+'</b>'
-    ];
-    $('chips').innerHTML=chips.map(function(t){return '<span class="chip">'+t+'</span>';}).join('');
-    var banner=$('banner');
-    if(!h.model.path_configured||!h.model.file_exists){
-      banner.className='banner err';
-      banner.innerHTML='模型未就绪：需要设置 <span class="mono">VISION_DBCNN_MODEL_PATH</span> '+
-        '指向本地 <span class="mono">dbcnn_model.onnx</span>。推理失败时不会退回规则判断。';
-    }else if(h.threshold.error){
-      banner.className='banner err';
-      banner.textContent='阈值配置非法：'+h.threshold.error;
-    }else if(!h.threshold.configured){
-      banner.className='banner';
-      banner.innerHTML='<b>分数尚未校准</b>：没有正式阈值，因此所有结果标记为 '+
-        '<span class="mono">needs_review</span>，不使用 0.5 之类的默认值。'+
-        '分数是原始模型输出，<b>不代表准确率或正确概率</b>。';
-    }else{
-      banner.className='banner info';
-      banner.textContent='阈值已显式配置为 '+h.threshold.value+'（仅表示已配置，不等同于校准完成）。';
-    }
-    return h;
-  }).catch(function(e){
-    $('banner').className='banner err';
-    $('banner').textContent='无法读取服务状态：'+e.message;
-  });
-}
-
-function loadGallery(silent){
-  var msg=$('galMsg'),grid=$('galGrid');
-  if(state.health&&!state.health.device.configured){
-    msg.className='hint warn-text';
-    msg.textContent='未配置设备地址（VISION_DEVICE_BASE_URL / --device-url）。'+
-      '设备照片与重新采集不可用；可改用“本地图片”。';
-    grid.innerHTML='';
-    $('btnRecapture').disabled=true;
-    return Promise.resolve(null);
-  }
-  if(!silent){msg.className='hint';msg.textContent='读取设备照片…';}
-  return api('/api/vision/gallery').then(function(g){
-    state.gallery=g;
-    var photos=g.photos||[];
-    if(!photos.length){
-      if(!silent){msg.textContent='设备当前没有保留照片。';}
-      grid.innerHTML='';
-      return g;
-    }
-    if(!silent){
-      msg.textContent='保留 '+(g.retained||photos.length)+' 张 / 上限 '+(g.retain_limit||'—')+
-        '，累计释放 '+(g.evicted||0)+' 张。';
-    }
-    grid.innerHTML=photos.map(function(p){
-      var t=Date.now();
-      return '<div class="gal-card"><img src="/api/vision/photo?index='+encodeURIComponent(p.index)+
-        '&_t='+t+'" alt="photo"><div class="gal-meta">index '+esc(p.index)+'<br>'+
-        esc(p.request_id||'')+'<br>画面状态 '+esc(p.img_status||'—')+' · '+fmtRel(p.captured_ms)+
-        '<br><button data-index="'+esc(p.index)+'">分析这张</button></div></div>';
-    }).join('');
-    return g;
-  }).catch(function(e){
-    if(!silent){
-      msg.className='hint err-text';
-      msg.textContent='设备不可用：'+e.message;
-    }
-    grid.innerHTML='';
-    return null;
-  });
-}
-
-function analyzeIndex(index){
-  $('resultPane').innerHTML='<div class="hint">本地 CPU 推理中…（DBCNN）</div>';
-  state.currentImg='/api/vision/photo?index='+encodeURIComponent(index)+'&_t='+Date.now();
-  api('/api/vision/analyze',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({index:Number(index)})})
-  .then(function(rec){renderResult(rec);})
-  .catch(function(e){
-    $('resultPane').innerHTML='<div class="hint err-text">分析失败：'+esc(e.message)+
-      '<br>模型/设备错误会明确返回，不会用规则结果冒充模型结果。</div>';
-  });
-}
-
-function analyzeLocal(){
-  var input=$('fileInput');
-  var file=input.files&&input.files[0];
-  if(!file){$('localMsg').className='hint warn-text';$('localMsg').textContent='请先选择一张 JPEG 图片。';return;}
-  if(file.type&&file.type!=='image/jpeg'){
-    $('localMsg').className='hint err-text';
-    $('localMsg').textContent='只接受 JPEG（当前 '+file.type+'）。';
-    return;
-  }
-  var btn=$('btnLocalAnalyze');
-  btn.disabled=true;
-  $('localMsg').className='hint';
-  $('localMsg').textContent='本地 CPU 推理中…（DBCNN）';
-  $('resultPane').innerHTML='<div class="hint">本地 CPU 推理中…（DBCNN）</div>';
-  api('/api/vision/analyze',{method:'POST',headers:{'Content-Type':'image/jpeg'},body:file})
-  .then(function(rec){
-    if(state.currentImg&&state.currentImg.indexOf('blob:')===0){URL.revokeObjectURL(state.currentImg);}
-    state.currentImg=URL.createObjectURL(file);
-    renderResult(rec);
-    $('localMsg').className='hint ok-text';
-    $('localMsg').textContent='已分析：'+rec.record_id;
-  })
-  .catch(function(e){
-    $('localMsg').className='hint err-text';
-    $('localMsg').textContent='分析失败：'+e.message;
-    $('resultPane').innerHTML='<div class="hint err-text">分析失败：'+esc(e.message)+'</div>';
-  })
-  .then(function(){btn.disabled=false;});
-}
-
-function renderResult(rec){
-  state.current=rec;
-  var a=rec.analysis||{},rd=a.rule_diagnostics||{},dev=(rec.input||{}).device||{};
-  var ref=(rec.input||{}).image_ref||{};
-  var labels={ok:'可采纳',low_score:'低分（建议重采）',needs_review:'需要人工复核',unknown:'未知 / 拒识'};
-  var dcls=(a.decision==='ok')?'ok':((a.decision==='low_score')?'err':((a.decision==='needs_review')?'warn':'dim'));
-  var score=(a.score==null)?'—':String(a.score);
-  var img=state.currentImg;
-  if(!img&&dev.index!=null){img='/api/vision/photo?index='+encodeURIComponent(dev.index)+'&_t='+Date.now();}
-  var html='';
-  if(img){html+='<div class="shot"><img src="'+esc(img)+'" alt="输入图像"></div>';}
-  html+='<div class="block"><h3>模型（DBCNN，仅分数）</h3>'+
-    '<div class="row"><span class="score">'+esc(score)+'</span>'+
-    '<span class="hint">原始质量分数，未四舍五入</span></div>'+
-    '<div class="kv">'+
-    '<div>model_version</div><div>'+esc(a.model_version||'—')+'</div>'+
-    '<div>score_source</div><div>'+esc(a.score_source||'—')+'</div>'+
-    '<div>score_kind</div><div>'+esc(a.score_kind||'—')+'</div>'+
-    '<div>label</div><div>'+esc(a.label==null?'null（模型不输出类别）':a.label)+'</div>'+
-    '<div>inference_ms</div><div>'+esc(a.inference_ms==null?'—':a.inference_ms)+'</div>'+
-    '<div>权重 SHA-256</div><div class="mono">'+esc((a.model_sha256||'').slice(0,16)||'—')+'</div>'+
-    '</div><div class="note">分数不代表准确率、正确概率或已校准的可用性。</div></div>';
-  html+='<div class="block"><h3>判定状态（不是准确率）</h3>'+
-    '<div class="row"><span class="badge '+dcls+'">'+esc(labels[a.decision]||a.decision||'—')+'</span>'+
-    '<span class="hint">decision=<span class="mono">'+esc(a.decision||'—')+'</span>'+
-    ' · reject_reason=<span class="mono">'+esc(a.reject_reason||'null')+'</span></span></div>'+
-    '<div class="kv">'+
-    '<div>threshold_status</div><div>'+esc(a.threshold_status||'—')+'</div>'+
-    '<div>score_threshold</div><div>'+esc(a.score_threshold==null?'未配置（不设默认值）':a.score_threshold)+'</div>'+
-    '<div>review_required</div><div>'+esc(a.review_required==null?'—':String(a.review_required))+'</div>'+
-    '</div></div>';
-  html+='<div class="block"><h3>Week 07 规则诊断（规则，不是模型输出）</h3>'+
-    '<div class="kv">'+
-    '<div>来源</div><div class="mono">'+esc(rd.source||'—')+'</div>'+
-    '<div>available</div><div>'+esc(rd.available==null?'—':String(rd.available))+'</div>'+
-    '<div>规则 label</div><div>'+esc(rd.available===false?'依赖不可用（不代表图像无效）':(rd.label||'—'))+'</div>'+
-    '<div>mean_luma</div><div>'+esc((rd.metrics||{}).mean_luma==null?'—':(rd.metrics||{}).mean_luma)+'</div>'+
-    '<div>contrast</div><div>'+esc((rd.metrics||{}).contrast==null?'—':(rd.metrics||{}).contrast)+'</div>'+
-    '<div>detail</div><div>'+esc((rd.metrics||{}).detail==null?'—':(rd.metrics||{}).detail)+'</div>'+
-    '</div><div class="note">规则 label 只描述亮度/对比度/细节，不能当作模型分类，也不等于遮挡结论。</div></div>';
-  html+='<div class="block"><h3>输入与对应关系</h3><div class="kv">'+
-    '<div>record_id</div><div class="mono">'+esc(rec.record_id)+'</div>'+
-    '<div>输入来源</div><div>'+esc((rec.input||{}).source||'—')+'</div>'+
-    '<div>设备 request_id</div><div class="mono">'+esc(dev.request_id||'—')+'</div>'+
-    '<div>设备 index</div><div>'+esc(dev.index==null?'—':dev.index)+'</div>'+
-    '<div>设备相对时间</div><div>'+fmtRel(dev.captured_ms)+'</div>'+
-    '<div>图像 SHA-256</div><div class="mono">'+esc(ref.sha256||'—')+'</div>'+
-    '<div>图像字节数</div><div>'+esc(ref.bytes_len==null?'—':ref.bytes_len)+'</div>'+
-    '<div>记录时间 (UTC)</div><div>'+esc(fmtTime(rec.created_at))+'</div>'+
-    '</div></div>';
-  html+='<div class="block"><h3>阅读限制</h3><div class="note">'+
-    '· DBCNN 只输出质量分数；分数尚未校准，不代表准确率或正确概率。<br>'+
-    '· 未配置正式阈值时，判定恒为 <span class="mono">needs_review</span>，不会使用 0.5 作为生产默认值。<br>'+
-    '· 低分不等于镜头遮挡；遮挡只能由你的人工反馈表达。<br>'+
-    '· 人工反馈单独保存，不会改写模型分数或规则诊断。</div></div>';
-  $('resultPane').innerHTML=html;
-  enableFeedback(rec);
-}
-
-function enableFeedback(rec){
-  $('fbTarget').innerHTML='当前记录：<span class="mono">'+esc(rec.record_id)+'</span>';
-  $('fbReason').disabled=false;
-  $('fbNote').disabled=false;
-  $('btnFeedback').disabled=false;
-  $('fbMsg').className='hint';
-  $('fbMsg').textContent='';
-  var history=(rec.feedback&&rec.feedback.history)||[];
-  showHistory(history);
-}
-
-function showHistory(history){
-  var box=$('fbHistory');
-  if(!history||!history.length){
-    box.innerHTML='<h3>已保存的反馈</h3><div class="hint">该记录尚无人工反馈。</div>';
-    return;
-  }
-  box.innerHTML='<h3>已保存的反馈</h3>'+history.slice().reverse().map(function(h){
-    return '<div class="hint">#'+esc(h.revision)+' · '+esc(fmtTime(h.submitted_at))+
-      ' · <b>'+esc(h.verdict)+'</b>'+(h.reason?(' · '+esc(h.reason)):'')+
-      (h.note?('<br>说明：'+esc(h.note)):'')+
-      '<br>来源 <span class="mono">'+esc(h.label_source)+'</span></div>';
-  }).join('');
-}
-
-function submitFeedback(){
-  if(!state.current){$('fbMsg').textContent='请先分析一张图片。';return;}
-  var checked=document.querySelector('input[name="verdict"]:checked');
-  if(!checked){
-    $('fbMsg').className='hint warn-text';
-    $('fbMsg').textContent='请选择“可用 / 不可用 / 无法判断”。';
-    return;
-  }
-  var btn=$('btnFeedback');
-  btn.disabled=true;
-  $('fbMsg').className='hint';
-  $('fbMsg').textContent='保存中…';
-  api('/api/vision/feedback',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({record_id:state.current.record_id,verdict:checked.value,
-      reason:$('fbReason').value||null,note:$('fbNote').value||''})})
-  .then(function(d){
-    $('fbMsg').className='hint ok-text';
-    $('fbMsg').textContent='已保存 revision '+d.feedback.revision+'（来源 '+d.feedback.label_source+'）。';
-    $('fbNote').value='';
-    loadRecords();
-    var history=(state.current.feedback&&state.current.feedback.history)||[];
-    history=history.concat([d.feedback]);
-    state.current.feedback={latest:d.feedback,history:history};
-    showHistory(history);
-  })
-  .catch(function(e){
-    $('fbMsg').className='hint err-text';
-    $('fbMsg').textContent='保存失败：'+e.message;
-  })
-  .then(function(){btn.disabled=false;});
-}
-
-function loadRecords(){
-  api('/api/vision/records?limit=20').then(function(d){
-    var rows=d.records||[];
-    state.records={};
-    if(!rows.length){
-      $('recordsBody').innerHTML='<tr><td colspan="6" class="hint">暂无记录。</td></tr>';
-      return;
-    }
-    $('recordsBody').innerHTML=rows.map(function(r){
-      state.records[r.record_id]=r;
-      var a=r.analysis||{},rd=a.rule_diagnostics||{},dev=(r.input||{}).device||{};
-      var fb=r.feedback&&r.feedback.latest;
-      var fbText=fb?(fb.verdict+(fb.reason?(' / '+fb.reason):'')):'—';
-      return '<tr data-record="'+esc(r.record_id)+'">'+
-        '<td>'+esc(fmtTime(r.created_at))+'</td>'+
-        '<td class="mono">'+esc(r.record_id)+(dev.request_id?('<br>'+esc(dev.request_id)):'')+'</td>'+
-        '<td>'+esc(a.score==null?'—':String(a.score))+'</td>'+
-        '<td>'+esc(a.decision||'—')+'</td>'+
-        '<td>'+esc(rd.available===false?'unavailable':(rd.label||'—'))+'</td>'+
-        '<td>'+esc(fbText)+'</td></tr>';
-    }).join('');
-  }).catch(function(e){
-    $('recordsBody').innerHTML='<tr><td colspan="6" class="hint err-text">读取失败：'+esc(e.message)+'</td></tr>';
-  });
-}
-
-function recapture(){
-  var btn=$('btnRecapture'),msg=$('galMsg');
-  btn.disabled=true;
-  msg.className='hint';
-  msg.textContent='下发抓拍指令…';
-  var before=(state.gallery&&state.gallery.total)||0;
-  api('/api/vision/recapture',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
-  .then(function(d){
-    msg.textContent='已下发 request_id='+(d.request_id||'—')+'；等待设备回执…';
-    var tries=0;
-    var timer=setInterval(function(){
-      tries++;
-      api('/api/vision/status').then(function(st){
-        msg.textContent='采集状态：'+capLabel(st.cap_task_status,st.last_img_status)+
-          '（request_id='+(d.request_id||'—')+'）';
-      }).catch(function(){});
-      loadGallery(true).then(function(g){
-        var done=(g&&g.total>before)||tries>=16;
-        if(!done){return;}
-        clearInterval(timer);
-        btn.disabled=false;
-        if(g&&g.total>before){
-          msg.className='hint ok-text';
-          msg.textContent='已收到新照片（total '+g.total+'），可点击“分析这张”。';
-        }else{
-          msg.className='hint warn-text';
-          msg.textContent='8 秒内未观察到新照片；可手动刷新或查看设备状态。';
-        }
-      });
-    },500);
-  })
-  .catch(function(e){
-    btn.disabled=false;
-    msg.className='hint err-text';
-    msg.textContent='重新采集失败：'+e.message;
-  });
-}
-
-function switchTab(local){
-  $('tabDevice').className=local?'tab':'tab on';
-  $('tabLocal').className=local?'tab on':'tab';
-  $('devicePane').style.display=local?'none':'';
-  $('localPane').style.display=local?'':'none';
-}
-
-function init(){
-  $('tabDevice').addEventListener('click',function(){switchTab(false);});
-  $('tabLocal').addEventListener('click',function(){switchTab(true);});
-  $('btnRefreshGal').addEventListener('click',function(){loadGallery(false);});
-  $('btnRecapture').addEventListener('click',recapture);
-  $('btnLocalAnalyze').addEventListener('click',analyzeLocal);
-  $('btnFeedback').addEventListener('click',submitFeedback);
-  $('galGrid').addEventListener('click',function(ev){
-    var btn=ev.target.closest('button[data-index]');
-    if(btn){analyzeIndex(btn.getAttribute('data-index'));}
-  });
-  $('recordsBody').addEventListener('click',function(ev){
-    var tr=ev.target.closest('tr[data-record]');
-    if(!tr){return;}
-    var rec=state.records[tr.getAttribute('data-record')];
-    if(!rec){return;}
-    state.currentImg=null;
-    renderResult(rec);
-  });
-  loadHealth().then(function(){loadGallery(false);loadRecords();});
-}
-
-init();
-</script>
-</body></html>
-"""
-
-
 
 
 # ──────────────────────────────────────────────
@@ -1047,7 +616,7 @@ if __name__ == "__main__":  # pragma: no cover — CLI 入口
 __all__ = [
     "DEFAULT_HOST",
     "DEFAULT_PORT",
-    "INDEX_HTML",
+    "allowed_origin",
     "VisionFeedbackHandler",
     "create_server",
     "main",

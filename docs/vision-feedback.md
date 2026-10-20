@@ -1,6 +1,6 @@
-# 本地视觉反馈闭环（Week 08 W8-3）
+# 本地视觉反馈闭环（Week 08 W8-3/W8-4）
 
-> 本文记录 W8-3「把真实视觉质量评分接入用户可操作的反馈闭环」的实现、运行方式、数据模型与限制。
+> 本文记录 W8-3「把真实视觉质量评分接入用户可操作的反馈闭环」及 W8-4「并入 ESP32 Dashboard」的实现、运行方式、数据模型与限制。
 > 所有结论以实际代码、测试与真实进程冒烟为准；**未做真机端到端**的部分明确标注。
 
 ---
@@ -9,8 +9,9 @@
 
 **作用**
 
-- 在 PC 端启动一个**独立**的本地服务（默认 `127.0.0.1:8090`），把已有 DBCNN 质量分数、Week 07 规则诊断、人工反馈放在同一个页面上，形成可操作闭环；
-- 支持两种输入：设备既有照片（经设备 HTTP API）与本机 JPEG 文件（仅发送到本机回环服务）；
+- 在 PC 端启动一个**仅 API、无用户可见页面**的本地服务（默认 `127.0.0.1:8090`），把已有 DBCNN 质量分数、Week 07 规则诊断、人工反馈暴露为 REST 接口；
+- 用户界面为 **ESP32 Dashboard 内嵌的「视觉反馈」面板**（`main/http_server.c`），地址栏始终停留在设备 Dashboard，不新增第二个网页；
+- 支持两种输入：设备既有照片（浏览器直接调 Dashboard 同源 `/api/camera/photo`）与本机 JPEG 文件（仅发送到本机回环服务）；
 - 每次分析保留输入引用（SHA-256/字节数/设备 `request_id`）、模型版本、原始分数、规则诊断、判定状态与时间戳；
 - 人工反馈支持「可用 / 不可用 / 无法判断」与纠正原因，独立持久化，可多版本修订；
 - 重新采集复用设备既有 `POST /api/camera/capture`，**不修改** Week 07 的定时抓拍策略。
@@ -20,26 +21,34 @@
 - 不把 DBCNN 质量分数当作准确率、正确概率或遮挡类别；
 - 不把 Week 07 规则诊断合并进模型结果；
 - 不设置生产阈值：未显式配置 `VISION_DBCNN_SCORE_THRESHOLD` 时，判定恒为 `needs_review`，界面明确提示「分数尚未校准」；
-- 不上传图片、不调用云端推理、不修改固件、不修改网络/防火墙配置；
+- 不上传图片、不调用云端推理、不修改网络/防火墙配置；
 - 不自动启动常驻服务，不提供认证，默认只监听回环地址。
+
 
 ---
 
 ## 2. 端到端调用路径
 
 ```
-浏览器（http://127.0.0.1:8090/）
-   │  GET  /api/vision/gallery            → 服务端代理设备 /api/camera/gallery
-   │  GET  /api/vision/photo?index=N      → 服务端代理设备 /api/camera/photo（仅转发，不落盘）
-   │  POST /api/vision/analyze            → DBCNN 真实推理 + Week 07 规则诊断 → 写 records.jsonl
-   │  POST /api/vision/feedback           → 校验 + 写 feedback.jsonl（不写回分析记录）
-   │  POST /api/vision/recapture          → 服务端代理设备 /api/camera/capture
-   └─ GET  /api/vision/records            → 分析记录 + 反馈历史（按 record_id 关联）
+浏览器（ESP32 Dashboard，http://<device>/）
+   │  GET  /api/camera/gallery            → 设备端（同源）
+   │  GET  /api/camera/photo?index=N      → 设备端（同源，取 JPEG 字节）
+   │  POST /api/camera/capture            → 设备端（同源，重新采集）
+   │
+   │  POST http://127.0.0.1:8090/api/vision/analyze   → DBCNN 真实推理 + 规则诊断
+   │  GET  http://127.0.0.1:8090/api/vision/records   → 分析记录 + 反馈历史
+   │  POST http://127.0.0.1:8090/api/vision/feedback  → 人工反馈（写 feedback.jsonl）
+   └─ GET  http://127.0.0.1:8090/api/vision/health    → 服务/模型/阈值健康检查
 ```
 
-- 设备地址由 `VISION_DEVICE_BASE_URL` 或 `--device-url` **显式**提供；未配置时设备相关接口返回
-  `503 device_not_configured`，本地图片分析仍可用。
+- 设备照片与重新采集优先**直接**调用 Dashboard 同源设备 API（相对路径，不写设备 IP）；
+- 本地视觉 API 地址由固件 Kconfig `CONFIG_VISION_API_URL`（默认 `http://127.0.0.1:8090`）注入
+  到内嵌面板 JS；置空则隐藏面板；
+- 浏览器从设备页面（私网源）访问本机 `127.0.0.1` 属跨源，服务端通过有边界的 Origin 校验
+  （回环/私网/链路本地 IP 字面量 + 显式配置）回显 `Access-Control-Allow-Origin`，并处理
+  Private Network Access 预检（见第 4 节）；
 - 设备端接口全部为 Week 07 既有接口，**未新增/未修改设备端路由**。
+
 
 ---
 
@@ -82,7 +91,8 @@ Remove-Item Env:VISION_DBCNN_SCORE_THRESHOLD -ErrorAction SilentlyContinue
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/` | 单页反馈界面（无外部 CDN/资源） |
+| GET | `/` | 仅返回 JSON 服务说明（**无用户可见页面**，UI 在 Dashboard） |
+| OPTIONS | `*` | CORS / Private Network Access 预检（回显允许的来源） |
 | GET | `/api/vision/health` | 模型/阈值/设备/存储摘要；设备端点脱敏 |
 | GET | `/api/vision/gallery` | 代理设备照片元数据 |
 | GET | `/api/vision/status` | 代理设备采集四态状态 |
@@ -114,6 +124,15 @@ Remove-Item Env:VISION_DBCNN_SCORE_THRESHOLD -ErrorAction SilentlyContinue
 | 503 | `model_not_configured` | 缺少 `VISION_DBCNN_MODEL_PATH` |
 | 503 | `model_dependency_unavailable` | onnxruntime/opencv 等依赖不可用 |
 | 503 | `device_not_configured` | 未提供设备地址 |
+
+**跨源与 Private Network Access（W8-4）**
+
+- 服务默认只监听 `127.0.0.1`，但由浏览器从设备页面（私网源）跨源调用；
+- `allowed_origin()` 只允许：回环地址、私网/链路本地 IP 字面量，以及 `VISION_ALLOWED_ORIGINS`
+  显式配置的来源（默认空）；命中时**原样回显** `Access-Control-Allow-Origin`，**绝不返回 `*`**；
+- 拒绝 `null`、公网地址、非 http(s) 协议、带路径/查询/片段的来源（不回显任何 CORS 头）；
+- 预检（OPTIONS）在请求声明 `Access-Control-Request-Private-Network: true` 时回显
+  `Access-Control-Allow-Private-Network: true`，满足 Chrome 的 PNA 要求。
 
 ---
 
