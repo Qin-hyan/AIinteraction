@@ -1266,6 +1266,97 @@ idf.py build
 - 分数与 `.workbuddy/artifacts/dbcnn-iqa-test/report.md` 已验证值一致；未乘 100。
 - `inference_ms` 随环境波动，仅记录本次观测，不构成性能基准。
 
+
+## 2026-10-20 N. Week 08 W8-3 本地视觉反馈闭环（真实分数 + 人工反馈 + 重采）
+
+**分支**: `feature/week08-vision-feedback`（本任务开始时 HEAD `4ec7b56`；基线 `origin/main` `333a697`）
+**验证层级**: 单元测试（第 2 级）+ 接口测试（第 3 级，本机回环）+ **本地真实 ONNX 推理（第 5 级）** + 独立进程 HTTP 冒烟；**未烧录、未改固件、未做真实设备端到端、未做浏览器人工点击验收**。
+
+### N.1 环境
+
+| 项 | 值 |
+|---|---|
+| 单元测试环境 | Anaconda Python 3.11.7（Pillow 10.2.0 / pytest 7.4.4；onnxruntime 导入失败，预存问题见 M.1） |
+| 真实推理/进程环境 | `.workbuddy/venvs/camera-health-nano`（Python 3.11.7；onnxruntime 1.22.1 / opencv 5.0.0 / numpy 2.4.6 / Pillow 10.2.0） |
+| 模型 | `.workbuddy/artifacts/dbcnn-iqa-test/weights/dbcnn_model.onnx` + `.onnx.data` |
+| 阈值 | **未配置**（`VISION_DBCNN_SCORE_THRESHOLD` 删除）；界面/接口均为 `needs_review` |
+| 设备 | **未配置**（未提供设备地址）；设备路径只用替身完成接口测试 |
+| 服务端口 | `127.0.0.1:8090`（独立进程，测试后已停止） |
+
+### N.2 自动化测试
+
+| 命令 | 预期 | 实际 | 结论 |
+|---|---|---|---|
+| `python -m pytest service/test_vision_result.py service/test_vision_dbcnn.py service/test_vision_analysis.py service/test_image_quality.py service/test_vision_feedback.py service/test_vision_feedback_server.py -q`（Anaconda，清空集成环境变量） | 视觉相关全部通过，真实模型用例跳过 | **204 passed, 2 skipped in 16.99s**，退出码 0 | ✅ PASS |
+| 隔离 venv + `VISION_DBCNN_RUN_INTEGRATION=1` + 模型路径，运行同一组测试 | 含真实 ONNX 全部通过 | **206 passed in 18.28s** | ✅ PASS |
+| `service/test_vision_feedback_server.py` 连续 5 次单文件运行 | 无偶发失败 | 5 × **31 passed, 1 skipped** | ✅ PASS |
+
+覆盖要点：
+
+- 分析：未配置阈值 → `needs_review` / `threshold_not_configured`；`label=null`、`score_source=dbcnn_onnx`；规则诊断来源独立；
+- 输入校验：空/非 JPEG/超大 → 400 或明确异常，且无记录写入；
+- 模型：路径缺失 → 503 `model_not_configured`；推理失败 → 502 `inference_failed`，**规则评估器未被调用**、无记录；
+- 反馈：201 保存；重复 → 409；非法 verdict/原因/未知字段 → 400；记录不存在 → 404；写入失败 → 500 `feedback_save_failed`；
+- 设备：未配置 → 503；gallery 缺 index → 404；设备 HTTP 错误 → 502 + `device_status`；photo 代理原样返回 JPEG；recapture 代理 POST；
+- 路由：GET analyze → 405 `Allow: POST`；POST health → 405；未知路径 → JSON 404；`limit`/`index` 非法 → 400；超大 Content-Length → 413（未读体）；
+- UTF-8：中文反馈说明写入后经 `/api/vision/records` 回读一致。
+
+> 环境备注：Anaconda 中若保留 `VISION_DBCNN_RUN_INTEGRATION=1`，`importorskip("onnxruntime")` 触发预存的 `onnxruntime` DLL 原生崩溃（与 M.1 记录的导入失败同源），导致进程打印 fatal exception；清空集成变量后测试干净通过。该现象**不是** W8-3 功能缺陷，真实推理在隔离 venv 中完成。
+
+### N.3 独立进程 HTTP 冒烟（隔离 venv，真实模型）
+
+启动：`python -m service.vision_feedback_server --port 8090 --data-dir .workbuddy/artifacts/w8-3-e2e/data`；结果文件与日志均在 `.workbuddy/`（已忽略，未提交）。
+
+| 请求 | 预期 | 实际 | 结论 |
+|---|---|---|---|
+| `GET /api/vision/health` | 模型已找到、阈值未配置、设备未配置 | `file_exists=True`、`threshold=not_configured`、`device=False` | ✅ PASS |
+| `POST /api/vision/analyze`（`ok.jpg`） | 真实分数、`needs_review`、规则 `ok` | `score=0.7561315298080444`；`decision=needs_review`；规则 `ok`；`label=null` | ✅ PASS |
+| `POST /api/vision/analyze`（`occluded.jpg`） | 分数更低、仍 `needs_review`、规则可独立为 `too_dark` | `score=0.25810927152633667`；`decision=needs_review`；规则 `too_dark` | ✅ PASS |
+| `POST /api/vision/feedback`（unusable/occluded + 说明） | 201、`label_source=user_feedback` | 201，`revision=1`，`source=user_feedback` | ✅ PASS |
+| 重复提交同一反馈 | 409 | 409 `duplicate_feedback` | ✅ PASS |
+| 非法 verdict | 400 | 400 `invalid_feedback` | ✅ PASS |
+| 不存在的 record_id | 404 | 404 `record_not_found` | ✅ PASS |
+| `GET /api/vision/records?limit=5` | 记录与反馈按 `record_id` 关联 | `count=2`；目标记录 `feedback.latest=unusable/occluded rev=1` | ✅ PASS |
+| `GET /` | 200 页面且含未校准/来源分离提示 | 200，25077 B，含 `needs_review`、`不代表准确率或正确概率`、`user_feedback` | ✅ PASS |
+| `GET /api/vision/gallery`（无设备地址） | 503 | 503 `device_not_configured` | ✅ PASS |
+| `GET /api/vision/photo`（缺 index） | 400 | 400 `invalid_request` | ✅ PASS |
+| `GET /api/vision/analyze` | 405 + `Allow: POST` | 405，`Allow=POST` | ✅ PASS |
+| 停止进程 | 端口释放 | 进程已停止；8090 不再响应 | ✅ PASS |
+
+**数据落盘检查**：`records.jsonl` 2 行/3540 B，不含 JPEG 魔数，含 `image_ref.sha256`；反馈单独在 `feedback.jsonl`。
+
+### N.4 UTF-8 与前端语法
+
+| 项 | 预期 | 实际 | 结论 |
+|---|---|---|---|
+| 中文反馈说明（真实进程，独立 venv Python 客户端） | 写入/回读字符数一致 | `note_len=11`，回读比较为真 | ✅ PASS |
+| 页面脚本语法（提取 `<script>` 后 `node --check`） | 无语法错误 | `js syntax ok` | ✅ PASS |
+
+### N.5 能证明 / 不能证明
+
+**能证明**
+
+1. 在隔离环境中可加载本地 DBCNN 权重，并对真实 JPEG 返回与 W8-2 一致的原始分数；
+2. 未配置阈值时，分析结果恒为 `needs_review`，页面与接口均明示分数未校准；
+3. 人工反馈可保存、可修订、可拒绝重复与非法输入，并与分析记录按 `record_id` 关联；
+4. 模型/规则/人工三类来源在接口、存储和界面中分离；
+5. 设备代理路径的错误处理在替身下可验证（未配置/缺 index/HTTP 错误/非 JPEG）。
+
+**不能证明**
+
+1. 真实 ESP32 设备上的 `gallery/photo/capture` 端到端（未提供设备地址、未操作硬件）；
+2. 浏览器实际点击与视觉呈现（仅做页面返回与脚本语法检查）；
+3. 模型准确率、泛化或遮挡识别能力（仅两张样例、无真值、未校准）；
+4. 并发、连续帧、长时间稳定性、局域网访问安全性；
+5. 阈值是否正确（**仍无生产阈值**）。
+
+### N.6 产物位置（本地忽略，未提交）
+
+- 记录：`.workbuddy/artifacts/w8-3-e2e/data/`、`data-utf8/`（含 `records.jsonl`、`feedback.jsonl`）
+- 接口响应：`.workbuddy/artifacts/w8-3-e2e/analyze-ok.json`、`analyze-occluded.json`、`records.json`
+- 脚本语法文件：`.workbuddy/artifacts/w8-3-ui.js`
+- 日志：`.workbuddy/logs/w8-3-e2e.err.log`、`w8-3-e2e-utf8.err.log`
+
 **证据位置**: `.workbuddy/logs/w8-2-tests.log`、`.workbuddy/logs/w8-2-smoke.log`（本地忽略，未提交）。
 
 **未覆盖（不得宣称完成）**:

@@ -162,6 +162,22 @@
 
 - **日期**: 2026-10-19
 - **决定**:
+
+## D013 — Week 08 W8-3 反馈闭环：独立本地服务、来源分离、仅追加存储、无默认阈值 ——【已确认】
+
+- **日期**: 2026-10-20
+- **决定**:
+  1. **不复用语音链路，不改固件 Dashboard**：新增独立本地服务 `service/vision_feedback_server.py`，默认只监听 `127.0.0.1:8090`，仅标准库，不自动启动；语音服务保持 8080，设备保持 80。
+  2. **设备端零改动**：只调用 Week 07 既有 `/api/camera/gallery|status|photo|capture`；设备地址必须由 `VISION_DEVICE_BASE_URL` / `--device-url` 显式提供，**不扫描网络、不猜 IP**；未配置时设备接口返回 503，仅本地图片仍可用。
+  3. **三类来源严格分离**：`analysis.score/model_version` = DBCNN；`analysis.rule_diagnostics` = Week 07 规则；`feedback.*` = 用户意见。反馈事件 `label_source="user_feedback"`，单独写入 `feedback.jsonl`，**不写回**分析记录；`occluded` 只能是用户观察，禁止由低分或 `noise_drift` 推导。
+  4. **仅追加持久化**：`records.jsonl`（一次分析一行，不可变）与 `feedback.jsonl`（可修订，`revision` 递增）均位于 `.workbuddy/vision-feedback/`（gitignored）；图像字节不落盘，只存 SHA-256/字节数/设备引用；写入失败回滚半行。
+  5. **阈值仍无默认值**：未配置 `VISION_DBCNN_SCORE_THRESHOLD` 时判定恒为 `needs_review`；界面与 health 必须明示「分数未校准」，禁止使用 0.5 作为生产默认值。
+  6. **反馈校验**：verdict `usable/unusable/undetermined`；reason `score_mismatch/too_dark/too_bright/blurred/occluded/wrong_scene/other`，`other` 必须填写说明；与上一条完全相同 → 409；记录不存在 → 404；非法输入 → 400；保存失败 → 500 `feedback_save_failed`。
+  7. **验证边界**：单元/接口测试与真实模型 HTTP 冒烟可自动完成；**真实设备端到端需用户提供设备地址并操作**，未验证部分必须标注为待查验。
+- **原因**: 课程要求「输入—结果—反馈」可追踪、低分/未知需反馈与重采、人工纠正入口；把视觉功能塞进语音链路或改固件会扩大回归面。未校准的分数只能以「需复核」呈现，不能伪造阈值或准确率。
+- **影响**: W8-3 之后若要接入正式阈值，必须先有校准依据；若要真机验证，需要设备地址与人工点击/遮挡配合；后续可在此基础上补充样例对照与阈值校准，但不得改写本决策的来源分离与默认不判定原则。
+- **证据**: `service/vision_feedback.py`、`service/vision_feedback_server.py`、`service/test_vision_feedback.py`、`service/test_vision_feedback_server.py`、`docs/vision-feedback.md`；`TEST_LOG.md` 2026-10-20 N 节。
+
   1. DBCNN 只作为「仅分数」模型接入：`build_score_vision_result()` 返回 `label=None` / `label_source=None` / `score_source=dbcnn_onnx`；**不把规则诊断或分数高低伪装成分类标签**。
   2. `decision` 增加 `needs_review`：分数合法但 `score_threshold` 未配置时使用；`reject_reason=threshold_not_configured`、`threshold_status=not_configured`、`review_required=true`；**不设生产默认阈值**。
   3. 阈值仍无默认值；显式参数优先于 `VISION_DBCNN_SCORE_THRESHOLD`；非法值抛 `ValueError`，不静默忽略；等于门槛视为达标（闭区间）。

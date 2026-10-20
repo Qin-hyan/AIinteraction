@@ -27,7 +27,14 @@ service/vision_analysis.py   ← 组合入口 / CLI（无新端口）
         ├── service/vision_dbcnn.py     ← ONNX Runtime CPU 推理适配器
         ├── service/vision_result.py    ← 结构化契约与 threshold/decision
         └── service/image_quality.py    ← Week 07 规则诊断（可选，来源单独标注）
+
+service/vision_feedback_server.py  ← W8-3 独立本地反馈服务（127.0.0.1:8090）
+        ├── service/vision_feedback.py  ← 记录/反馈/设备代理的领域层
+        └── service/vision_analysis.py  ← 真实推理与规则诊断组合
 ```
+
+W8-3 的反馈闭环（界面、接口、存储、限制）见 [`docs/vision-feedback.md`](vision-feedback.md)；
+该服务**独立进程、独立端口**，不并入语音服务，也不修改设备端路由。
 
 ---
 
@@ -193,10 +200,10 @@ result = analyze_jpeg(
 ## 9. 已知限制
 
 1. 尚无校准后的低分阈值；未配置时只能返回 `needs_review`；
-2. 没有低分/未知反馈、重新采集、人工纠正 UI（W8-3 未开始）；
+2. 低分/未知反馈、重新采集、人工纠正已由 W8-3 的独立本地服务提供（见 `docs/vision-feedback.md`），但**未做真实设备端到端**；
 3. 只有两张本地样例，不能评估准确率或泛化；
 4. 预处理使用 `cv2.INTER_CUBIC` 作为模型卡 PIL BICUBIC 的近似；未与 PIL BICUBIC 做像素级对齐验证；
-5. 未接入 HTTP 端点/设备端；未做并发、连续帧或长时间稳定性验证；
+5. W8-3 已提供独立 HTTP 服务与页面（默认 `127.0.0.1:8090`），但未接入设备端、未做并发/连续帧/长时间稳定性验证；
 6. 模型输出 0–1 与模型卡 0–100 的差异未解释；
 7. 原始权重许可未核实（见第 8 节）。
 

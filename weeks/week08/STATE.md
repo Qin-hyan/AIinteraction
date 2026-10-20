@@ -1,8 +1,8 @@
 # Week 08 State — 把视觉推理结果变成可理解反馈
 
 **分支**: `feature/week08-vision-feedback`（基线 `origin/main` `333a697`，PR #8 已合并 Week 07）
-**日期**: 2026-10-18（官方要求核实日）；W8-1 实施 2026-10-19
-**阶段**: 🟡 **W8-1 完成（契约 + 单元测试）**；**W8-2 完成本地 DBCNN 真实模型接入（阈值校准未完成）**；W8-3 反馈/重采/纠错未开始
+**日期**: 2026-10-18（官方要求核实日）；W8-1 实施 2026-10-19；W8-2 实施 2026-10-19；W8-3 实施 2026-10-20
+**阶段**: 🟢 **W8-1 / W8-2 / W8-3 均已实现并有测试证据**；⚠️ 阈值校准、真机设备端到端、更多真值样例仍未完成
 
 ---
 
@@ -56,7 +56,10 @@
 - [x] 待 Week 07 分支合并后创建本周分支（`origin/main` `333a697`）
 - [x] W8-1 结构化视觉结果契约与拒识语义
 - [x] W8-2 接入真实模型推理（本地 DBCNN ONNX；**阈值校准仍未完成**，见第 5 节）
-- [ ] W8-3 低分/未知反馈、重新采集与人工纠正闭环
+- [x] W8-3 低分/未知反馈、重新采集与人工纠正闭环（独立本地服务，见第 6 节）
+- [ ] 阈值校准与正式默认值（**不得自造**；需用户提供校准依据）
+- [ ] 真实设备端到端（设备地址 + 人工操作）
+- [ ] 更多带真值的正常/低分/错误/未知样例对照
 
 ---
 
@@ -138,4 +141,51 @@
 - ⏳ 更多真实失败/正常样例与质量真值；当前只有 2 张；
 - ⏳ 模型卡 0–100 与实测 0–1 的差异未解释；
 - ⏳ 原始 DBCNN 权重许可未核实（HF 仓库标签不自动证明）；
-- ⏳ 未接入 HTTP 端点/反馈 UI；W8-3 的低分/未知反馈、重采、人工纠正均未开始。
+- ✅ **HTTP 端点/反馈 UI**：已由第 6 节 W8-3 的独立本地服务补齐（W8-2 时点的这条缺口不再成立）。
+
+---
+
+## 6. W8-3 真实分数 → 用户可操作的反馈闭环（2026-10-20）
+
+**目标**：把 W8-2 的真实质量分数接入可操作的本地界面：看结果、给反馈、必要时重采，并保留输入/结果/反馈的对应关系。
+
+**入口选择**：
+- 设备 Dashboard 内嵌在固件 `main/http_server.c` 中，直接改需改固件并重新烧录；语音服务 `service/voice_control_server.py`（8080）属于语音链路，**不得塞入视觉功能**；
+- 因此新增**独立**本地服务 `service/vision_feedback_server.py`：仅标准库、默认 `127.0.0.1:8090`、不自动启动、不与 8080/80 冲突；
+- 设备端只调用既有接口（`/api/camera/gallery|photo|status|capture`），**未改固件、未改 Week 07 定时抓拍策略**。
+
+**实现**：
+- `service/vision_feedback.py`（领域层）：
+  - `VisionFeedbackService.analyze()`：JPEG 校验 → `vision_analysis.analyze_jpeg()`（真实 DBCNN + 规则诊断）→ 追加 `records.jsonl`；
+  - `analyze_device_photo(index)`：先读 gallery 匹配 index，再取 JPEG；保留设备 `request_id`、`captured_ms`、`img_status`；
+  - `submit_feedback()`：校验词表/说明 → 追加 `feedback.jsonl`（`revision` 单调递增；与上一条完全相同 → 409 冲突）；
+  - `DeviceClient`：复用设备既有 API，显式超时与错误分类；地址必须显式配置，不猜测；
+  - `VisionFeedbackStore`：仅追加 JSONL，失败回滚半行；容忍残行；**不保存图像字节**；
+  - 反馈词表：`usable/unusable/undetermined`；原因 `score_mismatch/too_dark/too_bright/blurred/occluded/wrong_scene/other`，`other` 必须填写说明；
+  - `occluded` 只作为人工观察，禁止由低分或 `noise_drift` 自动推导。
+- `service/vision_feedback_server.py`（HTTP/UI）：
+  - 9 个端点（页面、health、gallery、status、photo、analyze、recapture、records、feedback），统一 JSON 错误码；
+  - 页面分列展示：DBCNN 原始分数/版本、判定状态、Week 07 规则诊断、输入与对应关系、阅读限制；
+  - 反馈表单（三选一 + 原因 + 说明）与反馈历史；
+  - 重新采集：调用设备 `POST /api/camera/capture`，轮询 `/api/vision/status` 显示四态，8 秒内轮询 gallery 是否出现新照片；
+  - 阈值未配置时页面显著提示「分数尚未校准 / needs_review / 不使用 0.5 默认值」；
+  - health 中设备地址脱敏（如 `198.51.*.*`）。
+- 文档：`docs/vision-feedback.md`；`docs/vision-dbcnn.md` 限制条目更新；`requirements-vision.txt` 说明不新增依赖。
+
+**验证证据（详见 TEST_LOG「N」）**：
+
+| 层级 | 命令/方式 | 结果 |
+|---|---|---|
+| 单元 + 接口 | Anaconda `pytest`（视觉相关 6 个测试文件） | **204 passed, 2 skipped** |
+| 单元 + 接口 + 真实 ONNX | 隔离 venv `.workbuddy/venvs/camera-health-nano` + `VISION_DBCNN_RUN_INTEGRATION=1` | **206 passed** |
+| 真实进程 + HTTP | 隔离 venv 启动 `127.0.0.1:8090`，`ok.jpg`/`occluded.jpg` | `0.7561315298080444` / `0.25810927152633667`，均 `needs_review`；规则 `ok` / `too_dark` |
+| 反馈闭环 | 真实进程 POST 反馈、重复、非法、未知记录 | 201 / 409 / 400 / 404；中文说明 UTF-8 回读一致 |
+| 错误边界 | 无设备地址 gallery、photo 缺 index、GET analyze | 503 `device_not_configured` / 400 / 405 `Allow: POST` |
+| 页面 | Node `--check` 提取脚本 | 语法通过；页面 200、25077 B，含未校准与来源分离提示 |
+
+**W8-3 未完成（如实记录）**：
+- ⏳ **真实设备端到端**：未提供设备地址，`gallery/photo/capture` 仅以替身测试；未在真机上点击验证；
+- ⏳ 阈值校准与正式默认值（仍无生产阈值，结果恒为 `needs_review`）；
+- ⏳ 只有两张真实样例；模型卡 0–100 与实测 0–1 差异未解释；
+- ⏳ 原始 DBCNN 权重许可未核实；
+- ℹ️ 存储为单进程 JSONL，无多进程并发保护与清理策略；服务无认证（默认仅回环）。

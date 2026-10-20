@@ -65,6 +65,8 @@ AIinteraction/
 | 结构化视觉契约 | `service/vision_result.py` | ✅ Week 08 | `build_vision_result()`（标签+分数）与 `build_score_vision_result()`（仅分数）；`decision ∈ {ok, low_score, needs_review, unknown}` |
 | DBCNN 适配器 | `service/vision_dbcnn.py` | ✅ Week 08 | 本地 ONNX + 外部权重，ORT CPU；原始 0~1 分数、模型版本、权重 SHA-256；失败明确报错不回退 |
 | 视觉分析组合入口 | `service/vision_analysis.py` | ✅ Week 08 | DBCNN + 可选 Week 07 规则诊断；来源分离；未配置阈值 → `needs_review`；CLI 不新开端口 |
+| 视觉反馈领域层 | `service/vision_feedback.py` | ✅ Week 08 W8-3 | 真实推理 → 仅追加 `records.jsonl`；人工反馈独立 `feedback.jsonl`；设备代理；反馈词表校验；图像不落盘 |
+| 视觉反馈本地服务 | `service/vision_feedback_server.py` | ✅ Week 08 W8-3 | 独立 `127.0.0.1:8090`（仅标准库）；页面 + 9 个端点；错误码统一；默认不自动启动、无认证 |
 
 ---
 
@@ -144,6 +146,26 @@ AIinteraction/
 - 模型与外部权重留在本地 `.workbuddy/`，**不提交 Git**；不调用云端推理
 - 许可：HF 仓库 Apache-2.0 标签不自动证明原始 DBCNN 权重许可；未作法律结论
 - 详细配置/限制见 `docs/vision-dbcnn.md`
+
+---
+
+## Week 08 W8-3 关键机制（长期事实）
+
+### 本地视觉反馈闭环（独立服务，未改固件）
+
+- 入口 `service/vision_feedback_server.py`：独立进程、默认 `127.0.0.1:8090`（仅标准库）；**不复用**语音 8080 或设备 80；不自动启动、无认证
+- 领域层 `service/vision_feedback.py::VisionFeedbackService`：`analyze()` / `analyze_device_photo()` / `submit_feedback()` / `records()`
+- 输入：`Content-Type: image/jpeg` 原始字节（本地图片）或 `application/json {"index":N}`（设备照片）
+- 设备只调用既有 API：`/api/camera/gallery|status|photo|capture`；地址必须显式 `VISION_DEVICE_BASE_URL` 或 `--device-url`，**不猜测**
+- 存储：`.workbuddy/vision-feedback/{records,feedback}.jsonl`（gitignored）；仅追加、反馈不写回分析记录、图像字节不落盘
+- 关联链：`record_id` ↔ `input.device.request_id` ↔ `input.image_ref.sha256` ↔ `analysis.score/model_version` ↔ `feedback.revision`
+- 反馈词表：verdict `usable/unusable/undetermined`；reason `score_mismatch/too_dark/too_bright/blurred/occluded/wrong_scene/other`（`other` 必填说明）
+- `occluded` 仅代表人工观察，**禁止**由低分或 `noise_drift` 自动推导；重复反馈 → 409，记录不存在 → 404，保存失败 → 500
+- 端点：`/` 与 `/api/vision/{health,gallery,status,photo,analyze,recapture,records,feedback}`
+- 阈值未配置 → 恒 `needs_review`；模型缺失/推理失败/阈值非法 → 明确错误码，不回退规则
+- 重新采集复用设备 `POST /api/camera/capture`，不改 Week 07 定时抓拍策略
+- **未做真机端到端**：设备地址需用户提供；替身测试不得冒充硬件验收
+- 详细见 `docs/vision-feedback.md`。
 
 ---
 
@@ -253,5 +275,5 @@ IDLE → SUBMITTED → RECEIVED → COMPLETED / FAILED
 | `feature/week06-voice-task-context` | **当前** Week 06 开发分支（基线 `f0653f0` = Week 05 HEAD）；HEAD `66ecbb6` + 本次文档收尾提交；任务上下文/取消/澄清/迟到结果隔离 + 生产计时 + ESP32 仪表盘取消按钮与任务状态显示；voice server **99/99**、全量 **250 passed + 6 subtests**（2026-10-17）；ESP32↔PC 实机取消复测（generation 5→6，取消→反馈停止 **79 ms**）与 2026-10-14 实机取消联动（7→8）均通过；`origin/main` 已合并 PR #6 至 `28aa45c`，后续 3 个功能提交及本次文档提交尚未合并；中文 ASR 内容验收待补；`service/nl_to_task.py` 缺失，完整语音任务链路未验收 |
 | `feature/week07-vision-capture` | **当前** Week 07 开发分支（基线 `origin/main` `5aebea1`）；PC 端画面可用性基线 + 端侧 `esp_jpeg` 评估 + 四态采集反馈 API/UI；`pytest service/` 260 passed、固件构建成功；**未烧录、未实机验证** |
 | `origin/main` | **`333a697`**（Merge PR #8，Week 07 已合并）——2026-10-19 核实 |
-| `feature/week08-vision-feedback` | **当前** Week 08 开发分支（基线 `origin/main` `333a697`）；W8-1 视觉结果契约 + W8-2 本地 DBCNN ONNX 接入（相关测试 Anaconda 124 passed/1 skipped；隔离 venv 含真实推理 125 passed）；阈值校准与 W8-3 反馈闭环未完成；本地提交，未推送、未合并 |
+| `feature/week08-vision-feedback` | **当前** Week 08 开发分支（基线 `origin/main` `333a697`）；W8-1 视觉结果契约 + W8-2 本地 DBCNN ONNX 接入 + W8-3 本地反馈闭环（独立 `127.0.0.1:8090`、人工反馈、重采、记录/反馈关联）；视觉相关测试 Anaconda **204 passed/2 skipped**、隔离 venv 含真实推理 **206 passed**；阈值校准与真机设备端到端未完成；本地提交，未推送、未合并 |
 | `integration/week06-followup` | ⚠️ **历史遗留冗余分支**（`ea04269`）：`git diff origin/main integration/week06-followup` **为空**，内容已完全包含于 `origin/main`。**不得作为开发基线**；是否删除由用户决定 |

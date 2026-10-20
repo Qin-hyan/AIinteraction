@@ -4,11 +4,11 @@
 
 ---
 
-## 当前：Week 08 W8-2 — 本地 DBCNN 真实模型接入完成（阈值/反馈闭环待做）
+## 当前：Week 08 W8-3 — 本地视觉反馈闭环完成（阈值校准与真机端到端待做）
 
 **分支**: `feature/week08-vision-feedback`（基线 `origin/main` `333a697`，PR #8 已合并 Week 07）
-**阶段**: 🟡 **W8-1 完成**（契约 + 52 项单元测试）；**W8-2 完成本地 DBCNN ONNX 真实推理接入**；⏳ 阈值校准、W8-3 反馈/重采/纠错未完成
-**详见**: `weeks/week08/STATE.md` 第 4/5 节 / `TEST_LOG.md`「L」「M」/ `DECISIONS.md` D011、D012 / `docs/vision-dbcnn.md`
+**阶段**: 🟢 **W8-1 契约 / W8-2 本地 DBCNN 推理 / W8-3 反馈闭环均已实现**；⏳ 阈值校准、真实设备端到端、更多真值样例未完成
+**详见**: `weeks/week08/STATE.md` 第 4/5/6 节 / `TEST_LOG.md`「L」「M」「N」/ `DECISIONS.md` D011–D013 / `docs/vision-dbcnn.md`、`docs/vision-feedback.md`
 
 **W8-1 已完成（有证据）**:
 - `service/vision_result.py::build_vision_result()`：`request_id / label / score / model_version / decision / reject_reason / created_at` 契约；`decision ∈ {ok, low_score, needs_review, unknown}`（`needs_review` 仅由仅分数模型在阈值未配置时产生）
@@ -26,7 +26,15 @@
 - 测试：Anaconda 相关单元测试 **124 passed, 1 skipped**；隔离 venv 含真实 ONNX 冒烟 **125 passed**
 - 依赖：`requirements-vision.txt` 增加 `onnxruntime==1.22.1`、`opencv-python-headless==5.0.0.93`；模型/外部权重留在 `.workbuddy/`（不提交）
 
-**W8-2 未完成 / W8-3 待做**: 阈值校准与正式默认值（**不得自造**）、更多带真值的真实样本、模型卡 0–100 与实测 0–1 差异解释、原始权重许可核实、低分/未知反馈、重新采集、人工纠正 UI、HTTP/设备端集成
+**W8-3 已完成（有证据）**:
+- `service/vision_feedback.py`：真实推理 + 仅追加记录（`records.jsonl`/`feedback.jsonl`）+ 设备代理 + 反馈校验；反馈与模型/规则来源分离，图像字节不落盘
+- `service/vision_feedback_server.py`：独立本地服务（默认 `127.0.0.1:8090`，仅标准库）；页面分列展示 DBCNN 原始分数/版本、判定状态、Week 07 规则诊断、输入引用与阅读限制；人工反馈（可用/不可用/无法判断 + 原因）；重新采集复用设备 `POST /api/camera/capture`
+- 阈值未配置时恒为 `needs_review`（不使用 0.5 默认值），页面显著提示分数未校准；反馈重复 409、非法输入 400、记录不存在 404、保存失败 500
+- 真实进程冒烟：`ok.jpg` = `0.7561315298080444`、`occluded.jpg` = `0.25810927152633667`，规则 `ok` / `too_dark`，均为 `needs_review`；中文反馈 UTF-8 回读一致
+- 测试：Anaconda 视觉相关 **204 passed, 2 skipped**；隔离 venv 含真实 ONNX **206 passed**
+- 未改固件、未改 Week 07 定时抓拍策略、未新增依赖、未上传图片/未调用云端
+
+**W8-3 未完成 / Week 08 仍开放**: 阈值校准与正式默认值（**不得自造**）、真实设备端到端（需设备地址与人工操作）、更多带真值的样例、模型卡 0–100 与实测 0–1 差异解释、原始权重许可核实
 
 ---
 
