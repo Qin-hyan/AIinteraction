@@ -333,3 +333,76 @@
 - 交付物「正常、低分、错误和未知样例对照」仅部分完成：正常/较低分数有真实样例，错误/未知缺少有质量真值的实拍对照；该缺口与阈值校准等一并作为后续补验项保留，**不得表述为已通过**。
 - 官方页面为 V2.1 修订建议稿、完整教案未发布；若后续官方要求更新，需重新核对并补验。
 
+---
+
+## 11. 收尾修复：PC 服务自启动 + Dashboard 导航整改（2026-10-22）
+
+**分支**: `feature/week08-service-autostart`（基于 `feature/week08-vision-feedback`；未合并 `main`）
+**目的**: 解决"打开仪表盘仍要手动启动语音 8080 / 视觉 8090"，并整理内嵌页面导航。
+
+### 11.1 问题与约束
+
+- 浏览器安全模型**不允许**网页直接启动本机进程；不能用隐藏命令执行、不能注册危险协议。
+- 原流程：先开两个终端跑 `voice_control_server.py` / `vision_feedback_server.py`，再打开 `http://<device>/`。
+- 目标：打开页面即触发服务就绪，且不伪造状态、不误杀外部服务、不把启动能力暴露到局域网。
+
+### 11.2 实现
+
+| 文件 | 改动 |
+|---|---|
+| `service/service_launcher.py` | 新增仅 `127.0.0.1:8079` 的启动器；健康检查 + 幂等启动/停止/重启；状态区分 `running / running_external / starting / stopped / failed / port_conflict / missing_python`；Windows 杀进程树 |
+| `scripts/start_services.ps1/.cmd` | 后台启动启动器；已在运行则直接退出 |
+| `scripts/install_autostart.ps1` / `uninstall_autostart.ps1` | 当前用户 Startup 文件夹的一次性自启动安装/卸载（无管理员、无服务/计划任务/注册表） |
+| `service/launcher.config.example.json` | 本机 Python/模型/端口配置模板；真实 `launcher.config.json` 被 `.gitignore` 忽略 |
+| `main/http_server.c` | 新增「⚙️ 运行环境与 PC 服务」面板；`init()` 调 `pcEnsureServices(false)` + 15 s 轮询；启动器晚就绪时发现 `stopped` 补 ensure；导航顺序/滚动高亮/底部高亮/移除死链 |
+| `main/Kconfig.projbuild` | 新增 `CONFIG_PC_LAUNCHER_URL`，默认 `http://127.0.0.1:8079` |
+| `docs/service-launcher.md` | 架构、API、状态、安全边界、配置与验证说明 |
+
+**过程中发现并修复的真实缺陷**：
+
+1. `root_handler` 的模板替换循环仍为 `i < 2`，导致 `__PC_LAUNCHER_URL__` 残留在页面、启动器永不调用；已改为 3，并计算/替换一致。
+2. 虚拟环境 `python.exe` 会再启动真实解释器子进程；仅 `terminate()` 父进程会留下占用端口的孤儿。改为 `taskkill /T /F` 杀进程树，实测停止后 8080 立即释放。
+3. 页面底部无法把最后一张卡滚到顶部，滚动高亮停留在上一项；改为检测到底部时高亮最后一项。
+
+### 11.3 验证证据
+
+| 层级 | 命令/操作 | 结果 |
+|---|---|---|
+| 单元/集成 | `python -m pytest service/test_service_launcher.py -q` | **31 passed** |
+| 静态/UI | `python -m pytest service/test_dashboard_launcher_ui.py service/test_dashboard_vision_ui.py -q` | **22 passed** |
+| 回归 | `python -m pytest service/ --ignore=service/test_asr_whisper.py -q` | **509 passed, 2 skipped**；进程退出仍打印已知 Anaconda `torch` DLL `access violation`（预存环境问题），退出码 1 |
+| 语音回归 | week05 venv `pytest service/test_voice_control_server.py -q` | **99 passed** |
+| 构建 | `idf.py build` | PASS，`week02-sensor-collect.bin` 0x115fc0 |
+| 烧录 | `idf.py -p COM10 app-flash` | Hash verified；COM10 重新检测为 ESP32-S3 USB Serial/JTAG |
+| 真实页面（Agent 操作 Chrome Headless） | 两个服务先停止 → 打开 `http://<device-ip>/` | `/api/services/ensure` 200，语音/视觉自动启动，面板"服务就绪" |
+| 导航 | 9 个导航项逐一点击 + 滚到底 + 390 px 视口 | 每项 active 正确；底部高亮「报文监视」；移动端横向滚动正常 |
+| 自启动安装 | `scripts/install_autostart.ps1` | Startup 文件已创建；**登录触发未验证**（需下一次注销/登录） |
+
+### 11.4 证据边界
+
+- **能证明**：服务全停时打开页面会自动拉起两者；启动器能识别外部服务、端口冲突与解释器缺失；导航顺序与高亮在真实页面上正确；固件已烧录并启动。
+- **不能证明**：注销/重新登录后 Startup 一定触发（仅验证文件安装与手动执行）；语音识别质量、视觉模型准确率/阈值校准未改变；未替换用户对语音/视觉功能的实机验收。
+- 语音服务是否监听 `0.0.0.0` 仍由本机配置决定；默认回环，`0.0.0.0` 会暴露到局域网且服务无认证。
+
+### 11.5 文件清单
+
+```
+service/service_launcher.py
+service/test_service_launcher.py
+service/test_dashboard_launcher_ui.py
+service/launcher.config.example.json
+scripts/start_services.ps1
+scripts/start_services.cmd
+scripts/install_autostart.ps1
+scripts/uninstall_autostart.ps1
+main/http_server.c
+main/Kconfig.projbuild
+docs/service-launcher.md
+README.md
+PROJECT_STATE.md
+AGENT_MEMORY.md
+DECISIONS.md
+TEST_LOG.md
+weeks/week08/STATE.md
+.gitignore
+```

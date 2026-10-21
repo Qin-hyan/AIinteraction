@@ -1553,3 +1553,56 @@ idf.py build
 
 **不能证明**：阈值正确性（仍无生产阈值）；模型准确率/泛化能力；错误/未知类别的真实样例已覆盖；连续帧/并发/长期运行稳定性。
 
+---
+
+## 2026-10-22 S. Week 08 收尾修复：PC 服务自启动 + Dashboard 导航整改
+
+**分支**: `feature/week08-service-autostart`（基于 `feature/week08-vision-feedback`，未合并 `main`）
+**范围**: `service/service_launcher.py`、`scripts/`、Dashboard 导航与服务面板、Kconfig；不改语音/视觉服务 API、模型、存储格式。
+
+### S.1 新增测试（实际执行）
+
+| 命令 | 结果 | 覆盖 |
+|---|---|---|
+| `python -m pytest service/test_service_launcher.py -q` | **31 passed in 35.44s**（2026-10-22；413 用例另连续 10 次单测全 PASS） | 幂等启动、重复 ensure、外部服务、停止/重启、端口冲突、解释器缺失/启动失败详情、启动超时清理、停止后端口复核、监听/探测地址一致、功能受限识别、未知服务、HTTP/CORS/PNA、Content-Type、请求体上限、私网来源 stop/restart 拒绝、跨源状态脱敏、配置与监听地址解析、回环绑定 |
+| `python -m pytest service/test_dashboard_launcher_ui.py service/test_dashboard_vision_ui.py -q` | **22 passed in 0.78s** | 导航顺序与 DOM 一致、无死链、滚动/点击/底部高亮、页面加载调用 `/api/services/ensure`、15 s 轮询、失败提示、loopback 占位符、模板 3 占位符替换回归、JS `node --check` |
+| `python -m pytest service/ --ignore=service/test_asr_whisper.py -q` | **509 passed, 2 skipped in 82.19s**；摘要通过但进程退出码 1，原因是已知 Anaconda `torch` DLL `access violation`（预存环境问题，非本次改动；栈来自 `asr_whisper._resolve_device`） | 全量回归（不含 ASR 文件）；视觉/语音/启动器/面板测试 |
+| week05 venv `pytest service/test_voice_control_server.py -q` | **99 passed in 5.66s** | 语音服务回归（干净退出） |
+
+> 说明：`Windows fatal exception: access violation` 在本次回归中仍由 Anaconda 的 `torch` 导入触发；`AGENT_MEMORY.md` 已记录该预存环境问题。不得把该退出码写成启动器/面板测试失败。
+
+### S.2 固件构建与烧录（实际执行）
+
+| 步骤 | 命令 | 结果 |
+|---|---|---|
+| 构建 | `idf.py build` | PASS；`week02-sensor-collect.bin` = `0x115fc0`，分区剩余 64% |
+| 串口检测 | `Get-CimInstance Win32_SerialPort` | COM10 = USB 串行设备（ESP32-S3 USB Serial/JTAG，VID 303A/PID 1001） |
+| 烧录 | `idf.py -p COM10 app-flash` | Hash verified；重启后 `HTTP ready`、设备 IP `<device-ip>` |
+| 模板注入 | `GET http://<device-ip>/` | `__VOICE_PC_URL__` / `__VISION_API_URL__` / `__PC_LAUNCHER_URL__` 残留均为 **0** |
+
+**修复记录**：首次烧录后发现 `__PC_LAUNCHER_URL__` 仍残留，根因是 `root_handler` 的计算循环已改为 3、替换循环仍为 `i < 2`；改为 3 后重新构建、烧录并验证残留为 0。
+
+### S.3 真实进程与页面端到端（Agent 执行，Chrome Headless）
+
+| 场景 | 操作 | 结果 |
+|---|---|---|
+| 启动器启动语音 | `scripts/start_services.ps1` → `POST /api/services/ensure` | 语音 8080 `running`，managed=true；视觉 8090 先识别为 `running_external` |
+| 进程树停止 | `POST /api/services/voice/stop` | 8080 立即释放；验证 `taskkill /T` 覆盖 venv 父/子进程 |
+| 管理视觉 | 停止外部视觉进程 → `ensure` | 视觉 8090 `running`，模型 `dbcnn_onnx_v1`、权重存在、记录目录不变 |
+| **页面自动启动（核心）** | 先停语音+视觉 → 打开 `http://<device-ip>/` | `POST http://127.0.0.1:8079/api/services/ensure` 返回 **200**；页面显示"服务就绪"；8080/8090 均重新监听 |
+| 导航 | 9 项逐一点击 + 滚到底 + 390 px 视口 | 每项 active 正确；底部「📋 报文监视」高亮；移动端 `scrollWidth=1003 > 390` 横向滚动正常 |
+| 启动器控制台 | `GET http://127.0.0.1:8079/` | HTML 200，显示两个服务状态 |
+
+**截图/JSON 证据（本地忽略目录）**：`.workbuddy/artifacts/w08-autostart-top.png`、`w08-autostart-vision.png`、`w08-autostart-mobile.png`、`w08-autostart-e2e.json`、`w08-autostart-nav.json`。
+
+### S.4 自启动安装（实际执行，触发待观察）
+
+- `powershell -File scripts/install_autostart.ps1` → 已创建 `C:\Users\<user>\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\AIinteraction-Services.lnk`（Unicode 快捷方式；旧的 `.cmd` 已被移除）
+- 脚本内容为调用 `scripts/start_services.ps1`，无需管理员；`uninstall_autostart.ps1` 可删除。
+- **未验证**：注销→重新登录后的实际触发；需下一次登录观察 `/api/launcher/health` 与 8079 端口。
+
+### S.5 能证明 / 不能证明
+
+**能证明**：两个服务全部停止时，打开真实设备 Dashboard 会通过回环启动器自动拉起语音与视觉；启动器能区分外部服务/端口冲突/解释器缺失；导航顺序与高亮在 Chrome 中按预期工作；固件已构建、烧录并运行。
+
+**不能证明**：登录自启动的触发（仅验证文件安装与手动执行）；语音/视觉功能质量或模型阈值；长期稳定性；用户对新增面板的主观体验验收（Agent 已做功能与视觉检查，未替代用户验收）。

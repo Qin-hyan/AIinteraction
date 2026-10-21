@@ -18,6 +18,8 @@
 - **CSV 导出按钮**：将浏览器本地持久化的有效观测一键导出为 `esp32_obs_YYYY-MM-DD_hh-mm-ss.csv`
 - **🎙 语音交互面板**：仪表盘内置语音控制（开始/停止录音/取消任务），实时显示录音帧数、时长、ASR 识别文本与语音任务状态（`state`/`generation`/`request_id`）；直接调用 PC 端语音服务 `/api/voice/{start,stop,status,cancel}`
 - **🔍 视觉反馈面板**：在原仪表盘内对设备照片或本地 JPEG 做一次真实 DBCNN 质量评分，展示原始分数 / 模型版本 / Week 07 规则诊断 / 未校准状态，并支持「可用 / 不可用 / 无法判断 + 原因」人工反馈与重新采集；分数未校准，不代表准确率或遮挡分类
+- **⚙️ 运行环境面板**：打开页面时自动调用本机启动器，幂等启动语音与视觉服务，显示真实状态、端口与日志路径；启动器未运行时给出明确的手动启动命令
+- **统一导航**：导航顺序与页面卡片一致，滚动高亮当前区块，移除"外场与导出"占位死链，移动端可横向滚动
 
 仪表盘使用深色主题，所有字段缺失或空值时显示 `—`，不会出现 `undefined` 或 `NaN`。
 
@@ -163,6 +165,45 @@ idf.py -p COM端口 flash monitor
 5. 点击"📥 导出 CSV" → 下载本地持久化的有效观测记录
 6. 可使用 Python 工具链（`service/`）以 JSON 任务契约方式查询或采集
 
+### PC 服务自动启动（语音 8080 / 视觉 8090）
+
+浏览器不能直接启动电脑上的 Python 进程。为了让"打开仪表盘就能用语音和视觉"成立，仓库提供一个仅监听 `127.0.0.1` 的本地启动器：
+
+```
+浏览器打开 ESP32 仪表盘
+        │
+        ├─ POST http://127.0.0.1:8079/api/services/ensure
+        │        └─ 启动器检查语音 8080 / 视觉 8090，未运行才启动（幂等）
+        │
+        └─ 页面每 15 s 轮询 /api/services 显示真实状态
+```
+
+**一次性安装开机自启动（当前用户，无需管理员）**：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_autostart.ps1
+```
+
+安装后登录时由 Startup 条目启动启动器；之后打开仪表盘，页面会自动确保语音/视觉服务就绪。（本次已验证安装与手动执行，**注销→重新登录的实际触发需下一次登录观察**。）卸载：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\uninstall_autostart.ps1
+```
+
+**手动启动（不安装自启动时）**：
+
+```powershell
+.\scripts\start_services.cmd
+# 或
+python -m service.service_launcher
+```
+
+启动器控制台：`http://127.0.0.1:8079/`（可查看两个服务的真实状态、日志路径，并手动启动/重启）。
+
+**配置**：复制 `service/launcher.config.example.json` 为 `service/launcher.config.json`（已被 `.gitignore` 忽略），按本机虚拟环境填写 Python 路径、模型路径和端口。语音默认只监听回环；如果仪表盘的语音地址是局域网 IP（ESP32 实体 PLAY 键需要），把 `services.voice.host` 显式设为 `0.0.0.0`，并只在可信局域网使用。
+
+> 启动器**只监听回环地址**，但 ESP32 页面本身来自私网地址，因此 `ensure/start` 允许私网来源；`stop/restart` 只接受本机回环来源。这意味着同一局域网内被攻陷/恶意的网页最多能让本机服务启动，不能停止/重启、执行任意命令或读取凭据。启动器无认证；语音服务 `0.0.0.0` 绑定会暴露到局域网，属于现有 Week 05 链路的要求，不是新增默认值。启动器不会停止由其他终端启动的服务（页面显示"运行中（外部启动）"）。
+
 ---
 
 ## 开发进度与验证状态
@@ -283,6 +324,7 @@ idf.py -p COM端口 flash monitor
 - 模型权重与外部数据文件留在本地忽略目录 `.workbuddy/`，**不纳入 Git**；源码不依赖提交模型二进制。
 - 模型来源、配置、许可注意事项与限制见 [docs/vision-dbcnn.md](docs/vision-dbcnn.md)。
 - DBCNN 只输出通用质量分数，**不是遮挡类别或准确率**；0~1 实际输出与模型卡 0~100 标称的差异未解释，记录为已知元数据不一致。
+- **2026-10-22 收尾修复**：`service/service_launcher.py` + `scripts/` 增加 PC 服务自动启动；Dashboard 新增「运行环境」面板并统一导航顺序/滚动高亮。修复了此前打开页面仍需手动开两个终端的问题。详见 `weeks/week08/STATE.md` 第 11 节与 `docs/service-launcher.md`。
 
 
 ### 仍待补验
@@ -345,8 +387,11 @@ AIinteraction/
 │   ├── vision_result.py      # Week 08：结构化视觉结果契约与拒识语义
 │   ├── vision_dbcnn.py       # Week 08：DBCNN ONNX 质量分数适配器（CPU）
 │   ├── vision_analysis.py    # Week 08：DBCNN + 规则诊断组合入口 / 本地 CLI
+│   ├── service_launcher.py   # Week 08 收尾：回环启动器，页面打开时幂等启动语音/视觉
+│   ├── launcher.config.example.json # 启动器本机配置模板（真实配置被 gitignore）
 │   ├── requirements-*.txt    # Week 05/07/08：PC 端音频/ASR/视觉依赖清单
-│   └── test_*.py             # 单元/集成测试（Week 04 共 102 项；Week 05 追加 ASR/录音/服务；Week 06 voice server 99/99、全量 250 passed + 6 subtests；Week 08 相关测试 125 passed）
+│   └── test_*.py             # 单元/集成测试（Week 04 共 102 项；Week 05 追加 ASR/录音/服务；Week 06 voice server 99/99；Week 08 相关测试 125 passed；2026-10-22 新增启动器 31 项 + 面板/导航 22 项）
+├── scripts/                  # 启动器一键启动与 Startup 自启动安装/卸载
 ├── partitions.csv            # 8MB Flash 分区表
 ├── CMakeLists.txt            # 顶层 CMake 项目
 ├── sdkconfig.defaults        # 公开配置模板（含 Wi-Fi 占位符）
@@ -357,7 +402,8 @@ AIinteraction/
 ├── PROJECT_STATE.md          # 当前进度
 ├── DECISIONS.md              # 技术决策
 ├── docs/
-│   └── vision-dbcnn.md       # Week 08：DBCNN 模型配置/来源/许可/限制
+│   ├── vision-dbcnn.md       # Week 08：DBCNN 模型配置/来源/许可/限制
+│   └── service-launcher.md   # Week 08 收尾：PC 服务启动器架构/API/安全边界
 └── weeks/                    # 每周详细状态
     ├── week01/STATE.md
     ├── week02/STATE.md
@@ -384,6 +430,7 @@ AIinteraction/
 | [weeks/week07/STATE.md](weeks/week07/STATE.md) | Week 07 详细状态（分支 `feature/week07-vision-capture`：按需抓拍、四态反馈、画面可用性/遮挡、最少保留与显式清除；实机验收含 ok/too_dark 与当堂验证①；真实 `failed` 样例待补） |
 | [weeks/week08/STATE.md](weeks/week08/STATE.md) | Week 08 详细状态（结构化视觉结果契约、DBCNN ONNX 真实分数、来源分离与阈值未配置语义、反馈闭环、并入原 Dashboard；真实设备验收已记录；阈值校准 / 多真值样本 / 权重许可 / 稳定性仍未完成） |
 | [docs/vision-dbcnn.md](docs/vision-dbcnn.md) | DBCNN 模型配置、来源、许可注意事项、真实推理证据与已知限制 |
+| [docs/service-launcher.md](docs/service-launcher.md) | PC 服务启动器：架构、API、状态、安全边界、配置、自启动与验证边界 |
 | [每周计划/](每周计划/) | 18 周课程计划 HTML |
 
 ### HTTP API 速查

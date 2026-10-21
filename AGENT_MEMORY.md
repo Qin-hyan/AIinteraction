@@ -67,6 +67,7 @@ AIinteraction/
 | 视觉分析组合入口 | `service/vision_analysis.py` | ✅ Week 08 | DBCNN + 可选 Week 07 规则诊断；来源分离；未配置阈值 → `needs_review`；CLI 不新开端口 |
 | 视觉反馈领域层 | `service/vision_feedback.py` | ✅ Week 08 W8-3 | 真实推理 → 仅追加 `records.jsonl`；人工反馈独立 `feedback.jsonl`；设备代理；反馈词表校验；图像不落盘 |
 | 视觉反馈本地服务 | `service/vision_feedback_server.py` | ✅ Week 08 W8-3/W8-4 | 独立 `127.0.0.1:8090`（仅标准库）；W8-4 起 **API-only（无用户页面）** + 有边界 CORS/PNA，端点错误码统一；默认不自动启动、无认证 |
+| PC 服务启动器 | `service/service_launcher.py` | ✅ Week 08 收尾（2026-10-22） | 仅 `127.0.0.1:8079`；Dashboard 打开时幂等 ensure 语音 8080 / 视觉 8090；只允许回环绑定、JSON+PNA、固定命令；外部服务不误杀；`scripts/` 提供手动启动与当前用户 Startup 自启动 |
 
 ---
 
@@ -174,6 +175,17 @@ AIinteraction/
 - 中文映射（未知值原样回退）：`needs_review`→「待人工确认（未校准）」、`low_detail`→「画面细节不足」、`usable/unusable/undetermined`→「可用/不可用/无法判断」
 - 主分数四位小数，完整原值保留在「查看详细信息」；不改 API/枚举/模型/存储格式
 - 固件 `861ae64` 已烧录（Hash verified）并由用户实机验收
+
+### 服务自启动与导航整改（2026-10-22，长期事实）
+
+- 浏览器不能启动本机进程；采用**本地启动器** `service/service_launcher.py`（仅 `127.0.0.1:8079`），Dashboard 打开时 `POST /api/services/ensure`，页面每 15 s 轮询 `GET /api/services`
+- 启动器只允许回环绑定；POST 必须 `application/json`；Origin 仅回环/私网/链路本地；支持 PNA；固定服务规格，HTTP 不能传任意命令
+- 状态必须区分 `running` / `running_external` / `starting` / `stopped` / `failed` / `port_conflict` / `missing_python`；**健康检查通过才算运行**，端口占用不得写成已启动
+- 停止受管服务必须杀进程树（Windows 虚拟环境 `python.exe` 会再起真实解释器子进程），使用 `taskkill /PID <pid> /T /F`；外部服务拒绝 stop/restart（409）
+- 语音是否监听 `0.0.0.0` 由本地 `service/launcher.config.json`（gitignored）决定；默认回环。ESP32 实体 PLAY 键/局域网访问才需要 `0.0.0.0`
+- 自启动只写当前用户 Startup 文件夹的一个 `.cmd`，不建 Windows 服务/计划任务/注册表；`scripts/uninstall_autostart.ps1` 可撤销
+- Dashboard 模板有 3 个占位符（`__VOICE_PC_URL__` / `__VISION_API_URL__` / `__PC_LAUNCHER_URL__`），`root_handler` 的**计算与替换循环都必须是 3**，否则页面残留占位符、启动器不会调用
+- 导航顺序必须与卡片 DOM 顺序一致；底部无法把最后一张卡滚到顶部时，滚动高亮要显式选中最后一项
 
 ---
 

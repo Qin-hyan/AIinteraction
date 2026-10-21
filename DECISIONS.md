@@ -188,3 +188,19 @@
 - **原因**: 课程要求区分预测标签、分数、拒识和模型版本；未校准的模型分数不得当作准确率，也不得把规则诊断混作模型分类。阈值未校准时最诚实的表达是「需要复核」，而不是自造默认门槛。
 - **影响**: W8-3 的反馈/重采/纠错必须读取 `decision` / `reject_reason` / `review_required`，不得把 `needs_review` 显示为 `ok`；正式阈值需用户提供校准依据后再配置。
 - **证据**: `service/vision_dbcnn.py`、`service/vision_analysis.py`、`service/vision_result.py`、`docs/vision-dbcnn.md`；TEST_LOG 2026-10-19 M 节。
+
+## D014 — Week 08 收尾：浏览器页面通过回环启动器自动确保 PC 服务 ——【已确认】
+
+- **日期**: 2026-10-22
+- **决定**:
+  1. **不试图让浏览器直接启动进程**：浏览器安全模型不允许；不注册自定义 URL 协议、不使用隐藏的本地命令执行页面。
+  2. **新增仅回环的本地启动器** `service/service_launcher.py`（默认 `127.0.0.1:8079`）：Dashboard 打开时调用幂等 `POST /api/services/ensure`，由启动器健康检查后按需启动语音 8080 / 视觉 8090。
+  3. **启动器只能绑定回环地址**；POST 必须 `application/json`，Origin 只允许回环/私网/链路本地，支持 PNA；HTTP 请求不能传入任意命令或模块。
+  4. **只管理自己启动的进程**：外部终端启动的服务标记 `running_external`，拒绝 stop/restart（409）；端口被占用且健康检查不通过时返回 `port_conflict`，不误杀。
+  5. **停止必须杀进程树**：Windows 虚拟环境 `python.exe` 可能再启动真实解释器，使用 `taskkill /PID <pid> /T /F`，避免留下占用端口的孤儿子进程。
+  6. **自启动采用当前用户 Startup 文件夹**：一次性安装、无需管理员、可撤销；不创建 Windows 服务、计划任务或注册表项。
+  7. **语音绑定地址由本地配置显式决定**：默认回环；现有 ESP32 实体 PLAY 键/局域网页面需要 `0.0.0.0`，此时明确提示暴露风险与无认证。
+  8. **Dashboard 导航以页面 DOM 顺序为准**：顺序一致、滚动/点击高亮、移动端横向滚动、移除占位死链；不新增第二个页面。
+- **原因**: 原流程要求用户每次打开网页前手动开两个终端；把"服务是否就绪"交给页面自动 ensure，既符合浏览器限制，也不伪造启动结果。启动器仅有本机控制面，安全边界与视觉服务的 CORS/PNA 一致。
+- **影响**: 用户需一次性运行 `scripts/install_autostart.ps1`（或每次手动 `scripts/start_services.cmd`）；`service/launcher.config.json` 为机器本地配置，已被 `.gitignore` 忽略；服务启动失败必须显示真实错误，不得显示"已启动"。
+- **证据**: `service/service_launcher.py`、`service/test_service_launcher.py`、`service/test_dashboard_launcher_ui.py`、`scripts/`、`main/http_server.c`、`main/Kconfig.projbuild`、`docs/service-launcher.md`；TEST_LOG 2026-10-22 S 节。

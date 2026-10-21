@@ -4,6 +4,30 @@
 
 ---
 
+## 最新：Week 08 服务自启动与导航整改（2026-10-22）
+
+**分支**: `feature/week08-service-autostart`（基于 `feature/week08-vision-feedback`；**未合并 `main`**）
+**阶段**: ✅ 代码、测试、构建、烧录与浏览器端到端验证完成；⏳ "注销→重新登录"后的 Startup 触发需下一次登录观察
+**目标**: 解决打开 Dashboard 仍需手动启动语音 8080 / 视觉 8090 的问题，并整改内嵌页面导航
+
+**已完成**:
+- `service/service_launcher.py`：仅监听 `127.0.0.1:8079` 的本地启动器，幂等启动/检查/停止/重启语音与视觉服务；健康检查通过才算 running；外部启动的服务不误杀；端口冲突、解释器缺失、启动超时明确报错
+- `scripts/start_services.ps1|cmd`、`install_autostart.ps1`、`uninstall_autostart.ps1`：一键后台启动与当前用户 Startup 自启动（不建 Windows 服务/计划任务/注册表）
+- Dashboard 新增「⚙️ 运行环境与 PC 服务」面板；页面加载调用 `POST /api/services/ensure` 并每 15 s 轮询状态；启动器晚于页面就绪时，发现 `stopped` 会补一次 ensure
+- 导航整改：顺序与卡片一致（运行环境→控制中心→实时数据→图像采集→语音→视觉反馈→报文监视），滚动/点击高亮，移动端横向滚动，移除"外场与导出"死链
+- 固件 Kconfig 新增 `PC_LAUNCHER_URL`（默认 `http://127.0.0.1:8079`）；修复模板替换只处理 2 个占位符导致 PC 启动器 URL 未注入的问题
+
+**验证证据**:
+- `service/test_service_launcher.py`：31 passed（幂等/外部服务/端口冲突/启动超时清理/停止后端口复核/监听地址一致性/功能受限识别/HTTP/CORS/PNA/来源分级与脱敏/配置）
+- `service/test_dashboard_launcher_ui.py` + `test_dashboard_vision_ui.py`：22 passed（导航顺序、自动 ensure、底部高亮、模板 3 占位符替换、JS `node --check`）
+- 全量 `pytest service/ --ignore=service/test_asr_whisper.py`：**509 passed, 2 skipped**；进程退出仍打印已知 Anaconda `torch` DLL `access violation`（预存环境问题，非本次改动）；`test_voice_control_server.py` 在 week05 venv 单独 **99 passed**
+- `idf.py build`：PASS；`idf.py -p COM10 app-flash`：Hash verified；启动版本正常
+- Chrome Headless 真机页面：两服务均停止后打开页面，`/api/services/ensure` 返回 200，语音 + 视觉自动启动并显示"服务就绪"；导航 7 项点击/滚动高亮与 390 px 视口通过
+
+**文档**: `docs/service-launcher.md`、`README.md` 快速开始、`weeks/week08/STATE.md` 第 11 节、`TEST_LOG.md`「S」节
+
+---
+
 ## 当前：Week 08 已收尾 — 视觉反馈闭环 + 中文化面板（2026-10-21 结项）
 
 **分支**: `feature/week08-vision-feedback`（基线 `origin/main` `333a697`；功能/固件提交 `861ae64`，文档收尾提交见本分支最新提交（`git log -1`）；已推送 `origin`，**未合并 `main`**）
