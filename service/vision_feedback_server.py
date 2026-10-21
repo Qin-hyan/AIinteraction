@@ -11,6 +11,9 @@ vision_feedback_server.py — Week 08 W8-3: 本地视觉反馈闭环 API 服务
       POST /api/vision/analyze       本地 JPEG（请求体）或设备照片（`{"index":N}`）
       POST /api/vision/recapture     代理设备 `/api/camera/capture`（按需抓拍）
       GET  /api/vision/records       最近分析记录 + 人工反馈历史
+      GET  /api/vision/events        视觉事件列表 + 当前 active
+      GET  /api/vision/events/active 当前最高优先级待响应事件
+      POST /api/vision/events/respond 确认/忽略/稍后处理事件
       POST /api/vision/feedback      保存人工反馈（可用/不可用/无法判断 + 原因）
 
 跨源：
@@ -51,6 +54,7 @@ from typing import Any, Optional
 from urllib.parse import parse_qs, urlsplit
 
 from . import vision_feedback as vf
+from . import vision_event as ve
 from .vision_dbcnn import (
     ENV_MODEL_PATH,
     ENV_MODEL_VERSION,
@@ -77,6 +81,7 @@ JSON_ROUTES = {
     "/api/vision/analyze",
     "/api/vision/recapture",
     "/api/vision/feedback",
+    "/api/vision/events/respond",
 }
 GET_ROUTES = {
     "/api/vision/health",
@@ -84,6 +89,8 @@ GET_ROUTES = {
     "/api/vision/status",
     "/api/vision/photo",
     "/api/vision/records",
+    "/api/vision/events",
+    "/api/vision/events/active",
 }
 
 LOGGER = logging.getLogger("vision.feedback")
@@ -190,6 +197,16 @@ def map_exception(exc: BaseException) -> tuple[int, str, dict[str, Any]]:
         return 409, "duplicate_feedback", {}
     if isinstance(exc, vf.FeedbackStoreError):
         return 500, "storage_error", {}
+    if isinstance(exc, ve.VisionEventValidationError):
+        return 400, "invalid_event_response", {}
+    if isinstance(exc, ve.VisionEventNotFound):
+        return 404, "event_not_found", {}
+    if isinstance(exc, ve.VisionEventConflict):
+        return 409, "event_state_conflict", {}
+    if isinstance(exc, ve.VisionEventStoreError):
+        return 500, "event_storage_error", {}
+    if isinstance(exc, ve.VisionEventError):
+        return 500, "vision_event_error", {}
     if isinstance(exc, vf.VisionFeedbackError):
         return 500, "vision_feedback_error", {}
     if isinstance(exc, UnsupportedMediaType):
@@ -395,6 +412,13 @@ class VisionFeedbackHandler(BaseHTTPRequestHandler):
                 limit = self._query_int(query, "limit", default=20, maximum=200)
                 self._send_json(200, self.service.records(limit=limit))
                 return
+            if path == "/api/vision/events":
+                limit = self._query_int(query, "limit", default=20, maximum=200)
+                self._send_json(200, self.service.events(limit=limit))
+                return
+            if path == "/api/vision/events/active":
+                self._send_json(200, {"active": self.service.active_event()})
+                return
         else:
             if path == "/api/vision/analyze":
                 self._post_analyze()
@@ -410,6 +434,9 @@ class VisionFeedbackHandler(BaseHTTPRequestHandler):
                     self._post_feedback,
                     overrides={vf.FeedbackStoreError: "feedback_save_failed"},
                 )
+                return
+            if path == "/api/vision/events/respond":
+                self._guard(self._post_event_response)
                 return
 
         self._send_json(
@@ -478,6 +505,11 @@ class VisionFeedbackHandler(BaseHTTPRequestHandler):
         payload = self._json_body()
         event = self.service.submit_feedback(payload)
         self._send_json(201, {"saved": True, "feedback": event})
+
+    def _post_event_response(self) -> None:
+        payload = self._json_body()
+        event = self.service.respond_event(payload)
+        self._send_json(200, {"saved": True, "event": event})
 
 
 def create_server(

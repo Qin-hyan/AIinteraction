@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from . import vision_analysis
+from . import vision_event
 from .vision_dbcnn import (
     DEFAULT_MODEL_VERSION,
     ENV_MODEL_PATH,
@@ -618,11 +619,15 @@ class VisionFeedbackService:
         store: Optional[VisionFeedbackStore] = None,
         scorer_factory: Optional[Callable[[], Any]] = None,
         analyzer: Optional[Callable[..., dict[str, Any]]] = None,
+        event_service: Optional[vision_event.VisionEventService] = None,
     ) -> None:
         self.store = store or VisionFeedbackStore(data_dir)
         self.device = device if device is not None else DeviceClient()
         self._scorer_factory = scorer_factory or _default_scorer_factory
         self._analyzer = analyzer or vision_analysis.analyze_jpeg
+        self.event_service = event_service or vision_event.VisionEventService(
+            self.store.data_dir
+        )
         self._scorer: Any = None
         self._scorer_lock = threading.Lock()
 
@@ -696,6 +701,7 @@ class VisionFeedbackService:
                 "label_source": FEEDBACK_SOURCE,
             },
             "limits": {"max_input_bytes": MAX_INPUT_BYTES},
+            "events": self.event_service.health(),
             "disclaimers": list(DISCLAIMERS_BASE),
         }
 
@@ -770,6 +776,13 @@ class VisionFeedbackService:
             "disclaimers": disclaimers,
         }
         self.store.append_record(record)
+        try:
+            event = self.event_service.on_record(record)
+        except vision_event.VisionEventStoreError as exc:
+            record["event"] = None
+            record["event_error"] = str(exc)
+            return record
+        record["event"] = event
         return record
 
     def analyze_device_photo(self, index: int) -> dict[str, Any]:
@@ -864,6 +877,19 @@ class VisionFeedbackService:
                 }
             )
         return {"count": len(merged), "records": merged}
+
+    # ── Week 09 视觉事件 / 主动询问 ───────────
+
+    def events(self, limit: int = 20) -> dict[str, Any]:
+        """返回视觉事件列表与当前最高优先级待响应事件。"""
+        return self.event_service.list_events(limit=limit)
+
+    def active_event(self) -> Optional[dict[str, Any]]:
+        return self.event_service.active()
+
+    def respond_event(self, payload: Any) -> dict[str, Any]:
+        """确认 / 忽略 / 稍后处理一个视觉事件。"""
+        return self.event_service.respond(payload)
 
     # ── 设备代理（不改动设备端策略）──────────
 
