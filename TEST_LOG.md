@@ -1518,7 +1518,7 @@ idf.py build
 | 烧录 | `idf.py -p COM10 flash`（日志 `.workbuddy/logs/w8-5-flash.log`） |
 | 写入校验 | bootloader 20,928 B @0x0 / app 1,131,232 B @0x10000 / partition-table 3,072 B @0x8000，均 `Hash of data verified` |
 | 启动 | `.workbuddy/logs/w8-5-boot6.log`：`App version: week02-stable-103-g861ae64`；PSRAM test PASS、OV2640 检测、QMA6100P ACTIVE、Wi-Fi 已连接、`HTTP ready ... port 80` |
-| 版本对应 | `g861ae64` 与分支 HEAD 一致；烧录后未在本轮重新烧录或复位设备 |
+| 版本对应 | `g861ae64` 与烧录时的功能/固件提交一致（其后仅有文档收尾提交）；烧录后未在本轮重新烧录或复位设备 |
 
 ### R.2 用户实机浏览器验收（用户提供，Agent 未代操作）
 

@@ -6,7 +6,7 @@
 
 ## 当前：Week 08 已收尾 — 视觉反馈闭环 + 中文化面板（2026-10-21 结项）
 
-**分支**: `feature/week08-vision-feedback`（基线 `origin/main` `333a697`；HEAD `861ae64`，已推送同提交至 `origin/feature/week08-vision-feedback`，**未合并 `main`**）
+**分支**: `feature/week08-vision-feedback`（基线 `origin/main` `333a697`；功能/固件提交 `861ae64`，文档收尾提交见本分支最新提交（`git log -1`）；已推送 `origin`，**未合并 `main`**）
 **阶段**: ✅ **W8-1 契约 / W8-2 本地 DBCNN 推理 / W8-3 反馈闭环 / W8-4 并入 Dashboard / W8-5 面板中文化均已实现**；W8-4 与 W8-5 均通过用户实机验收；⏳ 阈值校准、多真值样本、权重许可、稳定性等作为后续补验/研究项保留（见下）
 **详见**: `weeks/week08/STATE.md` 第 7–10 节 / `TEST_LOG.md`「O」–「R」/ `DECISIONS.md` D011–D013 / `docs/vision-dbcnn.md`、`docs/vision-feedback.md`
 
@@ -157,7 +157,7 @@
 | | **Week 05** | **接通按键说话与语音播报** | 🟢 语音输入链路已完成实机双端闭环验证（Step 3I）；TTS 播报/LLM/全链路未完成（feature 分支） |
 | | **Week 06** | **让语音任务可以澄清与停止** | 🟢 核心开发完成（分支 `feature/week06-voice-task-context`，HEAD `66ecbb6` + 文档收尾，voice server **99/99**、全量 **250 passed + 6 subtests**）；✅ 实机取消/反馈停止复测（generation 5→6，取消→反馈停止 **79 ms**）；✅ 此前实机取消联动（7→8）；⏳ 中文 ASR 内容验收待补；⛔ NL→JSON 缺失，完整语音任务链路待验收 |
 | 单元3 | **Week 07** | **按需获取一张环境图像** | ✅ 已由 PR #8 合并至 `origin/main` `333a697`；按需抓拍、四态反馈、画面可用性、最少保留已实机验收；真实取帧失败 `failed` 样例待补 |
-| | **Week 08** | **把视觉推理结果变成可理解反馈** | ✅ 已收尾（分支 `feature/week08-vision-feedback` HEAD `861ae64`，已推送，**未合并 main**）；真实 DBCNN 推理 + 结构化拒识 + 重采/人工纠正 + Dashboard 中文化面板，W8-4/W8-5 已实机验收；阈值校准等列为后续补验 |
+| | **Week 08** | **把视觉推理结果变成可理解反馈** | ✅ 已收尾（分支 `feature/week08-vision-feedback`；功能/固件提交 `861ae64`，文档收尾提交见 `git log -1`；已推送，**未合并 main**）；真实 DBCNN 推理 + 结构化拒识 + 重采/人工纠正 + Dashboard 中文化面板，W8-4/W8-5 已实机验收；阈值校准等列为后续补验 |
 | | Week 09 | 用视觉事件触发一次主动询问 | ⏳ 未开始 |
 | 单元4 | Week 10-12 | 多源上下文与状态推断 | ⏳ 未开始 |
 | 单元5 | Week 13-15 | 边云协作与韧性通信 | ⏳ 未开始 |

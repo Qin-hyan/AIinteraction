@@ -430,7 +430,7 @@ IDLE → SUBMITTED(已提交·已受理) → RECEIVED(设备已接收)
 | `feature/week05-voice-interaction` | **已收尾**（作为 Week 06 基线 `f0653f0`）— Week 05 开发分支（基线 `7dd788b`）；HEAD `91959fb`；含完整功能实现：PC 音频采集/录音 HTTP 控制服务/本地 Whisper ASR 模块 + ESP32 PLAY 按键语音控制 + **ESP32 仪表盘 🎙 语音交互面板**；语音输入链路实机双端闭环验证通过（Step 3I）；真实中文 ASR/简体中文输出待人工验收；TTS/LLM/全链路播报未完成 |
 | `feature/week06-voice-task-context` | Week 06 开发分支（基线 `f0653f0` = Week 05 HEAD）；`test_voice_control_server.py` **99/99**、全量 **250 passed + 6 subtests** PASS；ESP32↔PC 实机取消复测与 2026-10-14 实机取消联动均通过；已由 PR #7 合并至 `origin/main` `5aebea1`；中文 ASR 准确率待补人工验收；NL→JSON 缺失，完整任务链路未验收 |
 | `feature/week07-vision-capture` | 已由 PR #8 合并至 `origin/main` `333a697`；按需抓拍/四态反馈/画面可用性/最少保留已实机验收 |
-| `feature/week08-vision-feedback` | **Week 08 已收尾** — 开发分支（基线 `origin/main` `333a697`）；HEAD `861ae64`（已推送同提交至 `origin/feature/week08-vision-feedback`）；W8-1 契约 + W8-2 本地 DBCNN + W8-3 反馈闭环 + W8-4 并入原 Dashboard + W8-5 中文化面板；W8-4/W8-5 均已实机验收；**未合并 `main`**；阈值校准 / 错误与未知样例对照 / 权重许可 / 稳定性列为后续补验 |
+| `feature/week08-vision-feedback` | **Week 08 已收尾** — 开发分支（基线 `origin/main` `333a697`）；功能/固件提交 `861ae64`（文档收尾提交见 `git log -1`；已推送同分支至 `origin`）；W8-1 契约 + W8-2 本地 DBCNN + W8-3 反馈闭环 + W8-4 并入原 Dashboard + W8-5 中文化面板；W8-4/W8-5 均已实机验收；**未合并 `main`**；阈值校准 / 错误与未知样例对照 / 权重许可 / 稳定性列为后续补验 |
 
 ---
 
