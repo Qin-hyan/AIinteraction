@@ -46,3 +46,6 @@ _*.c
 
 # Serial / diagnostic logs
 *.log
+
+# Local service launcher configuration (machine-specific paths)
+service/launcher.config.json

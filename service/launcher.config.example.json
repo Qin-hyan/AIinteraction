@@ -1,0 +1,24 @@
+{
+  "_comment": "复制为 service/launcher.config.json（已被 .gitignore 忽略）后按本机环境修改。不要提交真实路径或凭据。",
+  "host": "127.0.0.1",
+  "port": 8079,
+  "services": {
+    "voice": {
+      "python": "<仓库外语音虚拟环境>\\Scripts\\python.exe",
+      "host": "127.0.0.1",
+      "port": 8080,
+      "args": []
+    },
+    "vision": {
+      "python": "<视觉推理虚拟环境>\\Scripts\\python.exe",
+      "host": "127.0.0.1",
+      "port": 8090,
+      "args": [
+        "--model-path",
+        "<本地>\\dbcnn_model.onnx",
+        "--data-dir",
+        "<仓库>\\.workbuddy\\vision-feedback"
+      ]
+    }
+  }
+}
