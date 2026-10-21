@@ -1606,3 +1606,50 @@ idf.py build
 **能证明**：两个服务全部停止时，打开真实设备 Dashboard 会通过回环启动器自动拉起语音与视觉；启动器能区分外部服务/端口冲突/解释器缺失；导航顺序与高亮在 Chrome 中按预期工作；固件已构建、烧录并运行。
 
 **不能证明**：登录自启动的触发（仅验证文件安装与手动执行）；语音/视觉功能质量或模型阈值；长期稳定性；用户对新增面板的主观体验验收（Agent 已做功能与视觉检查，未替代用户验收）。
+
+---
+
+## 2026-10-22 T. Week 09 视觉事件触发主动询问
+
+**分支**: `feature/week09-proactive-vision-event`（基于 `feature/week08-service-autostart`，未合并 `main`）
+**环境**: 用户可能在睡觉，房间较暗/安静；暗光导致的 `too_dark/low_detail` 记录为环境观察，不调阈值、不强行修复。
+
+### T.1 自动化（实际执行）
+
+| 命令 | 结果 |
+|---|---|
+| `python -m pytest service/test_vision_event.py -q` | **29 passed** |
+| `python -m pytest service/test_vision_event_server.py -q` | **8 passed** |
+| `python -m pytest service/test_vision_feedback.py service/test_vision_feedback_server.py service/test_vision_event.py service/test_vision_event_server.py -q` | **137 passed, 1 skipped** |
+| `python -m pytest service/test_dashboard_week09_ui.py -q` | **7 passed**（含 JS `node --check`） |
+| `python -m pytest service/ --ignore=service/test_asr_whisper.py -q` | **553 passed, 2 skipped**；退出码 1 为已知 Anaconda torch DLL 问题 |
+
+覆盖：触发条件（`needs_review` 单独不触发）、优先级、同一记录去重、确认/忽略/稍后、冷却期 `suppressed`、跨实例持久化、非法动作/未知事件/重复响应、HTTP 事件列表/active/respond、Dashboard 面板字段与运行位置文案。
+
+### T.2 构建与烧录（实际执行）
+
+| 步骤 | 命令 | 结果 |
+|---|---|---|
+| 构建 | `idf.py build` | PASS；`week02-sensor-collect.bin` 0x1179c0，分区剩余 64% |
+| 串口检测 | COM10 | ESP32-S3 USB Serial/JTAG（重新检测） |
+| 烧录 | `idf.py -p COM10 app-flash` | Hash verified；启动后 HTTP 正常 |
+
+### T.3 真实设备技术冒烟（Agent，未人工核验）
+
+| 步骤 | 实际结果 |
+|---|---|
+| 当前环境抓拍（`req-493280-0001`） | `img_status=low_detail`，20,298 B |
+| 该 JPEG 送本地 DBCNN | `decision=needs_review`，score `0.4554949998855591`，规则 `low_detail` → 事件 pending（中） |
+| 本地 `occluded.jpg` 送本地 DBCNN | score `0.25810927152633667`，规则 `too_dark` → 事件 pending（高） |
+| `POST /api/vision/events/respond` 确认低优先级 | 200，`state=confirmed`；active 自动变为 `too_dark` |
+| Chrome Headless 打开真机页面 | 事件面板显示「画面过暗，可能影响判断，是否重拍？」、高优先级、关联记录、运行位置；无 JS console 错误 |
+| 页面点击「确认」 | 200；状态「已确认」，面板变为「无待处理事件」，历史表记录确认 |
+| 再次抓拍（`req-30856-0001`） | `low_detail`，score `0.4370` → 新 pending（中），用于保留待人工处理样例 |
+
+**环境观察**：暗光使画面被判 `low_detail/too_dark`；安静环境未做语音识别，不能据此判断 ASR 质量。未调阈值、未把分数写成准确率。
+
+### T.4 能证明 / 不能证明
+
+**能证明**：事件层按明确规则触发、优先级排序、确认/忽略/稍后状态与冷却在自动化中可复现；真实设备照片和本地图片能产生真实事件；Dashboard 能显示并提交确认；固件构建/烧录成功。
+
+**不能证明**：用户任务测试与体验验收（用户暂时无法操作）；真实 10 分钟冷却等待；语音+视觉+实体操作三者联动的用户任务；长期稳定性/并发；暗光阈值是否适合实际产品。

@@ -19,6 +19,7 @@
 - **🎙 语音交互面板**：仪表盘内置语音控制（开始/停止录音/取消任务），实时显示录音帧数、时长、ASR 识别文本与语音任务状态（`state`/`generation`/`request_id`）；直接调用 PC 端语音服务 `/api/voice/{start,stop,status,cancel}`
 - **🔍 视觉反馈面板**：在原仪表盘内对设备照片或本地 JPEG 做一次真实 DBCNN 质量评分，展示原始分数 / 模型版本 / Week 07 规则诊断 / 未校准状态，并支持「可用 / 不可用 / 无法判断 + 原因」人工反馈与重新采集；分数未校准，不代表准确率或遮挡分类
 - **⚙️ 运行环境面板**：打开页面时自动调用本机启动器，幂等启动语音与视觉服务，显示真实状态、端口与日志路径；启动器未运行时给出明确的手动启动命令
+- **⏰ 主动询问**：视觉规则/拒识证据触发一次确认/忽略/稍后询问；忽略后同类事件冷却 10 分钟、稍后 5 分钟；显示关联记录、设备请求号与实际运行位置
 - **统一导航**：导航顺序与页面卡片一致，滚动高亮当前区块，移除"外场与导出"占位死链，移动端可横向滚动
 
 仪表盘使用深色主题，所有字段缺失或空值时显示 `—`，不会出现 `undefined` 或 `NaN`。
@@ -327,6 +328,21 @@ python -m service.service_launcher
 - **2026-10-22 收尾修复**：`service/service_launcher.py` + `scripts/` 增加 PC 服务自动启动；Dashboard 新增「运行环境」面板并统一导航顺序/滚动高亮。修复了此前打开页面仍需手动开两个终端的问题。详见 `weeks/week08/STATE.md` 第 11 节与 `docs/service-launcher.md`。
 
 
+#### Week 09 — 用视觉事件触发一次主动询问 🟡（实现 + 自动化/技术冒烟完成；人工验收未完成）2026-10-22
+
+| 能力 | 状态 | 验证方式 |
+|------|------|---------|
+| 事件触发条件 | ✅ `unknown` / `low_score` / 规则 `invalid/too_dark/too_bright/low_contrast/low_detail`；`needs_review` 单独不触发 | 单元测试 |
+| 优先级 | ✅ 高（unknown/invalid/too_dark/too_bright）> 中（low_contrast/low_detail/low_score） | 单元 + 服务测试 |
+| 确认/忽略/稍后 | ✅ 确认无冷却；忽略 10 分钟、稍后 5 分钟；冷却期同类事件 `suppressed` | 单元 + 服务测试 |
+| 输入—结果—事件—响应关联 | ✅ `record_id` / `task_ref.request_id` / 来源 / 证据快照 | 服务 + 真实设备冒烟 |
+| Dashboard 主动询问面板 | ✅ 消息/优先级/关联记录/运行位置；确认/忽略/稍后/重新采集；历史表 | UI 静态 + 真实页面 |
+| 运行位置说明 | ✅ 设备 OV2640 或本地 JPEG → PC 本地 8090 DBCNN → 浏览器；无云端/VPS | 页面 + 文档 |
+| 人工体验验收 | ⏳ **未人工核验** | 用户暂时无法操作 |
+
+- 当前环境偏暗时，真实抓拍得到 `low_detail`（20,298 B，score `0.4555`）并触发事件；`occluded.jpg` 得到 `too_dark`（score `0.2581`）。这是环境观察，**未调阈值、未写成准确率**。
+- 事件层与 Week 08 人工反馈共用 `record_id`，不改变 DBCNN/规则/反馈格式。详见 [docs/vision-events.md](docs/vision-events.md) 与 `weeks/week09/STATE.md`。
+
 ### 仍待补验
 
 | 项目 | 说明 |
@@ -387,10 +403,11 @@ AIinteraction/
 │   ├── vision_result.py      # Week 08：结构化视觉结果契约与拒识语义
 │   ├── vision_dbcnn.py       # Week 08：DBCNN ONNX 质量分数适配器（CPU）
 │   ├── vision_analysis.py    # Week 08：DBCNN + 规则诊断组合入口 / 本地 CLI
+│   ├── vision_event.py       # Week 09：视觉事件触发、优先级、确认/忽略/冷却
 │   ├── service_launcher.py   # Week 08 收尾：回环启动器，页面打开时幂等启动语音/视觉
 │   ├── launcher.config.example.json # 启动器本机配置模板（真实配置被 gitignore）
 │   ├── requirements-*.txt    # Week 05/07/08：PC 端音频/ASR/视觉依赖清单
-│   └── test_*.py             # 单元/集成测试（Week 04 共 102 项；Week 05 追加 ASR/录音/服务；Week 06 voice server 99/99；Week 08 相关测试 125 passed；2026-10-22 新增启动器 31 项 + 面板/导航 22 项）
+│   └── test_*.py             # 单元/集成测试（Week 04 共 102 项；Week 05 追加 ASR/录音/服务；Week 06 voice server 99/99；Week 08 相关测试 125 passed；Week 09 事件/服务/UI 44 项；2026-10-22 启动器 31 项 + 面板/导航 22 项）
 ├── scripts/                  # 启动器一键启动与 Startup 自启动安装/卸载
 ├── partitions.csv            # 8MB Flash 分区表
 ├── CMakeLists.txt            # 顶层 CMake 项目
@@ -403,7 +420,8 @@ AIinteraction/
 ├── DECISIONS.md              # 技术决策
 ├── docs/
 │   ├── vision-dbcnn.md       # Week 08：DBCNN 模型配置/来源/许可/限制
-│   └── service-launcher.md   # Week 08 收尾：PC 服务启动器架构/API/安全边界
+│   ├── service-launcher.md   # Week 08 收尾：PC 服务启动器架构/API/安全边界
+│   └── vision-events.md      # Week 09：视觉事件/主动询问/冷却/API/边界
 └── weeks/                    # 每周详细状态
     ├── week01/STATE.md
     ├── week02/STATE.md
@@ -431,6 +449,7 @@ AIinteraction/
 | [weeks/week08/STATE.md](weeks/week08/STATE.md) | Week 08 详细状态（结构化视觉结果契约、DBCNN ONNX 真实分数、来源分离与阈值未配置语义、反馈闭环、并入原 Dashboard；真实设备验收已记录；阈值校准 / 多真值样本 / 权重许可 / 稳定性仍未完成） |
 | [docs/vision-dbcnn.md](docs/vision-dbcnn.md) | DBCNN 模型配置、来源、许可注意事项、真实推理证据与已知限制 |
 | [docs/service-launcher.md](docs/service-launcher.md) | PC 服务启动器：架构、API、状态、安全边界、配置、自启动与验证边界 |
+| [docs/vision-events.md](docs/vision-events.md) | Week 09 视觉事件触发、优先级、确认/忽略/稍后、冷却、API 与验证边界 |
 | [每周计划/](每周计划/) | 18 周课程计划 HTML |
 
 ### HTTP API 速查
@@ -451,6 +470,9 @@ AIinteraction/
 | `GET/POST /api/camera/retention` | 查询/设置保留上限（1–9，默认 3） |
 | `POST /api/camera/clear` | 显式清除全部已存图像 |
 | `GET/POST /api/auto_capture` | 定时抓拍已禁用；启用请求返回 400 `course_policy_disabled` |
+| `GET /api/vision/events?limit=20` | PC 视觉服务：事件列表、active、计数、冷却配置 |
+| `GET /api/vision/events/active` | PC 视觉服务：当前最高优先级待响应事件 |
+| `POST /api/vision/events/respond` | PC 视觉服务：确认/忽略/稍后（`confirm/ignore/snooze`） |
 | `POST /api/voice/start` | PC 语音服务：开始录音 |
 | `POST /api/voice/stop` | PC 语音服务：停止录音（返回紧凑回执 ≤120B；自动后台 Whisper ASR） |
 | `GET /api/voice/status` | PC 语音服务：查询录音状态、WAV 元数据、ASR 结果 + `task` 块（request_id/state/generation/result/context/log） |

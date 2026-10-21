@@ -4,6 +4,27 @@
 
 ---
 
+## 最新：Week 09 视觉事件触发主动询问（2026-10-22）
+
+**分支**: `feature/week09-proactive-vision-event`（基于 `feature/week08-service-autostart`；**未合并 `main`**）
+**阶段**: 🟡 功能、自动化测试、构建/烧录与 Agent 技术冒烟完成；**人工体验验收未完成**（用户暂时无法操作）
+
+**已完成**:
+- `service/vision_event.py`：明确规则/拒识证据才触发；高/中优先级；`confirm/ignore/snooze`；忽略 10 分钟、稍后 5 分钟冷却；同一 `record_id` 幂等；事件 JSONL 仅追加
+- `vision_feedback_server`：新增 `/api/vision/events`、`/api/vision/events/active`、`/api/vision/events/respond`；`analyze` 返回 `event`
+- Dashboard 视觉面板新增「⏰ 主动询问」：消息、优先级/原因、关联 `record_id`/设备请求号、来源与运行位置、确认/忽略/稍后/重新采集、历史表
+- 触发策略明确拒绝 `needs_review` 单独触发（阈值未校准）；暗光 `too_dark/low_detail` 记录为环境观察，不调阈值
+
+**验证证据**:
+- `test_vision_event.py` **29 passed**；`test_vision_event_server.py` **8 passed**；视觉全套 **137 passed, 1 skipped**
+- `test_dashboard_week09_ui.py` **7 passed**；全量（排除 ASR 文件）**553 passed, 2 skipped**（Anaconda torch 退出期崩溃为预存问题）
+- `idf.py build` PASS；COM10 app-flash Hash verified
+- 真实设备当前环境抓拍：`low_detail` 20,298 B → `needs_review/0.4555/low_detail` → pending（中）；本地 `occluded.jpg` → `0.2581/too_dark` → pending（高）；确认低优先级后 active 正确落到高优先级
+
+**未完成/未人工核验**: 用户任务测试、误判纠正体验、拒绝后长期不打扰、真实 10 分钟冷却、语音+视觉+实体三者联动、长期稳定性
+
+---
+
 ## 最新：Week 08 服务自启动与导航整改（2026-10-22）
 
 **分支**: `feature/week08-service-autostart`（基于 `feature/week08-vision-feedback`；**未合并 `main`**）

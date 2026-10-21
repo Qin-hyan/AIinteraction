@@ -68,6 +68,7 @@ AIinteraction/
 | 视觉反馈领域层 | `service/vision_feedback.py` | ✅ Week 08 W8-3 | 真实推理 → 仅追加 `records.jsonl`；人工反馈独立 `feedback.jsonl`；设备代理；反馈词表校验；图像不落盘 |
 | 视觉反馈本地服务 | `service/vision_feedback_server.py` | ✅ Week 08 W8-3/W8-4 | 独立 `127.0.0.1:8090`（仅标准库）；W8-4 起 **API-only（无用户页面）** + 有边界 CORS/PNA，端点错误码统一；默认不自动启动、无认证 |
 | PC 服务启动器 | `service/service_launcher.py` | ✅ Week 08 收尾（2026-10-22） | 仅 `127.0.0.1:8079`；Dashboard 打开时幂等 ensure 语音 8080 / 视觉 8090；只允许回环绑定、JSON+PNA、固定命令；外部服务不误杀；`scripts/` 提供手动启动与当前用户 Startup 自启动 |
+| 视觉事件主动询问 | `service/vision_event.py` | ✅ Week 09（2026-10-22） | 明确规则/拒识证据才触发；高/中优先级；确认/忽略/稍后；按来源+原因冷却；`events.jsonl` 仅追加；不改模型/规则/反馈语义 |
 
 ---
 
@@ -186,6 +187,20 @@ AIinteraction/
 - 自启动只写当前用户 Startup 文件夹的一个 `.cmd`，不建 Windows 服务/计划任务/注册表；`scripts/uninstall_autostart.ps1` 可撤销
 - Dashboard 模板有 3 个占位符（`__VOICE_PC_URL__` / `__VISION_API_URL__` / `__PC_LAUNCHER_URL__`），`root_handler` 的**计算与替换循环都必须是 3**，否则页面残留占位符、启动器不会调用
 - 导航顺序必须与卡片 DOM 顺序一致；底部无法把最后一张卡滚到顶部时，滚动高亮要显式选中最后一项
+
+---
+
+## Week 09 关键机制（长期事实）
+
+- 事件入口 `service/vision_event.py::VisionEventService`；只消费既有 `analysis`，不改 DBCNN/规则/反馈格式
+- 触发：`unknown`、`low_score`、规则 `invalid/too_dark/too_bright/low_contrast/low_detail`；**`needs_review` 单独不触发**（阈值未校准，避免噪声）
+- 优先级：高（unknown/invalid/too_dark/too_bright）> 中（low_contrast/low_detail/low_score）；`active` 取最高优先级+最早
+- 动作：`confirm` 无冷却；`ignore` 冷却 600s；`snooze` 冷却 300s；冷却键 `source:reason_code`；冷却期同类新记录为 `suppressed`
+- 同一 `record_id` 幂等；`events.jsonl` gitignored、仅追加、按 `event_id` 取最新快照
+- 分析记录先保存；事件失败 `event_error`，不得伪称已提示
+- Dashboard 面板：事件消息/优先级/关联记录/请求号/来源/运行位置 + 确认/忽略/稍后/重新采集；运行位置为设备 OV2640 或本地 JPEG → PC 本地 8090 DBCNN → 浏览器，无云端/VPS
+- 暗光/安静环境可能产生 `too_dark/low_detail` 或 ASR 识别差；记录为环境观察，不强行调阈值
+- Week 09 人工验收未完成；不能把 Agent 技术冒烟写成用户通过
 
 ---
 

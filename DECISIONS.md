@@ -204,3 +204,18 @@
 - **原因**: 原流程要求用户每次打开网页前手动开两个终端；把"服务是否就绪"交给页面自动 ensure，既符合浏览器限制，也不伪造启动结果。启动器仅有本机控制面，安全边界与视觉服务的 CORS/PNA 一致。
 - **影响**: 用户需一次性运行 `scripts/install_autostart.ps1`（或每次手动 `scripts/start_services.cmd`）；`service/launcher.config.json` 为机器本地配置，已被 `.gitignore` 忽略；服务启动失败必须显示真实错误，不得显示"已启动"。
 - **证据**: `service/service_launcher.py`、`service/test_service_launcher.py`、`service/test_dashboard_launcher_ui.py`、`scripts/`、`main/http_server.c`、`main/Kconfig.projbuild`、`docs/service-launcher.md`；TEST_LOG 2026-10-22 S 节。
+
+## D015 — Week 09 主动询问：明确证据才触发、拒绝后冷却、事件不改变模型语义 ——【已确认】
+
+- **日期**: 2026-10-22
+- **决定**:
+  1. **事件层独立于模型/规则**：`service/vision_event.py` 只消费既有 `analysis`，不改 DBCNN 分数、规则诊断或人工反馈格式。
+  2. **`needs_review` 单独不触发**：阈值未配置时该状态没有"画面有问题"的证据；只有规则 `invalid/too_dark/too_bright/low_contrast/low_detail` 或 `unknown/low_score` 才触发，避免每张图弹窗。
+  3. **优先级明确**：高（unknown、invalid、too_dark、too_bright）> 中（low_contrast、low_detail、low_score）；多个待响应事件按优先级与创建时间选择 active。
+  4. **确认/忽略/稍后**：确认无冷却；忽略按「来源+原因」冷却 10 分钟；稍后冷却 5 分钟；冷却期内同类事件记录为 `suppressed`，不主动提示。冷却参数为交互策略，不是模型阈值。
+  5. **输入—结果—事件—响应可追踪**：事件保存 `record_id`、设备 `request_id`、来源、图像引用与证据快照；仅追加 `events.jsonl`（gitignored），读取按 `event_id` 取最新快照。
+  6. **事件写失败不丢分析**：分析记录先落盘；事件失败返回 `event_error`，不伪造成"已提示"。
+  7. **运行位置如实展示**：设备 OV2640 或本地 JPEG → PC 本地 8090 DBCNN → 浏览器；不使用云端/VPS；暗光导致的 `too_dark/low_detail` 记录为环境观察，不调阈值、不写成准确率。
+- **原因**: 课程要求"视觉事件触发主动询问、可纠正、拒绝后不反复打扰"；在阈值未校准的前提下，把 `needs_review` 当问题会制造噪声。用明确规则/拒识证据 + 冷却，才能既主动又不打扰。
+- **影响**: 后续若配置阈值，`low_score` 可作为新触发证据；冷却时间可由构造参数调整；事件层不替代人工反馈，二者通过同一 `record_id` 关联。
+- **证据**: `service/vision_event.py`、`service/vision_feedback_server.py`、`service/test_vision_event.py`、`service/test_vision_event_server.py`、`main/http_server.c`、`docs/vision-events.md`；TEST_LOG 2026-10-22 T 节。
