@@ -14,6 +14,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 static const char *TAG = "HTTP";
+#ifndef CONFIG_PC_LAUNCHER_URL
+#define CONFIG_PC_LAUNCHER_URL "http://127.0.0.1:8079"
+#endif
 static httpd_handle_t s_server = NULL;
 static sensor_ctx_t  s_ctx = {0};
 static const char *collect_status_name(collect_status_t s) {
@@ -135,11 +138,16 @@ static const char INDEX_HTML[] =
 "min-height:100vh;max-width:1200px;margin:0 auto;padding:24px 32px 48px;scroll-behavior:smooth}"
 "h1{color:#58a6ff;margin-bottom:8px;font-size:1.6em}"
 ".sub{color:#8b949e;font-size:.85em;margin-bottom:24px}"
-".topnav{display:flex;align-items:center;flex-wrap:nowrap;overflow-x:auto;background:#0d1117;border-bottom:1px solid #21262d;padding:0 32px;height:50px;margin:-24px -32px 24px;position:sticky;top:0;z-index:10}"
-".topnav .brand{color:#f0f6fc;font-weight:700;font-size:1em;margin-right:28px;white-space:nowrap;flex:0 0 auto}"
-".topnav a{color:#8b949e;text-decoration:none;padding:14px 20px;font-size:.88em;border-bottom:2px solid transparent;white-space:nowrap;flex:0 0 auto}"
+".topnav{display:flex;align-items:center;flex-wrap:nowrap;overflow-x:auto;background:#0d1117;border-bottom:1px solid #21262d;padding:0 32px;height:50px;margin:-24px -32px 24px;position:sticky;top:0;z-index:10;scrollbar-width:thin}"
+".topnav .brand{display:flex;flex-direction:column;justify-content:center;line-height:1.15;color:#f0f6fc;font-weight:700;font-size:1em;margin-right:28px;white-space:nowrap;flex:0 0 auto}"
+".topnav .brand-sub{color:#8b949e;font-size:.68em;font-weight:400;letter-spacing:.02em}"
+".topnav a{color:#8b949e;text-decoration:none;padding:14px 18px;font-size:.88em;border-bottom:2px solid transparent;white-space:nowrap;flex:0 0 auto}"
 ".topnav a:hover{color:#c9d1d9}"
 ".topnav a.act{color:#58a6ff;border-bottom-color:#58a6ff;font-weight:600}"
+".topnav a:focus-visible{outline:2px solid #58a6ff;outline-offset:-3px}"
+".nav-dot{width:8px;height:8px;border-radius:50%;background:#484f58;display:inline-block;flex:0 0 auto}"
+".nav-dot.ok{background:#3fb950}.nav-dot.warn{background:#d29922}.nav-dot.err{background:#f85149}"
+".card{scroll-margin-top:66px}"
 ".card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:0;margin:0 0 22px;width:100%;overflow:hidden}"
 ".card h2{color:#f0f6fc;font-size:1em;font-weight:600;margin:0;padding:15px 24px;border-bottom:1px solid #21262d;display:flex;justify-content:space-between;align-items:center}"
 ".panel-badge{font-size:.73em;padding:4px 12px;border-radius:12px;background:#1a2332;color:#a5d6ff;border:1px solid #1f6feb;font-weight:400}"
@@ -277,13 +285,35 @@ static const char INDEX_HTML[] =
 ".vision-details summary:hover{color:#79c0ff}"
 ".vision-details[open] summary{margin-bottom:6px}"
 ".vision-details .kv{font-size:.74em}"
+/* === PC 服务启动器：运行环境面板 === */
+".svc-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}"
+".svc-item{background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:12px 14px}"
+".svc-item h4{font-size:.82em;color:#c9d1d9;margin-bottom:6px;display:flex;align-items:center;gap:8px}"
+".svc-item .svc-st{font-size:.78em;font-family:monospace;color:#8b949e;word-break:break-all}"
+".svc-item .svc-detail{font-size:.72em;color:#8b949e;margin-top:6px;line-height:1.6}"
+".svc-item.ok{border-color:#238636}.svc-item.warn{border-color:#9e6a03}"
+".svc-item.err{border-color:#da3633}"
+"@media(max-width:720px){.svc-grid{grid-template-columns:1fr}}"
 "</style><meta http-equiv=\"Cache-Control\" content=\"no-cache,no-store,must-revalidate\"><meta http-equiv=\"Pragma\" content=\"no-cache\"><meta http-equiv=\"Expires\" content=\"0\"></head><body>"
 "<div id=\"toast\" style=\"position:fixed;top:60px;left:50%;transform:translateX(-50%);background:#1a2332;color:#a5d6ff;padding:10px 24px;border-radius:8px;font-size:.88em;z-index:99;opacity:0;transition:opacity .3s;pointer-events:none;border:1px solid #1f6feb\"></div>"
-"<nav class=\"topnav\"><span class=\"brand\">ESP32-S3-EYE · WK2+3 v3</span>"
-"<a href=\"#live-monitor\">传感器示波器</a><a href=\"#evidence-log\">报文监视</a>"
-"<a class=\"act\" href=\"#collect-console\">控制中心</a><a href=\"#camera-console\">📷 抓拍</a><a href=\"#voice-panel\">🎙 语音</a><a href=\"#vision-panel\">🔍 视觉反馈</a>"
-"<a href=\"#auto-cap-panel\">⏱ 自动</a><a href=\"#gallery-panel\">🖼 画廊</a>"
-"<a href=\"#\" onclick=\"toast('外场与导出 — 功能开发中');return false\">外场与导出</a></nav>"
+"<nav class=\"topnav\" id=\"topnav\"><span class=\"brand\">ESP32-S3-EYE<span class=\"brand-sub\">AI 交互原型 · Week 08</span></span>"
+"<a class=\"act\" href=\"#service-hub\">⚙️ 运行环境</a>"
+"<a href=\"#collect-console\">📡 控制中心</a><a href=\"#live-monitor\">📐 实时数据</a>"
+"<a href=\"#camera-console\">📷 图像采集</a><a href=\"#auto-cap-panel\">⏱ 自动抓拍</a><a href=\"#gallery-panel\">🖼 照片画廊</a><a href=\"#voice-panel\">🎙 语音</a>"
+"<a href=\"#vision-panel\">🔍 视觉反馈</a><a href=\"#evidence-log\">📋 报文监视</a></nav>"
+"<div class=\"card\" id=\"service-hub\"><h2>⚙️ 运行环境与 PC 服务<span class=\"panel-badge\" id=\"pcHubBadge\">打开页面自动检查</span></h2><div class=\"card-body\">"
+"<div class=\"infostrip\">"
+"<div class=\"info-item\">本机启动器 <b id=\"pcLauncherState\">检查中…</b></div>"
+"<div class=\"info-item\">语音服务 <b id=\"pcVoiceState\">—</b></div>"
+"<div class=\"info-item\">视觉反馈服务 <b id=\"pcVisionState\">—</b></div>"
+"<div class=\"info-item\">启动方式 <b>页面自动 ensure</b></div></div>"
+"<div class=\"hint\" id=\"pcHubHint\">页面加载后会请求本机启动器（默认 127.0.0.1:8079），由它幂等启动语音与视觉服务；已经运行的服务不会被重复启动，也不会被强行杀掉。</div>"
+"<div class=\"actions\" style=\"margin-top:12px\">"
+"<button class=\"act-btn ghost\" id=\"pcEnsureBtn\" onclick=\"pcEnsureServices(true)\">🔄 启动/检查服务</button>"
+"<button class=\"act-btn ghost\" onclick=\"pcOpenLauncher()\">⚙️ 打开启动器控制台</button></div>"
+"<div class=\"svc-grid\" id=\"pcSvcGrid\"></div>"
+"<div class=\"hint\" id=\"pcHubNote\"></div>"
+"</div></div>"
 "<div class=\"card\" id=\"collect-console\"><h2>📡 远程采集控制台<span class=\"panel-badge\" id=\"taskBadge\">手动指令 v2.0</span></h2><div class=\"card-body\">"
 "<div class=\"infostrip\">"
 "<div class=\"info-item\">目标设备 <b id=\"infoDev\">—</b></div>"
@@ -338,13 +368,6 @@ static const char INDEX_HTML[] =
 "<div class=\"status-bar\"><span class=\"dot\" id=\"liveDot\"></span>"
 "<span>Live &middot; <span id=\"ts\">--</span></span></div>"
 "<div class=\"error\" id=\"error\" style=\"display:none\"></div>"
-"<div class=\"card\" id=\"evidence-log\"><h2>📋 报文监视 · 请求—回执—观测记录<span class=\"panel-badge\">设备端保留最近 6 条</span></h2><div class=\"card-body\">"
-"<div class=\"actions\"><button class=\"act-btn ghost\" style=\"flex:0 0 auto;min-width:190px\" onclick=\"loadRecords()\">🔄 刷新记录</button></div>"
-"<div class=\"table-wrap\"><table class=\"log\"><thead><tr>"
-"<th>#</th><th>请求号</th><th>状态</th><th>来源</th><th>观测（seq / X,Y,Z mg）</th><th>受理→结果</th><th>记录来源</th></tr></thead>"
-"<tbody id=\"recBody\"><tr><td class=\"mut\" colspan=\"7\">暂无记录：先点一次“采集一次最新数据”。</td></tr></tbody></table></div>"
-"<div class=\"hint\">设备端记录由开发板保存（请求号、设备回执时间、新观测、耗时）；浏览器端记录用于“设备关机/离线”时页面仍能追踪本次尝试。超时记录明确标注“未收到设备结果”，不把旧值标成本次成功。</div>"
-"</div></div>"
 "<div class=\"card\" id=\"camera-console\"><h2>📷 相机远程抓拍控制台<span class=\"panel-badge\" id=\"camBadge\">OV2640</span><span class=\"cap-task-status idle\" id=\"capTaskStatus\">空闲</span></h2><div class=\"card-body\">"
 "<div class=\"infostrip\">"
 "<div class=\"info-item\">目标设备 <b id=\"infoCamDev\">—</b></div>"
@@ -436,11 +459,21 @@ static const char INDEX_HTML[] =
 "</div>"
 "<div class=\"table-wrap\" style=\"margin-top:14px\"><table class=\"log\"><thead><tr><th>时间</th><th>质量分数</th><th>判定</th><th>规则</th><th>人工反馈</th></tr></thead><tbody id=\"visionHistory\"><tr><td class=\"mut\" colspan=\"5\">暂无记录</td></tr></tbody></table></div>"
 "</div></div>"
+"<div class=\"card\" id=\"evidence-log\"><h2>📋 报文监视 · 请求—回执—观测记录<span class=\"panel-badge\">设备端保留最近 6 条</span></h2><div class=\"card-body\">"
+"<div class=\"actions\"><button class=\"act-btn ghost\" style=\"flex:0 0 auto;min-width:190px\" onclick=\"loadRecords()\">🔄 刷新记录</button></div>"
+"<div class=\"table-wrap\"><table class=\"log\"><thead><tr>"
+"<th>#</th><th>请求号</th><th>状态</th><th>来源</th><th>观测（seq / X,Y,Z mg）</th><th>受理→结果</th><th>记录来源</th></tr></thead>"
+"<tbody id=\"recBody\"><tr><td class=\"mut\" colspan=\"7\">暂无记录：先点一次“采集一次最新数据”。</td></tr></tbody></table></div>"
+"<div class=\"hint\">设备端记录由开发板保存（请求号、设备回执时间、新观测、耗时）；浏览器端记录用于“设备关机/离线”时页面仍能追踪本次尝试。超时记录明确标注“未收到设备结果”，不把旧值标成本次成功。</div>"
+"</div></div>"
 
 "<script>"
 "function toast(msg){var t=document.getElementById('toast');t.textContent=msg;t.style.opacity='1';setTimeout(function(){t.style.opacity='0'},2000);}"
-"function switchNav(e){var as=document.querySelectorAll('.topnav a');as.forEach(function(a){a.classList.remove('act')});e.classList.add('act');}"
-"document.querySelectorAll('.topnav a[href^=\"#\"]').forEach(function(a){if(a.getAttribute('onclick'))return;a.addEventListener('click',function(e){var t=document.querySelector(this.getAttribute('href'));if(t){e.preventDefault();switchNav(this);t.scrollIntoView({behavior:'smooth',block:'start'})}})});"
+"function setActiveNav(href){var links=document.querySelectorAll('.topnav a[href^=\"#\"]');links.forEach(function(a){var on=a.getAttribute('href')===href;a.classList.toggle('act',on);if(on){a.setAttribute('aria-current','page');}else{a.removeAttribute('aria-current');}});}"
+"function switchNav(e){setActiveNav(e.getAttribute('href'));}"
+"function syncNav(){var links=Array.prototype.slice.call(document.querySelectorAll('.topnav a[href^=\"#\"]'));if(!links.length)return;if(window.innerHeight+window.scrollY>=document.documentElement.scrollHeight-4){setActiveNav(links[links.length-1].getAttribute('href'));return;}var y=window.scrollY+96;var current=links[0].getAttribute('href');for(var i=0;i<links.length;i++){var el=document.querySelector(links[i].getAttribute('href'));if(!el)continue;if(el.getBoundingClientRect().top+window.scrollY<=y)current=links[i].getAttribute('href');}setActiveNav(current);}"
+"document.querySelectorAll('.topnav a[href^=\"#\"]').forEach(function(a){a.addEventListener('click',function(e){var href=this.getAttribute('href');var t=document.querySelector(href);if(t){e.preventDefault();switchNav(this);t.scrollIntoView({behavior:'smooth',block:'start'});if(history.replaceState)history.replaceState(null,'',href);}})});"
+"window.addEventListener('scroll',syncNav,{passive:true});window.addEventListener('load',syncNav);"
 "var autoRefresh=true,autoTimer=null,ageTimer=null,collectPolling=null,currentReqId=null,currentTaskSeq=0;"
 "var storedObs=null,storedAt=0,webLog=[],deviceRecs=[],netFail=0,pendingTask=false,snapshotKept=false;"
 "var errEl=document.getElementById('error');"
@@ -722,6 +755,37 @@ static const char INDEX_HTML[] =
 "function voicePollStop(){if(voicePolling){clearInterval(voicePolling);voicePolling=null;}}"
 "function refreshCapStatus(){fetch('/api/camera/status').then(function(r){return r.json();}).then(function(d){updateCapTaskStatus(d.cap_task_status,(d.cap_task_status==='unusable'?d.last_img_status:null));}).catch(function(){});}"
 "var VISION_URL=\"__VISION_API_URL__\";var visionRecordId=null;var visionVerdict=null;"
+"var PC_LAUNCHER_URL=\"__PC_LAUNCHER_URL__\";var pcPolling=null,pcEnsureInFlight=false,pcDown=false;"
+"function pcEnabled(){return PC_LAUNCHER_URL&&PC_LAUNCHER_URL.indexOf('__')!==0;}"
+"function pcLabel(state){var m={running:'运行中',running_external:'运行中（外部启动）',starting:'启动中',stopped:'未运行',failed:'启动失败',port_conflict:'端口冲突',missing_python:'缺少解释器',unhealthy:'端口占用/未就绪'};return m[state]||state||'未知';}"
+"function pcClass(state){if(state==='running'||state==='running_external')return 'ok';if(state==='starting'||state==='stopped')return 'warn';return 'err';}"
+"function pcSetNav(state,text){var d=$('pcNavDot'),t=$('pcNavText');if(d)d.className='nav-dot '+(state||'');if(t)t.textContent=text;}"
+"function pcEsc(v){return String(v==null?'':v).replace(/[&<>\"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c];});}"
+"function pcServiceCard(s){var cls=pcClass(s.state);return '<div class=\"svc-item '+cls+'\"><h4><span class=\"nav-dot '+cls+'\"></span>'+pcEsc(s.name)+(s.degraded?' <span class=\"hint warn\">功能受限</span>':'')+'</h4><div class=\"svc-st\">'+pcEsc(pcLabel(s.state))+' · 端口 '+pcEsc(s.port)+(s.pid?' · PID '+pcEsc(s.pid):'')+'</div><div class=\"svc-detail\">'+pcEsc(s.detail||'')+'</div><div class=\"svc-detail\">日志：'+pcEsc(s.log_file||'—')+'</div></div>';}"
+"function pcRenderServices(list){var grid=$('pcSvcGrid');if(!grid)return;if(!list||!list.length){grid.innerHTML='';return;}var h='',m={};for(var i=0;i<list.length;i++){m[list[i].name]=list[i];h+=pcServiceCard(list[i]);}grid.innerHTML=h;var v=m.voice,vi=m.vision;txt('pcVoiceState',v?pcLabel(v.state)+'（'+(v.port||8080)+'）':'—');txt('pcVisionState',vi?pcLabel(vi.state)+'（'+(vi.port||8090)+'）':'—');var okAll=list.every(function(s){return s.state==='running'||s.state==='running_external';});var degraded=list.some(function(s){return s.degraded===true;});var badge=okAll?(degraded?'进程就绪·功能受限':'服务就绪'):'需要处理';txt('pcHubBadge',badge);pcSetNav(okAll&&!degraded?'ok':(okAll?'warn':'warn'),okAll&&!degraded?'PC 服务就绪':(okAll?'PC 服务受限':'PC 服务待处理'));}"
+"function pcEnsureServices(manual){"
+"if(!pcEnabled()){txt('pcLauncherState','未配置');txt('pcHubHint','未配置启动器地址，需手动启动语音与视觉服务。');pcSetNav('err','PC 服务未配置');return;}"
+"if(pcEnsureInFlight)return;pcEnsureInFlight=true;"
+"var btn=$('pcEnsureBtn');if(btn){btn.disabled=true;btn.textContent='检查中…';}"
+"txt('pcLauncherState','连接中…');if(manual)txt('pcHubNote','正在请求本机启动器…');"
+"fetch(PC_LAUNCHER_URL+'/api/services/ensure',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})"
+".then(function(r){return r.json();})"
+".then(function(d){var list=d.results||[];txt('pcLauncherState','已连接');pcDown=false;pcRenderServices(list);"
+"var allRunning=list.every(function(s){return s.state==='running'||s.state==='running_external';});var degraded=list.some(function(s){return s.degraded===true;});"
+"if(allRunning&&!degraded){txt('pcHubNote','语音与视觉服务均已就绪，页面功能可直接使用。');}"
+"else if(allRunning&&degraded){txt('pcHubNote','进程已启动，但健康检查显示模型/功能未就绪；请查看上方状态或启动器控制台。');}"
+"else{txt('pcHubNote','部分服务未就绪，请查看上方状态或打开启动器控制台。');}"
+"if(typeof visionHealth==='function')visionHealth();})"
+".catch(function(e){pcDown=true;txt('pcLauncherState','未连接');pcSetNav('err','PC 服务未启动');"
+"txt('pcHubNote','无法连接本机启动器。请先在仓库根目录运行 scripts/start_services.cmd（或 python -m service.service_launcher），再点“启动/检查服务”。浏览器不能自行拉起本机进程。');"
+"if(manual)toast('启动器未运行');})"
+".then(function(){pcEnsureInFlight=false;if(btn){btn.disabled=false;btn.textContent='🔄 启动/检查服务';}});}"
+"function pcRefreshStatus(){if(!pcEnabled()||pcEnsureInFlight)return;"
+"fetch(PC_LAUNCHER_URL+'/api/services').then(function(r){return r.json();}).then(function(d){pcDown=false;txt('pcLauncherState','已连接');var list=d.services||[];pcRenderServices(list);"
+"if(list.some(function(s){return s.state==='stopped';})&&!pcEnsureInFlight){pcEnsureServices(false);}})"
+".catch(function(){if(!pcDown){txt('pcLauncherState','未连接');pcSetNav('err','PC 服务未启动');}pcDown=true;});}"
+"function pcOpenLauncher(){if(!pcEnabled()){toast('未配置启动器地址');return;}window.open(PC_LAUNCHER_URL,'_blank','noopener');}"
+"function pcPollStart(){if(pcPolling)return;pcPolling=setInterval(pcRefreshStatus,15000);}"
 "function visionEnabled(){return VISION_URL&&VISION_URL.indexOf('__')!==0;}"
 "function setVisionHint(msg,cls){var e=$('visionStatus');if(e){e.textContent=msg;e.className='hint '+(cls||'');}}"
 "function visionHealth(){"
@@ -739,7 +803,7 @@ static const char INDEX_HTML[] =
 ".catch(function(e){"
 "if(s)s.textContent='本地视觉服务未启动';"
 "if(m)m.textContent='—';"
-"setVisionHint('无法连接本地视觉服务，请确认 PC 端已启动（默认端口 8090）。','err');});}"
+"setVisionHint('无法连接本地视觉服务：请点上方「🔄 启动/检查服务」；启动器未运行时先执行 scripts/start_services.cmd（默认端口 8090）。','err');});}"
 "function visionPhotoStatus(p){"
 "if(p.usable===true)return '可用';"
 "if(p.img_status)return zhMap(VISION_RULE_ZH,p.img_status);"
@@ -849,7 +913,7 @@ static const char INDEX_HTML[] =
 "h+='<td>'+zhMap(VISION_VERDICT_ZH,fb.verdict)+'</td></tr>';}"
 "t.innerHTML=h;})"
 ".catch(function(e){var t=$('visionHistory');if(t)t.innerHTML='<tr><td class=\"mut\" colspan=\"5\">历史加载失败</td></tr>';});}"
-"function init(){startAuto();restoreLatest();refreshStored();loadRecords();loadGallery();refreshAutoCapStatus();refreshCapStatus();voicePollStart();visionHealth();loadVisionGallery();loadVisionHistory();ageTimer=setInterval(tick,1000);}"
+"function init(){startAuto();restoreLatest();refreshStored();loadRecords();loadGallery();refreshAutoCapStatus();refreshCapStatus();voicePollStart();pcEnsureServices(false);pcPollStart();visionHealth();loadVisionGallery();loadVisionHistory();ageTimer=setInterval(tick,1000);}"
 "init();</script></body></html>";
 /* ================================================================
  * HTTP Request Handlers
@@ -859,24 +923,33 @@ static esp_err_t root_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
 
-    /* 依次替换 __VOICE_PC_URL__ 与 __VISION_API_URL__ 两个模板占位符。
+    /* 依次替换三个模板占位符：
+     * __VOICE_PC_URL__ / __VISION_API_URL__ / __PC_LAUNCHER_URL__。
      * 一次性拼装到堆缓冲后整体发送，避免多次分块发送的复杂度。 */
     const char *src = INDEX_HTML;
     size_t src_len = strlen(src);
 
-    static const char *placeholders[2] = {
+    static const char *placeholders[3] = {
         "__VOICE_PC_URL__",
         "__VISION_API_URL__",
+        "__PC_LAUNCHER_URL__",
     };
-    const char *values[2] = {
+    const char *values[3] = {
         CONFIG_VOICE_PC_URL,
         CONFIG_VISION_API_URL,
+        CONFIG_PC_LAUNCHER_URL,
     };
 
     size_t total = src_len;
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
         if (strstr(src, placeholders[i]) != NULL) {
-            total += strlen(values[i]) - strlen(placeholders[i]);
+            size_t value_len = strlen(values[i]);
+            size_t placeholder_len = strlen(placeholders[i]);
+            if (value_len >= placeholder_len) {
+                total += value_len - placeholder_len;
+            } else {
+                total -= placeholder_len - value_len;
+            }
         }
     }
 
@@ -893,7 +966,7 @@ static esp_err_t root_handler(httpd_req_t *req)
 
     size_t out = 0;
     const char *cursor = src;
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
         const char *pos = strstr(cursor, placeholders[i]);
         if (pos == NULL) {
             continue;

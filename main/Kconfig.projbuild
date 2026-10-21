@@ -86,3 +86,23 @@ menu "Week 08 Vision Feedback Configuration"
             empty to hide/disable the vision panel.
 
 endmenu
+
+menu "Week 08 PC Service Launcher Configuration"
+
+    config PC_LAUNCHER_URL
+        string "Local PC service launcher base URL"
+        default "http://127.0.0.1:8079"
+        help
+            Base URL of the PC-side service launcher
+            (service/service_launcher.py, default 127.0.0.1:8079).
+            When the Dashboard page is opened, it calls this loopback URL to
+            idempotently start the voice (8080) and vision (8090) services.
+
+            Keep the loopback address: the launcher can start local processes,
+            so it must never be reachable from the LAN. Browsers cannot start
+            local processes by themselves; this launcher is the explicit local
+            helper for that job. Leave empty to disable the automatic ensure
+            call (the panel then shows "未配置" and services must be started
+            manually).
+
+endmenu
