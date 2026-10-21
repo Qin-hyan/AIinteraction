@@ -66,7 +66,7 @@ AIinteraction/
 | DBCNN 适配器 | `service/vision_dbcnn.py` | ✅ Week 08 | 本地 ONNX + 外部权重，ORT CPU；原始 0~1 分数、模型版本、权重 SHA-256；失败明确报错不回退 |
 | 视觉分析组合入口 | `service/vision_analysis.py` | ✅ Week 08 | DBCNN + 可选 Week 07 规则诊断；来源分离；未配置阈值 → `needs_review`；CLI 不新开端口 |
 | 视觉反馈领域层 | `service/vision_feedback.py` | ✅ Week 08 W8-3 | 真实推理 → 仅追加 `records.jsonl`；人工反馈独立 `feedback.jsonl`；设备代理；反馈词表校验；图像不落盘 |
-| 视觉反馈本地服务 | `service/vision_feedback_server.py` | ✅ Week 08 W8-3 | 独立 `127.0.0.1:8090`（仅标准库）；页面 + 9 个端点；错误码统一；默认不自动启动、无认证 |
+| 视觉反馈本地服务 | `service/vision_feedback_server.py` | ✅ Week 08 W8-3/W8-4 | 独立 `127.0.0.1:8090`（仅标准库）；W8-4 起 **API-only（无用户页面）** + 有边界 CORS/PNA，端点错误码统一；默认不自动启动、无认证 |
 
 ---
 
@@ -161,11 +161,19 @@ AIinteraction/
 - 关联链：`record_id` ↔ `input.device.request_id` ↔ `input.image_ref.sha256` ↔ `analysis.score/model_version` ↔ `feedback.revision`
 - 反馈词表：verdict `usable/unusable/undetermined`；reason `score_mismatch/too_dark/too_bright/blurred/occluded/wrong_scene/other`（`other` 必填说明）
 - `occluded` 仅代表人工观察，**禁止**由低分或 `noise_drift` 自动推导；重复反馈 → 409，记录不存在 → 404，保存失败 → 500
-- 端点：`/` 与 `/api/vision/{health,gallery,status,photo,analyze,recapture,records,feedback}`
+- 端点：`/`（JSON 服务说明）与 `/api/vision/{health,gallery,status,photo,analyze,recapture,records,feedback}`；W8-4 起**无用户可见页面**
 - 阈值未配置 → 恒 `needs_review`；模型缺失/推理失败/阈值非法 → 明确错误码，不回退规则
 - 重新采集复用设备 `POST /api/camera/capture`，不改 Week 07 定时抓拍策略
-- **未做真机端到端**：设备地址需用户提供；替身测试不得冒充硬件验收
+- **真机端到端**：W8-4/W8-5 已完成（设备照片真实推理 + 人工反馈 + 中文化页面，见 TEST_LOG「P」「R」）；替身测试不得冒充硬件验收
 - 详细见 `docs/vision-feedback.md`。
+
+### 并入 Dashboard 与中文化（W8-4/W8-5）
+
+- 面板内嵌于 `main/http_server.c` 的 ESP32 Dashboard，地址栏不变、不新增第二个网页；`CONFIG_VISION_API_URL` 模板注入（默认 `http://127.0.0.1:8090`），设备照片/重采走同源相对路径
+- 本地服务 API-only；CORS/PNA 仅放行回环/私网/链路本地来源，绝不 `*`
+- 中文映射（未知值原样回退）：`needs_review`→「待人工确认（未校准）」、`low_detail`→「画面细节不足」、`usable/unusable/undetermined`→「可用/不可用/无法判断」
+- 主分数四位小数，完整原值保留在「查看详细信息」；不改 API/枚举/模型/存储格式
+- 固件 `861ae64` 已烧录（Hash verified）并由用户实机验收
 
 ---
 
@@ -265,7 +273,7 @@ IDLE → SUBMITTED → RECEIVED → COMPLETED / FAILED
 
 | 引用 | 说明 |
 |------|------|
-| `main` | 最新合并版本 `7dd788b` (PR #4)，与 `origin/main` 同步 |
+| `main` | `origin/main` **`333a697`**（Merge PR #8，Week 07 已合并）——2026-10-21 核实 |
 | `week02-stable` (tag) | Week 02 稳定基线, 12 PASS / 0 FAIL |
 | `feature/week02-remote-task` | Week 02 开发分支（已合并） |
 | `feature/repo-cleanup` | 仓库清洁分支（已合并） |
@@ -273,7 +281,7 @@ IDLE → SUBMITTED → RECEIVED → COMPLETED / FAILED
 | `feature/week04-natural-language` | Week 04 开发分支（已合并，PR #4 → `7dd788b`；分支 HEAD `0b4b323` 保留） |
 | `feature/week05-voice-interaction` | **已收尾**（作为 Week 06 基线 `f0653f0`）— Week 05 开发分支（基线 `7dd788b`）；功能（PC 音频采集/录音 HTTP 控制服务/本地 Whisper ASR/ESP32 PLAY 语音控制）已实现并经 Step 3I 实机双端闭环验证；2026-10-13 收尾（HEAD `91959fb`） |
 | `feature/week06-voice-task-context` | **当前** Week 06 开发分支（基线 `f0653f0` = Week 05 HEAD）；HEAD `66ecbb6` + 本次文档收尾提交；任务上下文/取消/澄清/迟到结果隔离 + 生产计时 + ESP32 仪表盘取消按钮与任务状态显示；voice server **99/99**、全量 **250 passed + 6 subtests**（2026-10-17）；ESP32↔PC 实机取消复测（generation 5→6，取消→反馈停止 **79 ms**）与 2026-10-14 实机取消联动（7→8）均通过；`origin/main` 已合并 PR #6 至 `28aa45c`，后续 3 个功能提交及本次文档提交尚未合并；中文 ASR 内容验收待补；`service/nl_to_task.py` 缺失，完整语音任务链路未验收 |
-| `feature/week07-vision-capture` | **当前** Week 07 开发分支（基线 `origin/main` `5aebea1`）；PC 端画面可用性基线 + 端侧 `esp_jpeg` 评估 + 四态采集反馈 API/UI；`pytest service/` 260 passed、固件构建成功；**未烧录、未实机验证** |
-| `origin/main` | **`333a697`**（Merge PR #8，Week 07 已合并）——2026-10-19 核实 |
-| `feature/week08-vision-feedback` | **当前** Week 08 开发分支（基线 `origin/main` `333a697`）；W8-1 视觉结果契约 + W8-2 本地 DBCNN ONNX 接入 + W8-3 本地反馈闭环 + W8-4 并入 ESP32 Dashboard（`main/http_server.c` 内嵌「视觉反馈」面板 + `service/vision_feedback_server.py` 转 API-only + 有边界 CORS/PNA，默认 `127.0.0.1:8090`）；视觉相关测试 Anaconda **224 passed/2 skipped**、隔离 venv 含真实推理 **226 passed**、`idf.py build` 成功；固件已烧录并完成用户实机验收（设备照片真实推理 + 人工反馈，见 TEST_LOG「P」）；阈值校准、多真值样本、权重许可、稳定性未完成；本地提交，未推送、未合并 |
+| `feature/week07-vision-capture` | Week 07 开发分支（基线 `origin/main` `5aebea1`）；PC/端侧画面可用性、四态采集反馈 API/UI、最少保留已实机验收；已由 PR #8 合并至 `origin/main` `333a697`；真实取帧失败 `failed` 样例待补 |
+| `origin/main` | **`333a697`**（Merge PR #8，Week 07 已合并）——2026-10-21 核实 |
+| `feature/week08-vision-feedback` | **Week 08 已收尾**（基线 `origin/main` `333a697`，HEAD `861ae64`，已推送 origin 同提交，**未合并 main**）；W8-1 视觉结果契约 + W8-2 本地 DBCNN ONNX + W8-3 反馈闭环 + W8-4 并入 ESP32 Dashboard（API-only + 有边界 CORS/PNA）+ W8-5 中文化面板；视觉相关测试 Anaconda **238 passed/2 skipped**、隔离 venv 含真实推理 **240 passed**、`idf.py build` 成功；固件 `861ae64` 已烧录并由用户实机验收（TEST_LOG「P」「R」）；阈值校准、错误/未知样例对照、权重许可、稳定性列为后续补验 |
 | `integration/week06-followup` | ⚠️ **历史遗留冗余分支**（`ea04269`）：`git diff origin/main integration/week06-followup` **为空**，内容已完全包含于 `origin/main`。**不得作为开发基线**；是否删除由用户决定 |

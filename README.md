@@ -43,7 +43,7 @@
 | **按键物理反馈** | Week 03：独立 FreeRTOS 按键扫描任务 (30 Hz)，事件驱动 LED 反馈与 HTTP 上行 |
 | **语音交互面板** | Week 05：ESP32 仪表盘内置 🎙 语音控制面板，通过 PC 语音服务实现录音/ASR 状态显示与按钮控制；语音输入链路（PLAY→PC 录音→Whisper ASR→STOP 回执→ESP32 回 IDLE）已实机双端闭环验证通过（Step 3I） |
 | **语音任务上下文与取消** | Week 06：PC 语音服务全面增加 request_id 全链路追踪、任务状态机、任务取消 `/api/voice/cancel`、澄清/重新输入 `/api/voice/clarify` 与迟到结果代次隔离（generation 单调递增，旧代次结果丢弃）；ESP32 仪表盘新增取消按钮与任务状态显示；新增任务计时（首次反馈/完成/终止/取消→反馈停止，单次实测 79 ms） |
-| **视觉反馈（Week 08）** | ESP32 仪表盘内嵌「🔍 视觉反馈」面板；PC 端本地 DBCNN ONNX CPU 推理（仅 `127.0.0.1:8090`），返回原始质量分数 / 模型版本 / Week 07 规则诊断；未配置阈值时判定恒为 `needs_review`；支持人工反馈（可用/不可用/无法判断 + 原因）与重新采集；不新增第二个网页、不上传图片、不调用云端 |
+| **视觉反馈（Week 08）** | ESP32 仪表盘内嵌「🔍 视觉反馈」面板；PC 端本地 DBCNN ONNX CPU 推理（仅 `127.0.0.1:8090`），返回原始质量分数 / 模型版本 / Week 07 规则诊断；未配置阈值时判定恒为 `needs_review`；支持人工反馈（可用/不可用/无法判断 + 原因）、重新采集与中文化展示（原始分数可在「查看详细信息」查看）；不新增第二个网页、不上传图片、不调用云端 |
 
 > ⚠️ **Week 05 语音识别待人工验收**：真实中文语音识别准确率和简体中文输出质量**尚未经人工审阅**，不得宣称已通过。静音/背景噪声导致的空转录不得记录为识别成功。
 
@@ -267,7 +267,7 @@ idf.py -p COM端口 flash monitor
 - 权限边界：无自动采集；只有显式请求触发，请求与图像通过 `request_id`、`captured_ms`、`source=manual` 关联；未实现账户级鉴权（官网原文未要求）。
 - 失败记录：`cap_task_status=failed` + `last_img_status=invalid` + 串口 `[DIAG-CAP] status=failed req=<id>`；**不得与 `unusable` 混同**。当前为运行时状态，无独立持久化失败历史（官网原文未要求持久化）。
 
-#### Week 08 — 把视觉推理结果变成可理解反馈 🟡（W8-1 契约 + W8-2 真实模型接入完成；反馈闭环待做）2026-10-19
+#### Week 08 — 把视觉推理结果变成可理解反馈 ✅（W8-1…W8-5 完成，已实机验收）2026-10-21
 
 | 能力 | 状态 | 验证方式 |
 |------|------|---------|
@@ -276,7 +276,9 @@ idf.py -p COM端口 flash monitor
 | 本地组合入口 / CLI（`service/vision_analysis.py`） | ✅ 复用既有视觉模块，不新开端口；输出分数、模型版本、阈值状态、规则诊断 | 集成冒烟 |
 | 来源分离 | ✅ DBCNN `label=null`、`score_source=dbcnn_onnx`；规则诊断 `source=week07_image_quality_rules` | 集成冒烟 |
 | 阈值判定 | ⏳ **未校准**；未配置返回 `needs_review` / `threshold_not_configured`；测试中的 `0.5` 不是生产默认值 | 单元 + 集成 |
-| 低分/未知反馈、重新采集、人工纠正 UI | ⏳ W8-3 未开始 | — |
+| 低分/未知反馈、重新采集、人工纠正 UI | ✅ `needs_review` / `unknown` / `low_score` + 拒识原因；设备重采；三态人工反馈按 `record_id` 关联 | 自动化 + 用户实机 |
+| 中文化反馈面板 | ✅ 标题「图像质量分析结果」、四位小数；完整原始分数/SHA-256/记录 ID 等保留在「查看详细信息」 | 用户实机 |
+| 课程要求核对 | ✅ T03；T04（自动化/接口/UI 层）；交付物中的错误/未知样例对照仅部分完成 | `weeks/week08/STATE.md` 第 10 节 |
 
 - 模型权重与外部数据文件留在本地忽略目录 `.workbuddy/`，**不纳入 Git**；源码不依赖提交模型二进制。
 - 模型来源、配置、许可注意事项与限制见 [docs/vision-dbcnn.md](docs/vision-dbcnn.md)。
@@ -293,8 +295,9 @@ idf.py -p COM端口 flash monitor
 | ⚠️ **Week 06 完整 ASR→NL→JSON→任务链路** | `service/nl_to_task.py` 缺失，ASR 原始文本无法转为 TaskContract JSON；取消/澄清/计时链路已验收，但「真实语音 → 任务执行」未端到端验收 |
 | ⚠️ **Week 03 ESP32→VPS HTTP 上行端到端验收** | **软件集成已完成**：help_uplink 异步任务已集成至 `main.c`（初始化调用 `help_uplink_start`，事件状态机调用 `help_uplink_is_configured` / `help_uplink_request_send` / `help_uplink_poll`，见 `29dd72d`）；**仍未完成**真实 VPS URL 配置与 ESP32→VPS 端到端实机验收（HTTP POST 成功/失败路径未验证） |
 | ⚠️ **Week 07 真实取帧失败 `failed` 样例** | 四态中的 `failed` 代码路径与日志已实现，但无故障注入手段，**未构造真实失败**；不得用 `unusable` 代替 `failed`，也不得视为已通过 |
-| ⚠️ **Week 08 DBCNN 阈值校准与反馈闭环** | 尚未校准质量分数阈值，因此**未配置时不产生 `ok`/`low_score`**，只返回 `needs_review`；低分/未知反馈、重新采集、人工纠正 UI 均未实现 |
-| ⚠️ **Week 08 模型能力与许可边界** | 仅用 2 张本地样例做可运行性冒烟，**不能证明准确率/泛化/遮挡识别能力**；Hugging Face 仓库的 Apache-2.0 标签**不自动证明**原始 DBCNN 权重许可，未作法律结论 |
+| ⚠️ **Week 08 DBCNN 阈值校准与样例对照** | 反馈闭环与中文化面板已实机验收；但质量分数阈值仍未校准（未配置时只返回 `needs_review`，低分/未知路径目前只有自动化证据）；错误/未知类别缺有质量真值的实拍对照 |
+| ⚠️ **Week 08 模型能力与许可边界** | 仅少量本地样例做可运行性冒烟，**不能证明准确率/泛化/遮挡识别能力**；Hugging Face 仓库的 Apache-2.0 标签**不自动证明**原始 DBCNN 权重许可，未作法律结论 |
+| ⚠️ **Week 08 稳定性与异常注入** | 连续帧/并发/长期运行未验证；T04 异常结构输出仅在单元/接口/UI 层验证，未做真机注入 |
 
 > 所有测试记录详见 [TEST_LOG.md](TEST_LOG.md)（版本、输入、预期、实际、PASS/FAIL、运行位置和证据）。
 
@@ -427,7 +430,7 @@ IDLE → SUBMITTED(已提交·已受理) → RECEIVED(设备已接收)
 | `feature/week05-voice-interaction` | **已收尾**（作为 Week 06 基线 `f0653f0`）— Week 05 开发分支（基线 `7dd788b`）；HEAD `91959fb`；含完整功能实现：PC 音频采集/录音 HTTP 控制服务/本地 Whisper ASR 模块 + ESP32 PLAY 按键语音控制 + **ESP32 仪表盘 🎙 语音交互面板**；语音输入链路实机双端闭环验证通过（Step 3I）；真实中文 ASR/简体中文输出待人工验收；TTS/LLM/全链路播报未完成 |
 | `feature/week06-voice-task-context` | Week 06 开发分支（基线 `f0653f0` = Week 05 HEAD）；`test_voice_control_server.py` **99/99**、全量 **250 passed + 6 subtests** PASS；ESP32↔PC 实机取消复测与 2026-10-14 实机取消联动均通过；已由 PR #7 合并至 `origin/main` `5aebea1`；中文 ASR 准确率待补人工验收；NL→JSON 缺失，完整任务链路未验收 |
 | `feature/week07-vision-capture` | 已由 PR #8 合并至 `origin/main` `333a697`；按需抓拍/四态反馈/画面可用性/最少保留已实机验收 |
-| `feature/week08-vision-feedback` | **当前** — Week 08 开发分支（基线 `origin/main` `333a697`）；HEAD `27e1d42`；W8-1 契约 + W8-2 本地 DBCNN + W8-3 反馈闭环 + W8-4 并入原 Dashboard；固件已烧录并完成用户实机验收；**未推送、未合并**；阈值校准 / 多真值样本 / 权重许可 / 稳定性待补 |
+| `feature/week08-vision-feedback` | **Week 08 已收尾** — 开发分支（基线 `origin/main` `333a697`）；HEAD `861ae64`（已推送同提交至 `origin/feature/week08-vision-feedback`）；W8-1 契约 + W8-2 本地 DBCNN + W8-3 反馈闭环 + W8-4 并入原 Dashboard + W8-5 中文化面板；W8-4/W8-5 均已实机验收；**未合并 `main`**；阈值校准 / 错误与未知样例对照 / 权重许可 / 稳定性列为后续补验 |
 
 ---
 

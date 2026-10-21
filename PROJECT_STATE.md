@@ -4,11 +4,11 @@
 
 ---
 
-## 当前：Week 08 W8-5 — 视觉反馈面板中文化并保留可排查的原始值（已构建，尚未烧录）
+## 当前：Week 08 已收尾 — 视觉反馈闭环 + 中文化面板（2026-10-21 结项）
 
-**分支**: `feature/week08-vision-feedback`（基线 `origin/main` `333a697`，PR #8 已合并 Week 07）
-**阶段**: 🟢 **W8-1 契约 / W8-2 本地 DBCNN 推理 / W8-3 反馈闭环 / W8-4 并入 Dashboard / W8-5 面板中文化均已实现**；W8-4 已通过用户实机验收；W8-5 仅完成测试与构建，**尚未烧录**；⏳ 阈值校准、多真值样本、权重许可、稳定性未完成
-**详见**: `weeks/week08/STATE.md` 第 7/8/9 节 / `TEST_LOG.md`「O」「P」「Q」/ `DECISIONS.md` D011–D013 / `docs/vision-dbcnn.md`、`docs/vision-feedback.md`
+**分支**: `feature/week08-vision-feedback`（基线 `origin/main` `333a697`；HEAD `861ae64`，已推送同提交至 `origin/feature/week08-vision-feedback`，**未合并 `main`**）
+**阶段**: ✅ **W8-1 契约 / W8-2 本地 DBCNN 推理 / W8-3 反馈闭环 / W8-4 并入 Dashboard / W8-5 面板中文化均已实现**；W8-4 与 W8-5 均通过用户实机验收；⏳ 阈值校准、多真值样本、权重许可、稳定性等作为后续补验/研究项保留（见下）
+**详见**: `weeks/week08/STATE.md` 第 7–10 节 / `TEST_LOG.md`「O」–「R」/ `DECISIONS.md` D011–D013 / `docs/vision-dbcnn.md`、`docs/vision-feedback.md`
 
 **W8-1 已完成（有证据）**:
 - `service/vision_result.py::build_vision_result()`：`request_id / label / score / model_version / decision / reject_reason / created_at` 契约；`decision ∈ {ok, low_score, needs_review, unknown}`（`needs_review` 仅由仅分数模型在阈值未配置时产生）
@@ -34,7 +34,7 @@
 - 测试：Anaconda 视觉相关 **204 passed, 2 skipped**；隔离 venv 含真实 ONNX **206 passed**
 - 未改固件、未改 Week 07 定时抓拍策略、未新增依赖、未上传图片/未调用云端
 
-**Week 08 仍开放（未完成，不得宣称全部通过）**: 正式阈值校准与默认值（**不得自造**）、更多带质量真值的正常/低分/错误/未知样例、模型卡 0–100 与实测 0–1 差异解释、原始权重许可核实、连续帧/并发/长期运行稳定性验证（未执行）
+**Week 08 后续补验/研究项（不构成当周核心要求未完成，但不得宣称已通过）**: 正式阈值校准与默认值（**不得自造**）、更多带质量真值的正常/低分/错误/未知样例、模型卡 0–100 与实测 0–1 差异解释、原始权重许可核实、连续帧/并发/长期运行稳定性验证（未执行）、T04 真机异常结构注入
 
 **W8-4 已完成（有证据）**:
 - 视觉反馈自然并入原有 ESP32 Dashboard（`main/http_server.c`「🔍 视觉反馈」导航 + 内嵌面板），地址栏不变、不新增第二个网页、无 iframe/跳转
@@ -44,14 +44,16 @@
 - **真实设备验收（2026-10-21，用户实机提供）**：固件 `27e1d42` 已烧录（Hash 验证通过）并启动，原 Dashboard 内嵌面板正常；设备照片 `cap-00001.jpg` 真实 DBCNN 推理 `0.34175166487693787` / `dbcnn_onnx_v1` / `needs_review` / 规则 `low_detail`；提交「不可用/遮挡」后 revision 1 保存且历史列显示 `unusable`（记录关联通过）；对照正常样例 `0.7561315298080444` / `ok` / 无反馈
 - 详见 `weeks/week08/STATE.md` 第 7、8 节 / `TEST_LOG.md`「O」「P」/ `docs/vision-feedback.md`
 
-**W8-5 已完成（有证据；**尚未烧录**）**:
+**W8-5 已完成（有证据；已烧录并实机验收）**:
 - 只改原有 Dashboard 视觉反馈面板（`main/http_server.c`），未新增网页、未改 API/枚举/模型/存储格式
 - 状态中文化（值取自真实枚举，未知值原样回退）：`needs_review`→「待人工确认（未校准）」、`low_detail`→「画面细节不足」、规则 `ok`→「规则检查未发现明显问题」、verdict `usable/unusable/undetermined`→「可用/不可用/无法判断」
 - 主区域改为「图像质量分析结果」，主要分数四位小数；「查看详细信息」折叠区保留完整原始分数、模型版本标识、图片来源、字节数、SHA-256、记录 ID
 - 面板明示：质量分数不代表准确率或正确概率；阈值未校准不能自动判定图片是否可用
 - 测试：新增 `service/test_dashboard_vision_ui.py` **14 passed**；视觉相关 7 文件 Anaconda **238 passed, 2 skipped**；隔离 venv + 真实 ONNX **240 passed**；内嵌 JS `node --check` + Node 行为校验通过；`idf.py build` 成功（`0x1142e0`，无 warning/error）
-- 未验证：中文化后的浏览器实际观感（**本轮禁止烧录**，待用户授权）
-- 详见 `weeks/week08/STATE.md` 第 9 节 / `TEST_LOG.md`「Q」
+- **实机验收（2026-10-21）**：`861ae64` 固件烧录（三个镜像均 `Hash of data verified`），启动日志 `App version: week02-stable-103-g861ae64`；用户确认原 Dashboard 显示「图像质量分析结果」、主分数四位小数、完整原始分数在「查看详细信息」、判定「待人工确认（未校准）」、规则「画面细节不足」等中文，模型版本/图片来源/字节数/SHA-256/记录 ID 保留，未跳转第二个网址
+- 详见 `weeks/week08/STATE.md` 第 9、10 节 / `TEST_LOG.md`「Q」「R」
+
+**Week 08 课程要求核对与结项（2026-10-21）**: 官方 Week 08 任务卡要求（真实模型推理、结构化解析、低分/未知反馈、重采与人工纠正、输入—结果—反馈对应、中文可理解反馈）已实现并通过用户实机验收；T03 PASS，T04 在自动化/UI 层 PASS。交付物「正常、低分、错误和未知样例对照」仅部分完成（正常/较低分数有真实样例，错误/未知缺质量真值实拍对照），与阈值校准等一并保留为后续补验项。Week 08 可正式结束，**不得**把后续项表述为已完成。详见 `weeks/week08/STATE.md` 第 10 节 / `TEST_LOG.md`「R」。
 
 ---
 
@@ -154,8 +156,8 @@
 | 单元2 | Week 04 | 自然语言查询与请求采集 | ✅ 已合并至 main (PR #4, `7dd788b`) |
 | | **Week 05** | **接通按键说话与语音播报** | 🟢 语音输入链路已完成实机双端闭环验证（Step 3I）；TTS 播报/LLM/全链路未完成（feature 分支） |
 | | **Week 06** | **让语音任务可以澄清与停止** | 🟢 核心开发完成（分支 `feature/week06-voice-task-context`，HEAD `66ecbb6` + 文档收尾，voice server **99/99**、全量 **250 passed + 6 subtests**）；✅ 实机取消/反馈停止复测（generation 5→6，取消→反馈停止 **79 ms**）；✅ 此前实机取消联动（7→8）；⏳ 中文 ASR 内容验收待补；⛔ NL→JSON 缺失，完整语音任务链路待验收 |
-| 单元3 | **Week 07** | **按需获取一张环境图像** | 🟡 代码+构建完成（分支 `feature/week07-vision-capture`；PC/端侧画面可用性识别、四态反馈 API/UI；`pytest service/` **260 passed**、固件符号已链接）；⛔ **未烧录、未实机验证** |
-| | Week 08 | 把视觉推理结果变成可理解反馈 | ⏳ 未开始 |
+| 单元3 | **Week 07** | **按需获取一张环境图像** | ✅ 已由 PR #8 合并至 `origin/main` `333a697`；按需抓拍、四态反馈、画面可用性、最少保留已实机验收；真实取帧失败 `failed` 样例待补 |
+| | **Week 08** | **把视觉推理结果变成可理解反馈** | ✅ 已收尾（分支 `feature/week08-vision-feedback` HEAD `861ae64`，已推送，**未合并 main**）；真实 DBCNN 推理 + 结构化拒识 + 重采/人工纠正 + Dashboard 中文化面板，W8-4/W8-5 已实机验收；阈值校准等列为后续补验 |
 | | Week 09 | 用视觉事件触发一次主动询问 | ⏳ 未开始 |
 | 单元4 | Week 10-12 | 多源上下文与状态推断 | ⏳ 未开始 |
 | 单元5 | Week 13-15 | 边云协作与韧性通信 | ⏳ 未开始 |
