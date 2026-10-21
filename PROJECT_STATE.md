@@ -4,11 +4,11 @@
 
 ---
 
-## 当前：Week 08 W8-4 — 视觉反馈并入 Dashboard 并完成真实设备验收（阈值校准与多真值样本待做）
+## 当前：Week 08 W8-5 — 视觉反馈面板中文化并保留可排查的原始值（已构建，尚未烧录）
 
 **分支**: `feature/week08-vision-feedback`（基线 `origin/main` `333a697`，PR #8 已合并 Week 07）
-**阶段**: 🟢 **W8-1 契约 / W8-2 本地 DBCNN 推理 / W8-3 反馈闭环 / W8-4 并入 Dashboard 均已实现，并通过用户实机验收**；⏳ 阈值校准、多真值样本、权重许可、稳定性未完成
-**详见**: `weeks/week08/STATE.md` 第 4/5/6 节 / `TEST_LOG.md`「L」「M」「N」/ `DECISIONS.md` D011–D013 / `docs/vision-dbcnn.md`、`docs/vision-feedback.md`
+**阶段**: 🟢 **W8-1 契约 / W8-2 本地 DBCNN 推理 / W8-3 反馈闭环 / W8-4 并入 Dashboard / W8-5 面板中文化均已实现**；W8-4 已通过用户实机验收；W8-5 仅完成测试与构建，**尚未烧录**；⏳ 阈值校准、多真值样本、权重许可、稳定性未完成
+**详见**: `weeks/week08/STATE.md` 第 7/8/9 节 / `TEST_LOG.md`「O」「P」「Q」/ `DECISIONS.md` D011–D013 / `docs/vision-dbcnn.md`、`docs/vision-feedback.md`
 
 **W8-1 已完成（有证据）**:
 - `service/vision_result.py::build_vision_result()`：`request_id / label / score / model_version / decision / reject_reason / created_at` 契约；`decision ∈ {ok, low_score, needs_review, unknown}`（`needs_review` 仅由仅分数模型在阈值未配置时产生）
@@ -43,6 +43,15 @@
 - 测试：Anaconda **224 passed, 2 skipped**；隔离 venv + 真实 ONNX **226 passed**；`idf.py build` **成功**（无 warning/error）；内嵌 JS `node --check` 通过
 - **真实设备验收（2026-10-21，用户实机提供）**：固件 `27e1d42` 已烧录（Hash 验证通过）并启动，原 Dashboard 内嵌面板正常；设备照片 `cap-00001.jpg` 真实 DBCNN 推理 `0.34175166487693787` / `dbcnn_onnx_v1` / `needs_review` / 规则 `low_detail`；提交「不可用/遮挡」后 revision 1 保存且历史列显示 `unusable`（记录关联通过）；对照正常样例 `0.7561315298080444` / `ok` / 无反馈
 - 详见 `weeks/week08/STATE.md` 第 7、8 节 / `TEST_LOG.md`「O」「P」/ `docs/vision-feedback.md`
+
+**W8-5 已完成（有证据；**尚未烧录**）**:
+- 只改原有 Dashboard 视觉反馈面板（`main/http_server.c`），未新增网页、未改 API/枚举/模型/存储格式
+- 状态中文化（值取自真实枚举，未知值原样回退）：`needs_review`→「待人工确认（未校准）」、`low_detail`→「画面细节不足」、规则 `ok`→「规则检查未发现明显问题」、verdict `usable/unusable/undetermined`→「可用/不可用/无法判断」
+- 主区域改为「图像质量分析结果」，主要分数四位小数；「查看详细信息」折叠区保留完整原始分数、模型版本标识、图片来源、字节数、SHA-256、记录 ID
+- 面板明示：质量分数不代表准确率或正确概率；阈值未校准不能自动判定图片是否可用
+- 测试：新增 `service/test_dashboard_vision_ui.py` **14 passed**；视觉相关 7 文件 Anaconda **238 passed, 2 skipped**；隔离 venv + 真实 ONNX **240 passed**；内嵌 JS `node --check` + Node 行为校验通过；`idf.py build` 成功（`0x1142e0`，无 warning/error）
+- 未验证：中文化后的浏览器实际观感（**本轮禁止烧录**，待用户授权）
+- 详见 `weeks/week08/STATE.md` 第 9 节 / `TEST_LOG.md`「Q」
 
 ---
 

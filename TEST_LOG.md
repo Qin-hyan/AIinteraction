@@ -1454,3 +1454,53 @@ idf.py build
 - 原始 DBCNN 权重许可核实；
 - 连续帧、并发、长期运行等稳定性验证（尚未执行）。
 
+
+---
+
+## 2026-10-21 Q. Week 08 W8-5 视觉反馈面板中文化（静态回归 + 固件构建，未烧录）
+
+### Q.1 范围与改动
+
+- 只改原有 Dashboard 的视觉反馈面板（`main/http_server.c` 内嵌页面）；不新增网页、不改 API/底层枚举/模型算法/存储格式。
+- 状态中文化（真实枚举值先经代码核实）：
+  - `decision`：`ok` → 「可采纳（规则检查未发现明显问题）」、`low_score` → 「低分（建议重新采集）」、`needs_review` → 「待人工确认（未校准）」、`unknown` → 「无法判断（+ 中文拒识原因）」；
+  - Week 07 规则诊断：`ok` → 「规则检查未发现明显问题」、`low_detail` → 「画面细节不足」、`too_dark/too_bright/low_contrast/invalid` → 中文，规则不可用 → 「规则检查不可用」；
+  - 人工反馈：`usable` → 「可用」、`unusable` → 「不可用」、`undetermined` → 「无法判断」；
+  - 输入来源：`local_upload` → 「本地图片」、`device_gallery` → 「设备照片」；
+  - 未知值统一回退为原值输出（`zhMap()` 使用 `hasOwnProperty` 判断），不猜测、不抛错。
+- 主区域标题改为「图像质量分析结果」，主要分数四位小数（`score4()`），完整原始分数仍原样保留。
+- 「查看详细信息」折叠区收纳：完整原始分数、模型版本标识、图片来源、字节数、SHA-256、记录 ID。
+- 未校准说明明确写入面板：质量分数不代表准确率或正确概率；阈值未校准，不能自动判定图片是否可用。
+- 反馈保存与历史关联逻辑未改动（仍绑定 `record_id`，保存后刷新同一批历史），只把历史列改为中文映射 + 四位小数。
+
+### Q.2 自动化测试（实际执行）
+
+| 命令/方式 | 结果 | 说明 |
+|---|---|---|
+| `python -m pytest service/test_dashboard_vision_ui.py -q` | **14 passed** | 新增回归：映射覆盖枚举、未知值回退、四位小数与完整分数、详细信息字段、未校准文案、反馈-历史关联、`node --check`、Node 行为校验 |
+| `python -m pytest`（视觉相关 7 个测试文件） | **238 passed, 2 skipped** | 224（W8-4 基线 6 个文件）+ 14 新增用例；2 skipped 为无 ONNX Runtime 的真实推理用例 |
+| 隔离 venv + `VISION_DBCNN_RUN_INTEGRATION=1` + 真实权重（同 7 个文件） | **240 passed** | 真实 DBCNN 推理冒烟未回归；新增面板用例在含 ONNX 环境下同样通过 |
+| Node 行为校验（真实执行内嵌 JS 纯函数） | 通过 | `needs_review`→待人工确认（未校准）、规则 `low_detail`→画面细节不足、`0.34175166487693787`→`0.3418`、未知 verdict 原样回退 |
+
+覆盖的真实枚举来源：`DecisionEnum` / `RejectReason`（`service/vision_result.py`）、`IMAGE_STATUSES`（`service/image_quality.py`）、`FEEDBACK_VERDICTS` 与 `SOURCE_*`（`service/vision_feedback.py`）。
+
+### Q.3 固件构建（实际执行）
+
+- 命令：`idf.py build`（ESP-IDF v5.4.3，日志 `.workbuddy/logs/w8-5-build.log`）。
+- 结果：**`Project build complete`**；`week02-sensor-collect.bin` = `0x1142e0`（1,131,808 B），app 分区余 64%；日志中无 `warning:` / `error:`。
+- **本轮未烧录、未复位设备**（修改了固件内嵌页面，需用户在另行授权后烧录）。
+
+### Q.4 内嵌 JS 语法（实际执行）
+
+- 从 `INDEX_HTML` 提取脚本后 `node --check` → **退出码 0**（页面脚本 31,888 B）。
+- 无新增 `window.open` / `location.href` / `iframe` / 独立页面。
+
+### Q.5 实机证据（用户提供，Agent 未代操作）与未验证项
+
+**用户确认的实机结果**：在原有 Dashboard 视觉反馈面板中提交「无法判断」反馈后，页面提示反馈已保存，历史记录同步更新（反馈与记录按 `record_id` 关联成立）。该结果为用户在实际设备浏览器上的既有验收，Agent 未代为点击；当时页面显示的是原始枚举值 `undetermined`。
+
+**未验证（如实记录）**：
+
+- 本轮中文化**尚未烧录**，因此「中文显示 / 四位小数 / 详细信息折叠」的浏览器实际观感为**待烧录后人工确认**；
+- 阈值校准、多真值样本、权重许可、连续帧/并发/长期稳定性仍未完成（与「P」节一致）。
+
