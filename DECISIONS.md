@@ -144,3 +144,47 @@
   3. 触发条件与停止条件写入 README「Week 07」。
 - **未满足/边界**：真实取帧失败未构造（无故障注入手段），**失败样例待补验**；失败历史不持久化（原文未要求）。
 - **证据**：README「Week 07」；TEST_LOG J/K；`weeks/week07/STATE.md` 第 7/8 节。
+
+## D011 — Week 08 W8-1 视觉结果契约：标签复用、阈值显式传入 ——【已确认】
+
+- **日期**: 2026-10-19
+- **决定**:
+  1. `label` 词汇表直接复用 `service/image_quality.py` 的 `IMAGE_STATUSES`（`ok/too_dark/too_bright/low_contrast/low_detail/invalid`），新增具名常量避免两处漂移；**不另造场景标签**。
+  2. `score_threshold` 在 `build_vision_result()` 中**无默认值**，必须由调用方显式提供且位于 `(0, 1]`；W8-1 未做校准，**不编造阈值**。
+  3. `decision` 仅 `ok / low_score / unknown`（W8-2 由 D012 为仅分数模型扩展 `needs_review`）；`decision=ok` 只表示结果可采纳，**不表示画面可用**，画面语义由 `label` 表达；`label=invalid` 归入 `unknown/image_invalid`，不得当作低分。
+  4. `score` 保留原始 0~1 相对值，字段 `score_kind=relative_usability`；不得称准确率/置信度。
+  5. `created_at` 为 PC 端 UTC ISO-8601，`time_quality=pc_utc`，不与设备相对时间混用（D002）。
+- **原因**: 课程要求讲解预测标签、分数、拒识与模型版本；未经校准的分数不得表述为正确率。复用既有词表与阈值显式化可避免伪造校准结论。
+- **影响**: W8-2 模型适配器必须提供真实模型版本、阈值配置与样本；未提供时无法产生 `low_score` 判定。
+- **证据**: `service/vision_result.py`、`service/test_vision_result.py`；TEST_LOG 2026-10-19 L 节。
+
+## D012 — Week 08 W8-2 DBCNN 接入：仅分数契约、来源分离、阈值未配置不判定 ——【已确认】
+
+- **日期**: 2026-10-19
+- **决定**:
+
+## D013 — Week 08 W8-3 反馈闭环：独立本地服务、来源分离、仅追加存储、无默认阈值 ——【已确认】
+
+- **日期**: 2026-10-20
+- **决定**:
+  1. **不复用语音链路，不改固件 Dashboard**：新增独立本地服务 `service/vision_feedback_server.py`，默认只监听 `127.0.0.1:8090`，仅标准库，不自动启动；语音服务保持 8080，设备保持 80。
+  2. **设备端零改动**：只调用 Week 07 既有 `/api/camera/gallery|status|photo|capture`；设备地址必须由 `VISION_DEVICE_BASE_URL` / `--device-url` 显式提供，**不扫描网络、不猜 IP**；未配置时设备接口返回 503，仅本地图片仍可用。
+  3. **三类来源严格分离**：`analysis.score/model_version` = DBCNN；`analysis.rule_diagnostics` = Week 07 规则；`feedback.*` = 用户意见。反馈事件 `label_source="user_feedback"`，单独写入 `feedback.jsonl`，**不写回**分析记录；`occluded` 只能是用户观察，禁止由低分或 `noise_drift` 推导。
+  4. **仅追加持久化**：`records.jsonl`（一次分析一行，不可变）与 `feedback.jsonl`（可修订，`revision` 递增）均位于 `.workbuddy/vision-feedback/`（gitignored）；图像字节不落盘，只存 SHA-256/字节数/设备引用；写入失败回滚半行。
+  5. **阈值仍无默认值**：未配置 `VISION_DBCNN_SCORE_THRESHOLD` 时判定恒为 `needs_review`；界面与 health 必须明示「分数未校准」，禁止使用 0.5 作为生产默认值。
+  6. **反馈校验**：verdict `usable/unusable/undetermined`；reason `score_mismatch/too_dark/too_bright/blurred/occluded/wrong_scene/other`，`other` 必须填写说明；与上一条完全相同 → 409；记录不存在 → 404；非法输入 → 400；保存失败 → 500 `feedback_save_failed`。
+  7. **验证边界**：单元/接口测试与真实模型 HTTP 冒烟可自动完成；**真实设备端到端需用户提供设备地址并操作**，未验证部分必须标注为待查验。
+- **原因**: 课程要求「输入—结果—反馈」可追踪、低分/未知需反馈与重采、人工纠正入口；把视觉功能塞进语音链路或改固件会扩大回归面。未校准的分数只能以「需复核」呈现，不能伪造阈值或准确率。
+- **影响**: W8-3 之后若要接入正式阈值，必须先有校准依据；若要真机验证，需要设备地址与人工点击/遮挡配合；后续可在此基础上补充样例对照与阈值校准，但不得改写本决策的来源分离与默认不判定原则。
+- **证据**: `service/vision_feedback.py`、`service/vision_feedback_server.py`、`service/test_vision_feedback.py`、`service/test_vision_feedback_server.py`、`docs/vision-feedback.md`；`TEST_LOG.md` 2026-10-20 N 节。
+
+  1. DBCNN 只作为「仅分数」模型接入：`build_score_vision_result()` 返回 `label=None` / `label_source=None` / `score_source=dbcnn_onnx`；**不把规则诊断或分数高低伪装成分类标签**。
+  2. `decision` 增加 `needs_review`：分数合法但 `score_threshold` 未配置时使用；`reject_reason=threshold_not_configured`、`threshold_status=not_configured`、`review_required=true`；**不设生产默认阈值**。
+  3. 阈值仍无默认值；显式参数优先于 `VISION_DBCNN_SCORE_THRESHOLD`；非法值抛 `ValueError`，不静默忽略；等于门槛视为达标（闭区间）。
+  4. Week 07 `image_quality` 仅作为 `rule_diagnostics` 附带，`source=week07_image_quality_rules`；其 `label/score` 不是 DBCNN 输出；依赖缺失时 `available=false`，不冒充 `invalid`。
+  5. 模型路径 `VISION_DBCNN_MODEL_PATH` 必需；加载/推理失败抛明确 `DbcnnError`，**不退回规则判断**；固定 `CPUExecutionProvider`，不调用云端推理 API。
+  6. 模型与外部权重留在本地忽略目录 `.workbuddy/`，**不纳入 Git**；DBCNN 输出保留原始 0~1，不乘 100；模型卡 0–100 差异记录为已知元数据不一致。
+  7. 许可：Hugging Face 仓库的 Apache-2.0 标签**不代表原始 DBCNN 权重许可已核实**；不作法律结论。
+- **原因**: 课程要求区分预测标签、分数、拒识和模型版本；未校准的模型分数不得当作准确率，也不得把规则诊断混作模型分类。阈值未校准时最诚实的表达是「需要复核」，而不是自造默认门槛。
+- **影响**: W8-3 的反馈/重采/纠错必须读取 `decision` / `reject_reason` / `review_required`，不得把 `needs_review` 显示为 `ok`；正式阈值需用户提供校准依据后再配置。
+- **证据**: `service/vision_dbcnn.py`、`service/vision_analysis.py`、`service/vision_result.py`、`docs/vision-dbcnn.md`；TEST_LOG 2026-10-19 M 节。

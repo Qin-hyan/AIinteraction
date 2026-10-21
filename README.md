@@ -17,6 +17,7 @@
 - **周期上报开关**：暂停后板端停止采样、页面停止刷新，但命令通道保持可用
 - **CSV 导出按钮**：将浏览器本地持久化的有效观测一键导出为 `esp32_obs_YYYY-MM-DD_hh-mm-ss.csv`
 - **🎙 语音交互面板**：仪表盘内置语音控制（开始/停止录音/取消任务），实时显示录音帧数、时长、ASR 识别文本与语音任务状态（`state`/`generation`/`request_id`）；直接调用 PC 端语音服务 `/api/voice/{start,stop,status,cancel}`
+- **🔍 视觉反馈面板**：在原仪表盘内对设备照片或本地 JPEG 做一次真实 DBCNN 质量评分，展示原始分数 / 模型版本 / Week 07 规则诊断 / 未校准状态，并支持「可用 / 不可用 / 无法判断 + 原因」人工反馈与重新采集；分数未校准，不代表准确率或遮挡分类
 
 仪表盘使用深色主题，所有字段缺失或空值时显示 `—`，不会出现 `undefined` 或 `NaN`。
 
@@ -42,6 +43,7 @@
 | **按键物理反馈** | Week 03：独立 FreeRTOS 按键扫描任务 (30 Hz)，事件驱动 LED 反馈与 HTTP 上行 |
 | **语音交互面板** | Week 05：ESP32 仪表盘内置 🎙 语音控制面板，通过 PC 语音服务实现录音/ASR 状态显示与按钮控制；语音输入链路（PLAY→PC 录音→Whisper ASR→STOP 回执→ESP32 回 IDLE）已实机双端闭环验证通过（Step 3I） |
 | **语音任务上下文与取消** | Week 06：PC 语音服务全面增加 request_id 全链路追踪、任务状态机、任务取消 `/api/voice/cancel`、澄清/重新输入 `/api/voice/clarify` 与迟到结果代次隔离（generation 单调递增，旧代次结果丢弃）；ESP32 仪表盘新增取消按钮与任务状态显示；新增任务计时（首次反馈/完成/终止/取消→反馈停止，单次实测 79 ms） |
+| **视觉反馈（Week 08）** | ESP32 仪表盘内嵌「🔍 视觉反馈」面板；PC 端本地 DBCNN ONNX CPU 推理（仅 `127.0.0.1:8090`），返回原始质量分数 / 模型版本 / Week 07 规则诊断；未配置阈值时判定恒为 `needs_review`；支持人工反馈（可用/不可用/无法判断 + 原因）、重新采集与中文化展示（原始分数可在「查看详细信息」查看）；不新增第二个网页、不上传图片、不调用云端 |
 
 > ⚠️ **Week 05 语音识别待人工验收**：真实中文语音识别准确率和简体中文输出质量**尚未经人工审阅**，不得宣称已通过。静音/背景噪声导致的空转录不得记录为识别成功。
 
@@ -265,6 +267,23 @@ idf.py -p COM端口 flash monitor
 - 权限边界：无自动采集；只有显式请求触发，请求与图像通过 `request_id`、`captured_ms`、`source=manual` 关联；未实现账户级鉴权（官网原文未要求）。
 - 失败记录：`cap_task_status=failed` + `last_img_status=invalid` + 串口 `[DIAG-CAP] status=failed req=<id>`；**不得与 `unusable` 混同**。当前为运行时状态，无独立持久化失败历史（官网原文未要求持久化）。
 
+#### Week 08 — 把视觉推理结果变成可理解反馈 ✅（W8-1…W8-5 完成，已实机验收）2026-10-21
+
+| 能力 | 状态 | 验证方式 |
+|------|------|---------|
+| 结构化视觉结果契约（`service/vision_result.py`） | ✅ `ok / low_score / needs_review / unknown` + 拒识原因；`score` 为 0~1 相对值 | 单元测试 |
+| DBCNN ONNX 适配器（`service/vision_dbcnn.py`） | ✅ 本地权重 + ONNX Runtime CPU；真实分数 `0.7561` / `0.2581` | 真实推理（2 张样例） |
+| 本地组合入口 / CLI（`service/vision_analysis.py`） | ✅ 复用既有视觉模块，不新开端口；输出分数、模型版本、阈值状态、规则诊断 | 集成冒烟 |
+| 来源分离 | ✅ DBCNN `label=null`、`score_source=dbcnn_onnx`；规则诊断 `source=week07_image_quality_rules` | 集成冒烟 |
+| 阈值判定 | ⏳ **未校准**；未配置返回 `needs_review` / `threshold_not_configured`；测试中的 `0.5` 不是生产默认值 | 单元 + 集成 |
+| 低分/未知反馈、重新采集、人工纠正 UI | ✅ `needs_review` / `unknown` / `low_score` + 拒识原因；设备重采；三态人工反馈按 `record_id` 关联 | 自动化 + 用户实机 |
+| 中文化反馈面板 | ✅ 标题「图像质量分析结果」、四位小数；完整原始分数/SHA-256/记录 ID 等保留在「查看详细信息」 | 用户实机 |
+| 课程要求核对 | ✅ T03；T04（自动化/接口/UI 层）；交付物中的错误/未知样例对照仅部分完成 | `weeks/week08/STATE.md` 第 10 节 |
+
+- 模型权重与外部数据文件留在本地忽略目录 `.workbuddy/`，**不纳入 Git**；源码不依赖提交模型二进制。
+- 模型来源、配置、许可注意事项与限制见 [docs/vision-dbcnn.md](docs/vision-dbcnn.md)。
+- DBCNN 只输出通用质量分数，**不是遮挡类别或准确率**；0~1 实际输出与模型卡 0~100 标称的差异未解释，记录为已知元数据不一致。
+
 
 ### 仍待补验
 
@@ -276,12 +295,16 @@ idf.py -p COM端口 flash monitor
 | ⚠️ **Week 06 完整 ASR→NL→JSON→任务链路** | `service/nl_to_task.py` 缺失，ASR 原始文本无法转为 TaskContract JSON；取消/澄清/计时链路已验收，但「真实语音 → 任务执行」未端到端验收 |
 | ⚠️ **Week 03 ESP32→VPS HTTP 上行端到端验收** | **软件集成已完成**：help_uplink 异步任务已集成至 `main.c`（初始化调用 `help_uplink_start`，事件状态机调用 `help_uplink_is_configured` / `help_uplink_request_send` / `help_uplink_poll`，见 `29dd72d`）；**仍未完成**真实 VPS URL 配置与 ESP32→VPS 端到端实机验收（HTTP POST 成功/失败路径未验证） |
 | ⚠️ **Week 07 真实取帧失败 `failed` 样例** | 四态中的 `failed` 代码路径与日志已实现，但无故障注入手段，**未构造真实失败**；不得用 `unusable` 代替 `failed`，也不得视为已通过 |
+| ⚠️ **Week 08 DBCNN 阈值校准与样例对照** | 反馈闭环与中文化面板已实机验收；但质量分数阈值仍未校准（未配置时只返回 `needs_review`，低分/未知路径目前只有自动化证据）；错误/未知类别缺有质量真值的实拍对照 |
+| ⚠️ **Week 08 模型能力与许可边界** | 仅少量本地样例做可运行性冒烟，**不能证明准确率/泛化/遮挡识别能力**；Hugging Face 仓库的 Apache-2.0 标签**不自动证明**原始 DBCNN 权重许可，未作法律结论 |
+| ⚠️ **Week 08 稳定性与异常注入** | 连续帧/并发/长期运行未验证；T04 异常结构输出仅在单元/接口/UI 层验证，未做真机注入 |
 
 > 所有测试记录详见 [TEST_LOG.md](TEST_LOG.md)（版本、输入、预期、实际、PASS/FAIL、运行位置和证据）。
 
 ### 状态标记
 
 - ✅ 已完成且经实机或人工验证
+- 🟡 部分完成（核心能力有证据，仍有明确未完成项）
 - 🔀 已合并但部分环节待验收
 - ⚙️ 开发中 / 仅在 mock 层通过
 - ⏳ 未开始
@@ -318,8 +341,12 @@ AIinteraction/
 │   ├── audio_capture.py      # Week 05：PC 音频采集（sounddevice + stdlib wave）
 │   ├── voice_control_server.py # Week 05/06：PC 录音 HTTP 控制服务 + 后台自动 Whisper ASR + 任务上下文/取消/澄清/代次隔离
 │   ├── asr_whisper.py        # Week 05：本地 Whisper ASR 模块（base/zh/transcribe）
-│   ├── requirements-*.txt    # Week 05：PC 端音频/ASR 依赖清单
-│   └── test_*.py             # 单元/集成测试（Week 04 共 102 项；Week 05 追加 ASR/录音/服务；Week 06 voice server 99/99、全量 250 passed + 6 subtests）
+│   ├── image_quality.py      # Week 07：画面可用性/遮挡规则诊断
+│   ├── vision_result.py      # Week 08：结构化视觉结果契约与拒识语义
+│   ├── vision_dbcnn.py       # Week 08：DBCNN ONNX 质量分数适配器（CPU）
+│   ├── vision_analysis.py    # Week 08：DBCNN + 规则诊断组合入口 / 本地 CLI
+│   ├── requirements-*.txt    # Week 05/07/08：PC 端音频/ASR/视觉依赖清单
+│   └── test_*.py             # 单元/集成测试（Week 04 共 102 项；Week 05 追加 ASR/录音/服务；Week 06 voice server 99/99、全量 250 passed + 6 subtests；Week 08 相关测试 125 passed）
 ├── partitions.csv            # 8MB Flash 分区表
 ├── CMakeLists.txt            # 顶层 CMake 项目
 ├── sdkconfig.defaults        # 公开配置模板（含 Wi-Fi 占位符）
@@ -329,13 +356,17 @@ AIinteraction/
 ├── AGENT_MEMORY.md           # 项目持久事实
 ├── PROJECT_STATE.md          # 当前进度
 ├── DECISIONS.md              # 技术决策
+├── docs/
+│   └── vision-dbcnn.md       # Week 08：DBCNN 模型配置/来源/许可/限制
 └── weeks/                    # 每周详细状态
     ├── week01/STATE.md
     ├── week02/STATE.md
     ├── week03/STATE.md
     ├── week04/STATE.md
     ├── week05/STATE.md
-    └── week06/STATE.md
+    ├── week06/STATE.md
+    ├── week07/STATE.md
+    └── week08/STATE.md
 ```
 ---
 
@@ -351,6 +382,8 @@ AIinteraction/
 | [weeks/week05/STATE.md](weeks/week05/STATE.md) | Week 05 详细状态（分支 `feature/week05-voice-interaction`；按键说话链路 PLAY→录音→Whisper ASR→STOP→回 IDLE 已完成实机双端闭环验证；TTS/LLM/全链路未完成） |
 | [weeks/week06/STATE.md](weeks/week06/STATE.md) | Week 06 详细状态（分支 `feature/week06-voice-task-context`：任务上下文/取消/澄清/迟到结果隔离 + 生产计时 + ESP32 仪表盘取消按钮与状态显示；实机取消/反馈停止已复测；ASR 内容验收待补；NL→JSON 缺失） |
 | [weeks/week07/STATE.md](weeks/week07/STATE.md) | Week 07 详细状态（分支 `feature/week07-vision-capture`：按需抓拍、四态反馈、画面可用性/遮挡、最少保留与显式清除；实机验收含 ok/too_dark 与当堂验证①；真实 `failed` 样例待补） |
+| [weeks/week08/STATE.md](weeks/week08/STATE.md) | Week 08 详细状态（结构化视觉结果契约、DBCNN ONNX 真实分数、来源分离与阈值未配置语义、反馈闭环、并入原 Dashboard；真实设备验收已记录；阈值校准 / 多真值样本 / 权重许可 / 稳定性仍未完成） |
+| [docs/vision-dbcnn.md](docs/vision-dbcnn.md) | DBCNN 模型配置、来源、许可注意事项、真实推理证据与已知限制 |
 | [每周计划/](每周计划/) | 18 周课程计划 HTML |
 
 ### HTTP API 速查
@@ -391,12 +424,13 @@ IDLE → SUBMITTED(已提交·已受理) → RECEIVED(设备已接收)
 
 | 引用 | 说明 |
 |------|------|
-| `main` | `origin/main` `5aebea1`（PR #7，Week 06 已合并）；本地 `main` 非开发基线 |
+| `main` | `origin/main` `333a697`（PR #8，Week 07 已合并）；本地 `main` 非开发基线 |
 | `week02-stable` (tag) | **稳定基线** — 12 项实机验证全 PASS |
 | `feature/week04-natural-language` | 已合并的**历史分支**（PR #4 → `main` `7dd788b`；分支 HEAD `0b4b323` 保留） |
 | `feature/week05-voice-interaction` | **已收尾**（作为 Week 06 基线 `f0653f0`）— Week 05 开发分支（基线 `7dd788b`）；HEAD `91959fb`；含完整功能实现：PC 音频采集/录音 HTTP 控制服务/本地 Whisper ASR 模块 + ESP32 PLAY 按键语音控制 + **ESP32 仪表盘 🎙 语音交互面板**；语音输入链路实机双端闭环验证通过（Step 3I）；真实中文 ASR/简体中文输出待人工验收；TTS/LLM/全链路播报未完成 |
 | `feature/week06-voice-task-context` | Week 06 开发分支（基线 `f0653f0` = Week 05 HEAD）；`test_voice_control_server.py` **99/99**、全量 **250 passed + 6 subtests** PASS；ESP32↔PC 实机取消复测与 2026-10-14 实机取消联动均通过；已由 PR #7 合并至 `origin/main` `5aebea1`；中文 ASR 准确率待补人工验收；NL→JSON 缺失，完整任务链路未验收 |
-| `feature/week07-vision-capture` | **当前** — Week 07 开发分支（基线 `5aebea1`）；HEAD `54f0c66`，已推送且与远端一致；按需抓拍/四态反馈/画面可用性/最少保留；实机验收含 ok/too_dark 与当堂验证①；真实 `failed` 样例待补；**尚无 PR，是否创建与合并由用户决定** |
+| `feature/week07-vision-capture` | 已由 PR #8 合并至 `origin/main` `333a697`；按需抓拍/四态反馈/画面可用性/最少保留已实机验收 |
+| `feature/week08-vision-feedback` | **Week 08 已收尾** — 开发分支（基线 `origin/main` `333a697`）；功能/固件提交 `861ae64`（文档收尾提交见 `git log -1`；已推送同分支至 `origin`）；W8-1 契约 + W8-2 本地 DBCNN + W8-3 反馈闭环 + W8-4 并入原 Dashboard + W8-5 中文化面板；W8-4/W8-5 均已实机验收；**未合并 `main`**；阈值校准 / 错误与未知样例对照 / 权重许可 / 稳定性列为后续补验 |
 
 ---
 

@@ -38,3 +38,8 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096
 CONFIG_VOICE_PC_URL=""
 # 单次请求超时（ms），仅限制后台任务的阻塞时长，不影响按键扫描与主循环。
 CONFIG_VOICE_HTTP_TIMEOUT_MS=5000
+
+# Week 08 视觉反馈（Dashboard 内嵌面板 → 本机视觉 API，见 service/vision_feedback_server.py）
+# 默认 127.0.0.1:8090 = 本机回环地址，不泄露设备/电脑局域网 IP；
+# 置空则隐藏「视觉反馈」面板功能。
+CONFIG_VISION_API_URL="http://127.0.0.1:8090"

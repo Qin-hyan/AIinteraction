@@ -1193,3 +1193,363 @@ idf.py build
 
 **代码变更**：无。**结论**：现有实现符合原文最小要求；失败样例属证据缺口，进入 PR 审查时须如实标注。
 
+---
+
+## 2026-10-19 L. Week 08 W8-1 结构化视觉结果契约与拒识语义
+
+**分支**: `feature/week08-vision-feedback`（基线 `origin/main` `333a697`，含 PR #8 / Week 07）
+**验证层级**: 单元测试（第 2 级）；**未编译、未烧录、未接入真实模型**，不得据此声称模型推理已验证。
+
+| 输入 | 预期 | 实际 | 结论 |
+|---|---|---|---|
+| `{"label":"ok","score":0.87}`，阈值 0.5 | `decision=ok`，`reject_reason=null`，score 原值 | 同上 | ✅ PASS |
+| `{"label":"ok","score":0.2}`，阈值 0.5 | `decision=low_score` / `score_below_threshold` | 同上 | ✅ PASS |
+| `{"label":"ok","score":0.5}`，阈值 0.5 | 达到门槛 → `ok`（闭区间） | 同上 | ✅ PASS |
+| `None` | `unknown` / `no_result`，label 与 score 为 null | 同上 | ✅ PASS |
+| 坏 JSON / 非 UTF-8 / JSON 数组 / 数字 / list | `unknown` / `parse_error` | 同上 | ✅ PASS |
+| 缺 label / 缺 score / 非字符串 label | `missing_label` / `missing_score` / `unsupported_label` | 同上 | ✅ PASS |
+| `{"label":"cat","score":0.99}` | `unknown` / `unsupported_label`，保留原始 label 与 score | 同上 | ✅ PASS |
+| `{"label":"invalid","score":0.0}` | `unknown` / `image_invalid`（不得降级为 `low_score`） | 同上 | ✅ PASS |
+| score = 1.5 / -0.1 / "0.9" / true / null / NaN / Inf | `unknown` / `invalid_score`，score=null | 同上 | ✅ PASS |
+| request_id 空/None、阈值 0/1.5/True/缺省、model_version 空 | 调用方错误 → `ValueError` / `TypeError` | 同上 | ✅ PASS |
+| 注入 UTC 时间 | `created_at` = ISO-8601 毫秒 + `Z`，`time_quality=pc_utc` | 同上 | ✅ PASS |
+| 全部结果 JSON 序列化（`allow_nan=False`） | 可序列化，不漏 NaN | 同上 | ✅ PASS |
+
+**命令**: `python -m pytest service/test_vision_result.py service/test_image_quality.py -q`
+**结果**: **62 passed in 0.44s**（`test_vision_result.py` 52 + `test_image_quality.py` 10）
+**证据位置**: `.workbuddy/logs/w8-1-tests.log`（本地忽略，未提交）
+**未覆盖**: 真实模型推理、阈值校准、持久化/API/界面（均不在 W8-1 范围）。`score` 为相对可用性，**不得解释为准确率**。
+
+---
+
+## 2026-10-19 M. Week 08 W8-2 本地 DBCNN ONNX 真实模型接入
+
+**分支**: `feature/week08-vision-feedback`（本任务开始时 HEAD `865e78b`；基线 `origin/main` `333a697`）
+**验证层级**: 单元测试（第 2 级）+ **本地真实 ONNX 推理（第 5 级，离线）**；**未编译、未烧录、未接入 HTTP/UI/设备端**，不得据此声称端侧或用户体验已验证。
+
+### M.1 环境
+
+| 项 | 值 |
+|---|---|
+| 单元测试环境 | Anaconda Python 3.11.7（numpy 2.4.4 / Pillow 10.2.0 / pytest 7.4.4；onnxruntime 导入失败：`DLL load failed while importing onnxruntime_pybind11_state`，预存环境问题） |
+| 真实推理环境 | `.workbuddy/venvs/camera-health-nano`（Python 3.11.7；numpy 2.4.6 / onnxruntime 1.22.1 / opencv-python-headless 5.0.0.93 / Pillow 10.2.0 / pytest 7.4.4） |
+| 模型 | `.workbuddy/artifacts/dbcnn-iqa-test/weights/dbcnn_model.onnx` + `.onnx.data` |
+| 配置 | `VISION_DBCNN_MODEL_PATH` 指向上述 `.onnx`；`VISION_DBCNN_SCORE_THRESHOLD` 未设置（除显式阈值用例） |
+
+### M.2 自动化测试
+
+| 命令 | 预期 | 实际 | 结论 |
+|---|---|---|---|
+| `python -m pytest service/test_vision_result.py service/test_vision_dbcnn.py service/test_vision_analysis.py service/test_image_quality.py -q`（Anaconda 环境） | 契约/适配器/组合入口测试通过；真实冒烟跳过 | **124 passed, 1 skipped in 0.90s** | ✅ PASS |
+| 隔离 venv + `VISION_DBCNN_RUN_INTEGRATION=1` 运行同一组测试 | 含真实 ONNX 冒烟全部通过 | **125 passed in 1.16s** | ✅ PASS |
+
+覆盖要点：
+
+- 阈值未配置 → `decision=needs_review` / `reject_reason=threshold_not_configured` / `review_required=true`；
+- DBCNN `label=null`、`label_source=null`、`score_source=dbcnn_onnx`；规则标签只出现在 `rule_diagnostics`；
+- 模型路径缺失/文件不存在/版本为空 → 明确异常；推理失败 → `DbcnnInferenceError`，**规则评估器未被调用**（无回退）；
+- 非法阈值/非有限分数/多值输出 → 明确拒绝；
+- 规则依赖缺失 → `rule_diagnostics.available=false`，不冒充 `invalid`；
+- 结果可 JSON 序列化（`allow_nan=False`）。
+
+### M.3 真实推理与 CLI 接口冒烟
+
+| 输入 | 预期 | 实际 | 结论 |
+|---|---|---|---|
+| `ok.jpg`，未配置阈值 | 返回原始分数、模型版本；`needs_review` | `score=0.7561315298080444`；`model_version=dbcnn_onnx_v1`；`decision=needs_review`；`rule_diagnostics.label=ok`（luma 118.57 / contrast 63.41 / detail 8.32）；`inference_ms=36.069` | ✅ PASS |
+| `occluded.jpg`，未配置阈值 | 分数低于 ok；仍为 `needs_review`；规则诊断可独立为 `too_dark` | `score=0.25810927152633667`；`decision=needs_review`；`rule_diagnostics.label=too_dark`（luma 5.99 / contrast 3.71 / detail 0.37）；`inference_ms=37.684` | ✅ PASS |
+| 模型路径环境变量缺失 | 明确配置错误，退出码非 0；不得返回规则结果 | `{"error":"DbcnnConfigError","message":"未配置 DBCNN 模型路径..."}`；`exit=2` | ✅ PASS |
+| Anaconda 环境 ONNX Runtime 导入失败 | 明确依赖错误，退出码非 0；不得退回规则判断 | `DbcnnDependencyError: onnxruntime 不可用: ImportError: DLL load failed ...`；`exit=2`；未返回任何规则结果 | ✅ PASS |
+| 显式测试阈值 `0.5`（**非生产默认值**） | ok → `ok`；occluded → `low_score` | `ok.jpg` → `decision=ok` / `threshold_status=configured`；`occluded.jpg` → `decision=low_score` / `reject_reason=score_below_threshold` | ✅ PASS |
+
+- 权重 SHA-256：`.onnx` = `2a679a6264bfc188e623e9a937ad214dd761f7deb9469442a37107560557bc3f`；`.onnx.data` = `ed3e6df9109aa30323bcd2006a098023aa57fbcb98bfe1d2767227fc71c5382f`（与隔离测试报告一致）。
+- 分数与 `.workbuddy/artifacts/dbcnn-iqa-test/report.md` 已验证值一致；未乘 100。
+- `inference_ms` 随环境波动，仅记录本次观测，不构成性能基准。
+
+
+## 2026-10-20 N. Week 08 W8-3 本地视觉反馈闭环（真实分数 + 人工反馈 + 重采）
+
+**分支**: `feature/week08-vision-feedback`（本任务开始时 HEAD `4ec7b56`；基线 `origin/main` `333a697`）
+**验证层级**: 单元测试（第 2 级）+ 接口测试（第 3 级，本机回环）+ **本地真实 ONNX 推理（第 5 级）** + 独立进程 HTTP 冒烟；**未烧录、未改固件、未做真实设备端到端、未做浏览器人工点击验收**。
+
+### N.1 环境
+
+| 项 | 值 |
+|---|---|
+| 单元测试环境 | Anaconda Python 3.11.7（Pillow 10.2.0 / pytest 7.4.4；onnxruntime 导入失败，预存问题见 M.1） |
+| 真实推理/进程环境 | `.workbuddy/venvs/camera-health-nano`（Python 3.11.7；onnxruntime 1.22.1 / opencv 5.0.0 / numpy 2.4.6 / Pillow 10.2.0） |
+| 模型 | `.workbuddy/artifacts/dbcnn-iqa-test/weights/dbcnn_model.onnx` + `.onnx.data` |
+| 阈值 | **未配置**（`VISION_DBCNN_SCORE_THRESHOLD` 删除）；界面/接口均为 `needs_review` |
+| 设备 | **未配置**（未提供设备地址）；设备路径只用替身完成接口测试 |
+| 服务端口 | `127.0.0.1:8090`（独立进程，测试后已停止） |
+
+### N.2 自动化测试
+
+| 命令 | 预期 | 实际 | 结论 |
+|---|---|---|---|
+| `python -m pytest service/test_vision_result.py service/test_vision_dbcnn.py service/test_vision_analysis.py service/test_image_quality.py service/test_vision_feedback.py service/test_vision_feedback_server.py -q`（Anaconda，清空集成环境变量） | 视觉相关全部通过，真实模型用例跳过 | **204 passed, 2 skipped in 16.99s**，退出码 0 | ✅ PASS |
+| 隔离 venv + `VISION_DBCNN_RUN_INTEGRATION=1` + 模型路径，运行同一组测试 | 含真实 ONNX 全部通过 | **206 passed in 18.28s** | ✅ PASS |
+| `service/test_vision_feedback_server.py` 连续 5 次单文件运行 | 无偶发失败 | 5 × **31 passed, 1 skipped** | ✅ PASS |
+
+覆盖要点：
+
+- 分析：未配置阈值 → `needs_review` / `threshold_not_configured`；`label=null`、`score_source=dbcnn_onnx`；规则诊断来源独立；
+- 输入校验：空/非 JPEG/超大 → 400 或明确异常，且无记录写入；
+- 模型：路径缺失 → 503 `model_not_configured`；推理失败 → 502 `inference_failed`，**规则评估器未被调用**、无记录；
+- 反馈：201 保存；重复 → 409；非法 verdict/原因/未知字段 → 400；记录不存在 → 404；写入失败 → 500 `feedback_save_failed`；
+- 设备：未配置 → 503；gallery 缺 index → 404；设备 HTTP 错误 → 502 + `device_status`；photo 代理原样返回 JPEG；recapture 代理 POST；
+- 路由：GET analyze → 405 `Allow: POST`；POST health → 405；未知路径 → JSON 404；`limit`/`index` 非法 → 400；超大 Content-Length → 413（未读体）；
+- UTF-8：中文反馈说明写入后经 `/api/vision/records` 回读一致。
+
+> 环境备注：Anaconda 中若保留 `VISION_DBCNN_RUN_INTEGRATION=1`，`importorskip("onnxruntime")` 触发预存的 `onnxruntime` DLL 原生崩溃（与 M.1 记录的导入失败同源），导致进程打印 fatal exception；清空集成变量后测试干净通过。该现象**不是** W8-3 功能缺陷，真实推理在隔离 venv 中完成。
+
+### N.3 独立进程 HTTP 冒烟（隔离 venv，真实模型）
+
+启动：`python -m service.vision_feedback_server --port 8090 --data-dir .workbuddy/artifacts/w8-3-e2e/data`；结果文件与日志均在 `.workbuddy/`（已忽略，未提交）。
+
+| 请求 | 预期 | 实际 | 结论 |
+|---|---|---|---|
+| `GET /api/vision/health` | 模型已找到、阈值未配置、设备未配置 | `file_exists=True`、`threshold=not_configured`、`device=False` | ✅ PASS |
+| `POST /api/vision/analyze`（`ok.jpg`） | 真实分数、`needs_review`、规则 `ok` | `score=0.7561315298080444`；`decision=needs_review`；规则 `ok`；`label=null` | ✅ PASS |
+| `POST /api/vision/analyze`（`occluded.jpg`） | 分数更低、仍 `needs_review`、规则可独立为 `too_dark` | `score=0.25810927152633667`；`decision=needs_review`；规则 `too_dark` | ✅ PASS |
+| `POST /api/vision/feedback`（unusable/occluded + 说明） | 201、`label_source=user_feedback` | 201，`revision=1`，`source=user_feedback` | ✅ PASS |
+| 重复提交同一反馈 | 409 | 409 `duplicate_feedback` | ✅ PASS |
+| 非法 verdict | 400 | 400 `invalid_feedback` | ✅ PASS |
+| 不存在的 record_id | 404 | 404 `record_not_found` | ✅ PASS |
+| `GET /api/vision/records?limit=5` | 记录与反馈按 `record_id` 关联 | `count=2`；目标记录 `feedback.latest=unusable/occluded rev=1` | ✅ PASS |
+| `GET /` | 200 页面且含未校准/来源分离提示 | 200，25077 B，含 `needs_review`、`不代表准确率或正确概率`、`user_feedback` | ✅ PASS |
+| `GET /api/vision/gallery`（无设备地址） | 503 | 503 `device_not_configured` | ✅ PASS |
+| `GET /api/vision/photo`（缺 index） | 400 | 400 `invalid_request` | ✅ PASS |
+| `GET /api/vision/analyze` | 405 + `Allow: POST` | 405，`Allow=POST` | ✅ PASS |
+| 停止进程 | 端口释放 | 进程已停止；8090 不再响应 | ✅ PASS |
+
+**数据落盘检查**：`records.jsonl` 2 行/3540 B，不含 JPEG 魔数，含 `image_ref.sha256`；反馈单独在 `feedback.jsonl`。
+
+### N.4 UTF-8 与前端语法
+
+| 项 | 预期 | 实际 | 结论 |
+|---|---|---|---|
+| 中文反馈说明（真实进程，独立 venv Python 客户端） | 写入/回读字符数一致 | `note_len=11`，回读比较为真 | ✅ PASS |
+| 页面脚本语法（提取 `<script>` 后 `node --check`） | 无语法错误 | `js syntax ok` | ✅ PASS |
+
+### N.5 能证明 / 不能证明
+
+**能证明**
+
+1. 在隔离环境中可加载本地 DBCNN 权重，并对真实 JPEG 返回与 W8-2 一致的原始分数；
+2. 未配置阈值时，分析结果恒为 `needs_review`，页面与接口均明示分数未校准；
+3. 人工反馈可保存、可修订、可拒绝重复与非法输入，并与分析记录按 `record_id` 关联；
+4. 模型/规则/人工三类来源在接口、存储和界面中分离；
+5. 设备代理路径的错误处理在替身下可验证（未配置/缺 index/HTTP 错误/非 JPEG）。
+
+**不能证明**
+
+1. 真实 ESP32 设备上的 `gallery/photo/capture` 端到端（未提供设备地址、未操作硬件）；
+2. 浏览器实际点击与视觉呈现（仅做页面返回与脚本语法检查）；
+3. 模型准确率、泛化或遮挡识别能力（仅两张样例、无真值、未校准）；
+4. 并发、连续帧、长时间稳定性、局域网访问安全性；
+5. 阈值是否正确（**仍无生产阈值**）。
+
+### N.6 产物位置（本地忽略，未提交）
+
+- 记录：`.workbuddy/artifacts/w8-3-e2e/data/`、`data-utf8/`（含 `records.jsonl`、`feedback.jsonl`）
+- 接口响应：`.workbuddy/artifacts/w8-3-e2e/analyze-ok.json`、`analyze-occluded.json`、`records.json`
+- 脚本语法文件：`.workbuddy/artifacts/w8-3-ui.js`
+- 日志：`.workbuddy/logs/w8-3-e2e.err.log`、`w8-3-e2e-utf8.err.log`
+
+**证据位置**: `.workbuddy/logs/w8-2-tests.log`、`.workbuddy/logs/w8-2-smoke.log`（本地忽略，未提交）。
+
+---
+
+## 2026-10-21 O. Week 08 W8-4 视觉反馈并入 ESP32 Dashboard（API-only + 内嵌面板 + CORS/PNA）
+
+### O.1 环境
+
+- Python 3.11.7（Anaconda 主环境，无 ONNX Runtime，真实冒烟跳过）；隔离 venv `.workbuddy/venvs/camera-health-nano`（onnxruntime 1.22.1 CPU）。
+- 固件：ESP-IDF v5.4.3，`idf.py build`（未烧录、未复位设备）。
+
+### O.2 自动化测试
+
+| 命令/方式 | 结果 | 说明 |
+|---|---|---|
+| Anaconda `pytest`（6 个视觉测试文件） | **224 passed, 2 skipped** | 含新增 CORS/PNA 边界、API-only 根路径、`allowed_origin` 参数化测试 |
+| 隔离 venv + `VISION_DBCNN_RUN_INTEGRATION=1` + 真实权重 | **226 passed** | 真实 DBCNN 推理冒烟通过（`ok.jpg≈0.7561`，`needs_review`） |
+
+新增针对性测试（`service/test_vision_feedback_server.py`）：
+
+- `test_index_is_api_only_without_html` / `test_index_html_path_is_not_served`：根路径返回 JSON 服务说明、`/index.html` 404，**无用户可见页面**；
+- `test_allowed_origin_boundary`（15 组参数化）：回环/私网/链路本地 IP 与 localhost 放行、`null`/公网/非 http(s)/带路径/查询/片段来源拒绝；
+- `test_allowed_origin_extra_origins_env`：`VISION_ALLOWED_ORIGINS` 显式追加（mDNS 主机名）；
+- `test_preflight_allows_private_origin_with_pna`：OPTIONS 预检 204，回显 `Access-Control-Allow-Origin`、`Access-Control-Allow-Private-Network: true`；
+- `test_actual_response_echoes_allowed_origin`：实际响应回显允许来源 + `Vary: Origin`；
+- `test_cors_rejects_public_origin_and_never_uses_wildcard`：公网来源不回显 CORS 头、绝不 `*`。
+
+### O.3 固件构建（实际执行）
+
+- 命令：`idf.py build`（日志 `.workbuddy/logs/w8-4-build.log`）。
+- 结果：**`Project build complete`**；`week02-sensor-collect.bin` 大小 0x113ad0，app 分区余 64%；无 warning/error。
+- `build/config/sdkconfig.h` 确认 `CONFIG_VISION_API_URL` = `http://127.0.0.1:8090`（回环默认值，未写入任何设备/电脑局域网 IP）。
+
+### O.4 内嵌面板 JS 语法（实际执行）
+
+- 提取 `main/http_server.c` 的 `INDEX_HTML` 后运行 `node --check` → **退出码 0**（JS 语法通过，27870 字节）。
+- 人工核对：无 `window.open`、无 `location.href`、无 `iframe`、无独立 HTML 页面；地址栏保持 Dashboard 地址。
+
+### O.5 能证明 / 不能证明
+
+**能证明**：本地服务已转为 API-only（无第二个页面）；CORS/PNA 有边界处理且绝不 `*`；固件编译通过且内嵌面板 JS 语法正确；设备照片/重采走同源相对路径，不写死设备 IP。
+
+**不能证明**：真实浏览器从 ESP32 页面跨源调用 127.0.0.1 的 PNA/CORS 实际生效、真实设备端到端（未烧录、未在真机浏览器点击）；阈值正确性（仍无生产阈值）。（后续 2026-10-21 已烧录并由用户实机使用，面板可正常调用本地 API，见「P」节。）
+
+
+---
+
+## 2026-10-21 P. Week 08 W8-4 真实设备烧录与用户实机验收
+
+> 本节区分 **Agent 执行的烧录/启动/HTTP 核验** 与 **用户提供的浏览器实机验收**。不得把替身设备测试当作真实设备证据。
+
+### P.1 设备核验与烧录（Agent 执行）
+
+| 项 | 结果 |
+|---|---|
+| 串口枚举 | 重新枚举；目标为 Espressif USB 设备（VID 303A:PID 1001），其余为蓝牙串口 |
+| `flash_id` 预检 | ESP32-S3 (QFN56) rev v0.2，8MB Flash，8MB PSRAM（未输出 MAC） |
+| 固件产物 | `build/week02-sensor-collect.bin`（1,129,168 B） |
+| 烧录命令 | `idf.py -p <COM> flash`，退出码 **0** |
+| 写入校验 | bootloader 20,928 B @0x0 / partition-table 3,072 B @0x8000 / app 1,129,168 B @0x10000，均 `Hash of data verified` |
+| 提交对应 | 启动日志 `App version: week02-stable-101-g27e1d42` → `27e1d42` |
+
+### P.2 启动与 HTTP（Agent 执行）
+
+| 检查 | 结果 |
+|---|---|
+| 启动 | PSRAM test PASS、OV2640 检测、QMA6100P ACTIVE、Wi-Fi 已连接、`HTTP ready ... port 80`、IMU cadence 正常 |
+| `GET /` | 200，55,249 B；含 `vision-panel`、`/api/vision/analyze`、注入的 `http://127.0.0.1:8090`；占位符 `__VISION_API_URL__` 已替换 |
+| `GET /api/camera/status` | `cap_task_status=idle` |
+| `GET /api/sensor` | `device_id=esp32s3-eye-wk01` |
+| 本地视觉 API | `127.0.0.1:8090` `/api/vision/health` 200，`dbcnn_onnx_v1`，阈值 `not_configured` |
+
+说明：设备 IP 取自设备自身启动日志（非扫描/非猜测），报告中未回显。
+
+### P.3 用户实机验收（用户提供证据）
+
+| 项 | 用户提供的结果 | 判定 |
+|---|---|---|
+| 面板位置 | 在原有 Dashboard 内显示，无第二个页面/跳转 | ✅ 通过 |
+| 重新采集 | 得到 `cap-00001.jpg`，画廊 1 张 | ✅ 通过 |
+| 真实 DBCNN 推理 | 分数 `0.34175166487693787`、`dbcnn_onnx_v1`、`needs_review`、规则 `low_detail` | ✅ 通过（未校准） |
+| 人工反馈 | 「不可用 / 遮挡」→「反馈已保存（revision 1）」，历史列 `unusable` | ✅ 通过（记录关联成立） |
+| 对照样例 | 正常样例 `0.7561315298080444`、规则 `ok`、无反馈 | 已记录 |
+| 阈值/语义 | 未设生产阈值；未把分数解释为准确率或遮挡分类 | ✅ 符合约束 |
+
+### P.4 能证明 / 不能证明
+
+**能证明**：提交 `27e1d42` 的固件已烧录并启动；原 Dashboard 内嵌视觉面板经真实设备 HTTP 提供；浏览器内可对设备照片发起真实 DBCNN 推理并提交人工反馈，且反馈与记录关联。
+
+**不能证明 / Week 08 仍未完成**：
+
+- 有质量真值的更多「正常 / 低分 / 错误 / 未知」样本对照；
+- 正式阈值校准与默认值（当前无；未配置只返回 `needs_review`）；
+- 模型卡 0–100 与实测 0–1 的元数据差异说明；
+- 原始 DBCNN 权重许可核实；
+- 连续帧、并发、长期运行等稳定性验证（尚未执行）。
+
+
+---
+
+## 2026-10-21 Q. Week 08 W8-5 视觉反馈面板中文化（静态回归 + 固件构建，未烧录）
+
+### Q.1 范围与改动
+
+- 只改原有 Dashboard 的视觉反馈面板（`main/http_server.c` 内嵌页面）；不新增网页、不改 API/底层枚举/模型算法/存储格式。
+- 状态中文化（真实枚举值先经代码核实）：
+  - `decision`：`ok` → 「可采纳（规则检查未发现明显问题）」、`low_score` → 「低分（建议重新采集）」、`needs_review` → 「待人工确认（未校准）」、`unknown` → 「无法判断（+ 中文拒识原因）」；
+  - Week 07 规则诊断：`ok` → 「规则检查未发现明显问题」、`low_detail` → 「画面细节不足」、`too_dark/too_bright/low_contrast/invalid` → 中文，规则不可用 → 「规则检查不可用」；
+  - 人工反馈：`usable` → 「可用」、`unusable` → 「不可用」、`undetermined` → 「无法判断」；
+  - 输入来源：`local_upload` → 「本地图片」、`device_gallery` → 「设备照片」；
+  - 未知值统一回退为原值输出（`zhMap()` 使用 `hasOwnProperty` 判断），不猜测、不抛错。
+- 主区域标题改为「图像质量分析结果」，主要分数四位小数（`score4()`），完整原始分数仍原样保留。
+- 「查看详细信息」折叠区收纳：完整原始分数、模型版本标识、图片来源、字节数、SHA-256、记录 ID。
+- 未校准说明明确写入面板：质量分数不代表准确率或正确概率；阈值未校准，不能自动判定图片是否可用。
+- 反馈保存与历史关联逻辑未改动（仍绑定 `record_id`，保存后刷新同一批历史），只把历史列改为中文映射 + 四位小数。
+
+### Q.2 自动化测试（实际执行）
+
+| 命令/方式 | 结果 | 说明 |
+|---|---|---|
+| `python -m pytest service/test_dashboard_vision_ui.py -q` | **14 passed** | 新增回归：映射覆盖枚举、未知值回退、四位小数与完整分数、详细信息字段、未校准文案、反馈-历史关联、`node --check`、Node 行为校验 |
+| `python -m pytest`（视觉相关 7 个测试文件） | **238 passed, 2 skipped** | 224（W8-4 基线 6 个文件）+ 14 新增用例；2 skipped 为无 ONNX Runtime 的真实推理用例 |
+| 隔离 venv + `VISION_DBCNN_RUN_INTEGRATION=1` + 真实权重（同 7 个文件） | **240 passed** | 真实 DBCNN 推理冒烟未回归；新增面板用例在含 ONNX 环境下同样通过 |
+| Node 行为校验（真实执行内嵌 JS 纯函数） | 通过 | `needs_review`→待人工确认（未校准）、规则 `low_detail`→画面细节不足、`0.34175166487693787`→`0.3418`、未知 verdict 原样回退 |
+
+覆盖的真实枚举来源：`DecisionEnum` / `RejectReason`（`service/vision_result.py`）、`IMAGE_STATUSES`（`service/image_quality.py`）、`FEEDBACK_VERDICTS` 与 `SOURCE_*`（`service/vision_feedback.py`）。
+
+### Q.3 固件构建（实际执行）
+
+- 命令：`idf.py build`（ESP-IDF v5.4.3，日志 `.workbuddy/logs/w8-5-build.log`）。
+- 结果：**`Project build complete`**；`week02-sensor-collect.bin` = `0x1142e0`（1,131,232 B），app 分区余 64%；日志中无 `warning:` / `error:`。
+- **本轮未烧录、未复位设备**（修改了固件内嵌页面，需用户在另行授权后烧录）。
+
+### Q.4 内嵌 JS 语法（实际执行）
+
+- 从 `INDEX_HTML` 提取脚本后 `node --check` → **退出码 0**（页面脚本 31,888 B）。
+- 无新增 `window.open` / `location.href` / `iframe` / 独立页面。
+
+### Q.5 实机证据（用户提供，Agent 未代操作）与未验证项
+
+**用户确认的实机结果**：在原有 Dashboard 视觉反馈面板中提交「无法判断」反馈后，页面提示反馈已保存，历史记录同步更新（反馈与记录按 `record_id` 关联成立）。该结果为用户在实际设备浏览器上的既有验收，Agent 未代为点击；当时页面显示的是原始枚举值 `undetermined`。
+
+**未验证（如实记录）**：
+
+- 本轮中文化**尚未烧录**，因此「中文显示 / 四位小数 / 详细信息折叠」的浏览器实际观感为**待烧录后人工确认**；
+- 阈值校准、多真值样本、权重许可、连续帧/并发/长期稳定性仍未完成（与「P」节一致）。
+
+---
+
+## 2026-10-21 R. Week 08 W8-5 中文化固件实机验收与课程要求最终核对
+
+> 本节取代「Q.5」中「中文化尚未烧录 / 待人工确认」的临时状态；「Q」仍保留为当时的构建与静态回归记录。
+
+### R.1 烧录与启动（Agent 执行，2026-10-21）
+
+| 项 | 结果 |
+|---|---|
+| 固件 | `build/week02-sensor-collect.bin`，`0x1142e0`（1,131,232 B） |
+| 烧录 | `idf.py -p COM10 flash`（日志 `.workbuddy/logs/w8-5-flash.log`） |
+| 写入校验 | bootloader 20,928 B @0x0 / app 1,131,232 B @0x10000 / partition-table 3,072 B @0x8000，均 `Hash of data verified` |
+| 启动 | `.workbuddy/logs/w8-5-boot6.log`：`App version: week02-stable-103-g861ae64`；PSRAM test PASS、OV2640 检测、QMA6100P ACTIVE、Wi-Fi 已连接、`HTTP ready ... port 80` |
+| 版本对应 | `g861ae64` 与烧录时的功能/固件提交一致（其后仅有文档收尾提交）；烧录后未在本轮重新烧录或复位设备 |
+
+### R.2 用户实机浏览器验收（用户提供，Agent 未代操作）
+
+| 检查 | 用户确认结果 | 判定 |
+|---|---|---|
+| 页面位置 | 仍在原有 ESP32 Dashboard 内，未跳转第二个网址 | ✅ PASS |
+| 标题 | 「图像质量分析结果」 | ✅ PASS |
+| 主分数 | 四位小数显示 | ✅ PASS |
+| 原始分数 | 「查看详细信息」中仍可查看完整原始值 | ✅ PASS |
+| 判定 | 「待人工确认（未校准）」 | ✅ PASS |
+| 规则诊断 | 「画面细节不足」等中文 | ✅ PASS |
+| 详细信息 | 模型版本、图片来源、字节数、SHA-256、记录 ID 保留 | ✅ PASS |
+| 既有链路 | 设备照片采集、真实 DBCNN 推理、人工反馈「不可用/遮挡」与「无法判断」保存、历史记录更新 | ✅ PASS（此前实机，见「P」） |
+
+### R.3 证据边界
+
+- **自动化测试/构建**：Agent 执行（「L」–「Q」）。
+- **烧录与启动**：Agent 执行；写入校验与启动版本号见 R.1。
+- **浏览器实机验收**：用户亲自完成；Agent 未代操作浏览器，只记录用户确认的结果，不把用户描述扩写为未提供的证据。
+
+### R.4 课程要求核对（2026-10-21 官方页面）
+
+- 官方 Week 08 任务卡要点与逐项证据对照见 `weeks/week08/STATE.md` 第 10 节；页面标注 V2.1 修订建议稿、完整教案未发布。
+- **T03（7—9 周，视觉结果与用户纠错）**：真实图像 + 真实 DBCNN 推理 + 重采/人工纠正 → **PASS**（「P」「R」）。
+- **T04（4、8 周，低置信度/异常结构输出）**：拒识原因、`unknown` 不伪造事实、不执行越界工具 → **PASS（自动化/接口/UI 层）**；真机异常结构注入未执行。
+- **交付物「正常、低分、错误和未知样例对照」**：**部分完成** —— 正常 `0.7561/ok`，较低分数 `0.2581/too_dark`、`0.3418/low_detail`；错误/未知缺有质量真值的实拍对照。
+- **未完成/后续补验**：阈值校准与默认值、更多真值样例、模型卡 0–100 与实测 0–1 差异解释、原始权重许可核实、连续帧/并发/长期稳定性、T04 真机异常注入。
+
+### R.5 能证明 / 不能证明
+
+**能证明**：`861ae64` 固件已写入并通过 Hash 校验，设备启动版本为 `g861ae64`；原 Dashboard 的中文化视觉反馈页面经用户实机确认符合预期（中文标题/判定/规则、四位小数、完整原始值可查、字段保留、无第二个网址）。
+
+**不能证明**：阈值正确性（仍无生产阈值）；模型准确率/泛化能力；错误/未知类别的真实样例已覆盖；连续帧/并发/长期运行稳定性。
+
