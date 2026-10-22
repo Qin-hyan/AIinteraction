@@ -72,6 +72,18 @@ def test_event_panel_does_not_promise_human_verification() -> None:
     assert "准确率" not in page or "不代表准确率" in page
 
 
+def test_voice_panel_has_health_check() -> None:
+    html = _html()
+    js = _javascript()
+    for element_id in ("voiceSvc", "voiceAsrModel", "voiceAudioCfg", "voiceHealthBtn"):
+        assert f'id="{element_id}"' in html, f"缺少 {element_id}"
+    assert 'onclick="voiceHealth()"' in html
+    assert "fetch(VOICE_URL+'/api/voice/health')" in js
+    assert "voicePollStart();voiceHealth();" in js
+    assert "任务链路 " in js
+    assert "TTS " in js
+
+
 @pytest.mark.skipif(
     shutil.which("node") is None, reason="未安装 Node.js，跳过内嵌 JS 语法检查"
 )

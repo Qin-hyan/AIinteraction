@@ -399,7 +399,12 @@ static const char INDEX_HTML[] =
 "<div class=\"gal-grid\" id=\"galGrid\"><div class=\"gal-empty\">暂无照片：先点击\"📸 立即发送抓拍指令\"拍摄一张。</div></div>"
 "</div></div>"
 "<div class=\"card\" id=\"voice-panel\"><h2>🎙 语音交互<span class=\"panel-badge\" id=\"voiceBadge\">浏览器端</span></h2><div class=\"card-body\">"
-"<div class=\"voice-row\"><button class=\"voice-btn start\" id=\"voiceBtn\" onclick=\"voiceToggle()\">开始录音</button>"
+"<div class=\"infostrip\">"
+"<div class=\"info-item\">本地服务 <b id=\"voiceSvc\">检查中…</b></div>"
+"<div class=\"info-item\">ASR 模型 <b id=\"voiceAsrModel\">—</b></div>"
+"<div class=\"info-item\">音频配置 <b id=\"voiceAudioCfg\">—</b></div></div>"
+"<div class=\"voice-row\"><button class=\"act-btn ghost\" id=\"voiceHealthBtn\" onclick=\"voiceHealth()\" style=\"min-width:150px\">🩺 检查服务</button>"
+"<button class=\"voice-btn start\" id=\"voiceBtn\" onclick=\"voiceToggle()\">开始录音</button>"
 "<button class=\"voice-btn cancel\" id=\"voiceCancelBtn\" onclick=\"voiceCancel()\" style=\"display:none\">取消任务</button>"
 "<span class=\"voice-badge idle\" id=\"voiceState\">空闲</span></div>"
 "<div class=\"voice-task\" id=\"voiceTask\"></div>"
@@ -717,7 +722,16 @@ static const char INDEX_HTML[] =
 "function refreshAutoCapStatus(){fetch('/api/auto_capture').then(function(r){return r.json();}).then(function(d){"
 "txt('autoInterval',(d.interval_s||10)+' s');txt('autoLimit',d.batch_limit||100);txt('autoCount',d.batch_count||0);"
 "$('autoCapNote').textContent='定时自动抓拍已按课程要求禁用，仅保留按需抓拍（/api/camera/capture）。';}).catch(function(){});}"
-"var VOICE_URL=\"__VOICE_PC_URL__\";var voicePolling=null;var voiceBusy=false;var voiceTaskGen=0;var voiceCancelBusy=false;"
+"var VOICE_URL=\"__VOICE_BROWSER_URL__\";var voicePolling=null;var voiceBusy=false;var voiceTaskGen=0;var voiceCancelBusy=false;"
+"function voiceHealth(){"
+"var btn=$('voiceHealthBtn');"
+"if(!VOICE_URL||VOICE_URL.indexOf('__')===0){txt('voiceSvc','未配置');txt('voiceAsrModel','—');txt('voiceAudioCfg','—');txt('voiceMeta','未配置语音服务地址（CONFIG_VOICE_PC_URL 为空）。');return;}"
+"if(btn){btn.disabled=true;btn.textContent='检查中…';}"
+"fetch(VOICE_URL+'/api/voice/health')"
+".then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})"
+".then(function(d){var a=d.asr||{},au=d.audio||{};txt('voiceSvc','已连接');txt('voiceAsrModel',(a.model||'—')+' / '+(a.language||'—'));txt('voiceAudioCfg',(au.samplerate||'—')+' Hz · '+(au.channels||'—')+' ch');var p=d.pipeline||{};txt('voiceMeta','语音服务已连接；任务链路 '+(p.nl_to_task?'NL→JSON 已接入':'NL→JSON 缺失')+'；TTS '+(p.tts?'已实现':'未实现'));})"
+".catch(function(e){txt('voiceSvc','未连接');txt('voiceAsrModel','—');txt('voiceAudioCfg','—');txt('voiceMeta','无法连接语音服务：'+e.message+'。请确认启动器已启动（scripts/start_services.cmd）。');})"
+".then(function(){if(btn){btn.disabled=false;btn.textContent='🩺 检查服务';}});}"
 "function voiceToggle(){"
 "if(voiceBusy||!VOICE_URL||VOICE_URL.indexOf('__')===0)return;"
 "var btn=$('voiceBtn');var isRec=$('voiceState').classList.contains('recording');"
@@ -745,6 +759,7 @@ static const char INDEX_HTML[] =
 "fetch(VOICE_URL+'/api/voice/status')"
 ".then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})"
 ".then(function(d){"
+"txt('voiceSvc','已连接');"
 "var st=$('voiceState'),btn=$('voiceBtn'),cb=$('voiceCancelBtn'),vt=$('voiceTask'),meta=$('voiceMeta'),asr=$('voiceAsr');"
 "if(d.state==='recording'){st.textContent='录音中';st.className='voice-badge recording';"
 "btn.textContent='停止录音';btn.className='voice-btn stop';btn.disabled=false;"
@@ -764,6 +779,7 @@ static const char INDEX_HTML[] =
 "else{cb.style.display='none';}"
 "voiceBusy=false;voiceCancelBusy=false;})"
 ".catch(function(e){"
+"txt('voiceSvc','未连接');"
 "var m=$('voiceMeta'),cb2=$('voiceCancelBtn');"
 "if(m)m.textContent='无法连接语音服务 — PC 服务可能未运行';"
 "if(cb2)cb2.style.display='none';"
@@ -792,7 +808,7 @@ static const char INDEX_HTML[] =
 "if(allRunning&&!degraded){txt('pcHubNote','语音与视觉服务均已就绪，页面功能可直接使用。');}"
 "else if(allRunning&&degraded){txt('pcHubNote','进程已启动，但健康检查显示模型/功能未就绪；请查看上方状态或启动器控制台。');}"
 "else{txt('pcHubNote','部分服务未就绪，请查看上方状态或打开启动器控制台。');}"
-"if(typeof visionHealth==='function')visionHealth();})"
+"if(typeof visionHealth==='function')visionHealth();if(typeof voiceHealth==='function')voiceHealth();})"
 ".catch(function(e){pcDown=true;txt('pcLauncherState','未连接');pcSetNav('err','PC 服务未启动');"
 "txt('pcHubNote','无法连接本机启动器。请先在仓库根目录运行 scripts/start_services.cmd（或 python -m service.service_launcher），再点“启动/检查服务”。浏览器不能自行拉起本机进程。');"
 "if(manual)toast('启动器未运行');})"
@@ -975,7 +991,7 @@ static const char INDEX_HTML[] =
 "if(st){var extra=ev.cooldown_until?('，冷却至 '+ev.cooldown_until):'';st.textContent='已'+zhMap(VISION_EVENT_ACTION_ZH,action)+extra;st.className='hint ok';}"
 "toast('视觉事件已处理');visionEventActive=null;loadVisionEvents();})"
 ".catch(function(e){if(st){st.textContent='提交失败：'+e.message;st.className='hint err';}setVisionEventButtons(true);});}"
-"function init(){startAuto();restoreLatest();refreshStored();loadRecords();loadGallery();refreshAutoCapStatus();refreshCapStatus();voicePollStart();pcEnsureServices(false);pcPollStart();visionHealth();loadVisionGallery();loadVisionHistory();loadVisionEvents();ageTimer=setInterval(tick,1000);}"
+"function init(){startAuto();restoreLatest();refreshStored();loadRecords();loadGallery();refreshAutoCapStatus();refreshCapStatus();voicePollStart();voiceHealth();pcEnsureServices(false);pcPollStart();visionHealth();loadVisionGallery();loadVisionHistory();loadVisionEvents();ageTimer=setInterval(tick,1000);}"
 "init();</script></body></html>";
 /* ================================================================
  * HTTP Request Handlers
@@ -986,18 +1002,19 @@ static esp_err_t root_handler(httpd_req_t *req)
     httpd_resp_set_type(req, "text/html; charset=utf-8");
 
     /* 依次替换三个模板占位符：
-     * __VOICE_PC_URL__ / __VISION_API_URL__ / __PC_LAUNCHER_URL__。
+     * __VOICE_BROWSER_URL__ / __VISION_API_URL__ / __PC_LAUNCHER_URL__。
+     * 语音页使用浏览器侧回环地址；ESP32 实体按键仍使用 CONFIG_VOICE_PC_URL。
      * 一次性拼装到堆缓冲后整体发送，避免多次分块发送的复杂度。 */
     const char *src = INDEX_HTML;
     size_t src_len = strlen(src);
 
     static const char *placeholders[3] = {
-        "__VOICE_PC_URL__",
+        "__VOICE_BROWSER_URL__",
         "__VISION_API_URL__",
         "__PC_LAUNCHER_URL__",
     };
     const char *values[3] = {
-        CONFIG_VOICE_PC_URL,
+        CONFIG_VOICE_BROWSER_URL,
         CONFIG_VISION_API_URL,
         CONFIG_PC_LAUNCHER_URL,
     };
@@ -1182,7 +1199,16 @@ static esp_err_t collect_status_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "timeout_ms", COLLECT_TIMEOUT_MS);
 
     /* ---- 请求号校验：不把别次请求的结果当作"本次完成" ---- */
-    if (rid[0] != '\0' && strcmp(rid, t->request_id) != 0) {
+    bool rid_matches = (rid[0] == '\0' || strcmp(rid, t->request_id) == 0);
+    bool linked_now = t->last.valid && strcmp(t->last.request_id, t->request_id) == 0;
+    /* 当前请求已结束（idle/completed/failed/timeout）但 last 已被后续周期观测覆盖时，
+     * 必须回查设备端请求记录；否则同一个 request_id 会一直返回 idle+linked=false，
+     * 让轮询方误判超时。 */
+    bool use_history = rid[0] != '\0'
+        && (!rid_matches
+            || (!linked_now && t->status != COLLECT_SUBMITTED
+                && t->status != COLLECT_RECEIVED));
+    if (use_history) {
         cJSON *j = cJSON_CreateObject();
         cJSON_AddStringToObject(j, "request_id", rid);
         cJSON_AddNumberToObject(j, "task_seq", 0);
@@ -1227,7 +1253,7 @@ static esp_err_t collect_status_handler(httpd_req_t *req)
             (double)(t->completed_at_us - t->submitted_at_us) / 1000.0);
     }
     /* 只有"观测的关联请求号 = 本次请求号"才算本次带回结果 */
-    bool linked = t->last.valid && strcmp(t->last.request_id, t->request_id) == 0;
+    bool linked = linked_now;
     cJSON_AddBoolToObject(root, "linked", linked);
     obs_to_json(root, linked ? &t->last : NULL, now_ms);
 

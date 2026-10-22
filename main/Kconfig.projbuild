@@ -46,6 +46,18 @@ menu "Week 05 Voice Control Configuration"
             FreeRTOS task, so this timeout only bounds how long that task may
             block; button scanning and the main loop stay responsive.
 
+    config VOICE_BROWSER_URL
+        string "Browser voice panel base URL"
+        default "http://127.0.0.1:8080"
+        help
+            Base URL used by the Dashboard's browser-side voice panel.
+            The browser runs on the same computer as the voice service, so
+            loopback is the stable default and does not break when the PC's
+            DHCP/LAN IP changes. The ESP32 PLAY button still uses
+            VOICE_PC_URL (device -> PC over the LAN).
+
+            Leave empty to hide/disable the browser voice panel.
+
 endmenu
 
 menu "Week 03 Help Uplink Configuration"
