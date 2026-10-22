@@ -175,3 +175,14 @@ generation：`7 → 8`（代次单调递增，旧结果不覆盖取消状态）
 - 输入未结束/处理中边界、计时字段异常不影响状态机
 
 全量回归：**250 passed + 6 subtests**（2026-10-17 本次运行；原 235 → 247 → 250；0 失败）
+
+
+---
+
+## 2026-10-22 语音命令链路补强（真人语音测试）
+
+- **问题**：`CONFIG_VOICE_PC_URL` 旧 LAN IP 失效，浏览器语音面板连不上；ASR 文本未转 JSON，命令必失败；`trigger_collect` 在设备完成后 idle+linked 场景误报超时。
+- **修复**：`CONFIG_VOICE_BROWSER_URL=127.0.0.1:8080`（仅浏览器；ESP32 PLAY 仍用 LAN）；`GET /api/voice/health` + 面板检查服务；`service/nl_to_task.py` 确定性映射；字符串结果按 intent 归一化；`trigger_collect` 识别 idle+linked+valid。
+- **模型对比（单句、非基准）**：Whisper `base` 把“重新采集一次”识别为“同心踩击一次”，任务进入 clarify；`small` 正确识别“重新采集一次”，任务 completed，真实设备新观测 seq #61、request `req-63048-0002`。用户反馈 small 也需要较标准发音；不能据此宣称整体识别率。
+- **真人语音**：`查看上次数据` → completed，真实观测 seq #1070；`重新采集一次` → completed，真实采集成功。
+- **未完成**：TTS、LLM 语义解析、base/small 系统化对比、安静/嘈杂环境测试、长期稳定性。

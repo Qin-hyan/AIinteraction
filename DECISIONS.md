@@ -219,3 +219,18 @@
 - **原因**: 课程要求"视觉事件触发主动询问、可纠正、拒绝后不反复打扰"；在阈值未校准的前提下，把 `needs_review` 当问题会制造噪声。用明确规则/拒识证据 + 冷却，才能既主动又不打扰。
 - **影响**: 后续若配置阈值，`low_score` 可作为新触发证据；冷却时间可由构造参数调整；事件层不替代人工反馈，二者通过同一 `record_id` 关联。
 - **证据**: `service/vision_event.py`、`service/vision_feedback_server.py`、`service/test_vision_event.py`、`service/test_vision_event_server.py`、`main/http_server.c`、`docs/vision-events.md`；TEST_LOG 2026-10-22 T 节。
+
+## D016 — 语音面板回环地址、健康检查与确定性 NL→任务映射 ——【已确认】
+
+- **日期**: 2026-10-22
+- **决定**:
+  1. **浏览器语音面板改用回环地址**：新增 `CONFIG_VOICE_BROWSER_URL`（默认 `http://127.0.0.1:8080`）；ESP32 实体按键仍用 `CONFIG_VOICE_PC_URL`（局域网）。原因：PC 的 DHCP 地址变化导致旧配置 `10.28.x.x` 失效，网页语音模块连不上。
+  2. **语音服务 CORS 有边界**：只回显回环/私网/链路本地 Origin，支持 PNA；不再返回 `*`。
+  3. **新增 `GET /api/voice/health` 与面板「🩺 检查服务」**：显示服务连接、ASR 模型/语言、音频采样配置、NL→JSON/TTS 状态；失败明确提示，不伪装。
+  4. **新增 `service/nl_to_task.py`**：把 ASR 文本确定性映射为 TaskContract（query_last/trigger_collect/clarify/unsupported）；无法确定时 clarify。**这不是大模型语义解析**，不冒充课程要求的授权语言服务。
+  5. **语音命令必须先转 JSON**：`_process_task()` 先 `nl_to_task` 再 `task_pipeline.run_task()`；字符串结果按已分类 intent 恢复成功/澄清/拒绝，修复“识别成功但一律 invalid_result”。
+  6. **采集完成语义修正**：设备完成后回到 `status=idle` 时，若 `linked=true` 且 `observation.valid=true`，视为 completed；不得因状态字段回落而误报轮询超时。
+  7. **模型可切换但默认不变**：`--asr-model` 默认 Whisper `base`；`small` 需联网下载且未做质量对比；TTS 仍未实现。不得凭模型名宣称识别质量。
+- **原因**: 课程 Week 04–06 要求自然语言→受限工具、真实语音链路、澄清/取消；此前缺 NL→JSON 且旧 LAN IP 失效，导致“看起来有语音面板，实际命令执行不可用”。修复后至少查询/采集命令有真实设备证据。
+- **影响**: 浏览器面板依赖 PC 本机回环；若从其他设备打开页面，需显式把 `CONFIG_VOICE_BROWSER_URL` 指向 PC LAN 地址。真人语音质量、LLM 语义解析、TTS 仍为待补验项。
+- **证据**: `service/nl_to_task.py`、`service/voice_control_server.py`、`service/trigger_collect.py`、`service/test_nl_to_task.py`、`service/test_voice_health.py`、`main/http_server.c`、`docs/voice-command.md`；TEST_LOG 2026-10-22 U 节。

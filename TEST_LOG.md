@@ -1653,3 +1653,56 @@ idf.py build
 **能证明**：事件层按明确规则触发、优先级排序、确认/忽略/稍后状态与冷却在自动化中可复现；真实设备照片和本地图片能产生真实事件；Dashboard 能显示并提交确认；固件构建/烧录成功。
 
 **不能证明**：用户任务测试与体验验收（用户暂时无法操作）；真实 10 分钟冷却等待；语音+视觉+实体操作三者联动的用户任务；长期稳定性/并发；暗光阈值是否适合实际产品。
+
+
+---
+
+## 2026-10-22 U. 语音健康检查、回环浏览器地址与命令链路补强
+
+**分支**: `feature/voice-health-command`（基于 Week 09 分支，未合并 `main`）
+**问题**: 网页语音模块连不上；ASR 文本直接送 `task_pipeline` 导致命令执行失败；采集完成回到 idle 被误报超时。
+
+### U.1 自动化（实际执行）
+
+| 命令 | 结果 |
+|---|---|
+| `python -m pytest service/test_nl_to_task.py -q` | **19 passed** |
+| `python -m pytest service/test_voice_health.py -q`（Anaconda） | **4 passed** |
+| `python -m pytest service/test_trigger_collect.py -q` | 通过（新增 idle+linked 完成用例） |
+| week05 venv `pytest service/test_voice_control_server.py service/test_voice_health.py service/test_nl_to_task.py -q` | **122 passed** |
+| `python -m pytest service/ --ignore=service/test_asr_whisper.py -q` | **579 passed, 2 skipped**；退出码 1 为已知 Anaconda torch DLL 问题（首轮 `test_audio_capture` 状态用例偶发失败，单测重跑与第二次全量均通过） |
+| `python -m pytest service/test_dashboard_week09_ui.py -q` | **8 passed**（新增语音健康面板断言 + node check） |
+
+### U.2 真实设备命令链路（注入 ASR 文本，Agent 执行）
+
+| 输入文本 | 路径 | 结果 |
+|---|---|---|
+| `查看上次数据` | `nl_to_task → task_pipeline → query_last → ESP32` | task completed；真实观测 seq 955/957，加速度/来源/相对时间有值 |
+| `重新采集一次` | `nl_to_task → task_pipeline → trigger_collect → ESP32` | task completed；request `req-1268395-0003`，seq 958，elapsed 814 ms |
+
+> 这是“命令段”真实设备验证：ASR 文本由假转录器注入，不是用户真实说话。真人语音链路仍待人工测试。
+
+### U.3 发现并修复的真实缺陷
+
+1. **网页语音地址过期**：`CONFIG_VOICE_PC_URL` 仍是旧 PC 地址；PC 当前为 `10.244.x.x`，浏览器 fetch `Failed to fetch`。
+   - 修复：新增 `CONFIG_VOICE_BROWSER_URL`（默认 `127.0.0.1:8080`）只供浏览器；ESP32 PLAY 保留 LAN 地址；语音 CORS/PNA 有边界。
+2. **ASR 文本未转 JSON**：`run_task(t)` 对原始中文必然校验失败；新增 `nl_to_task`，并把字符串结果按 intent 归一化，不再一律 `invalid_result`。
+3. **采集完成误报超时**：设备 status 回 `idle`，但 `linked=true` 且 observation 有效；`trigger_collect` 现在识别为 completed。
+
+### U.4 能证明 / 不能证明
+
+**能证明**：语音健康检查可用；浏览器面板通过回环连接语音服务；查询/采集命令在真实设备上可执行；`trigger_collect` 的 idle+linked 完成语义正确。
+
+**不能证明**：真人中文 ASR 质量；真人语音→命令执行；base vs small 模型对比；TTS；大模型语义理解；长期稳定性。
+
+
+### U.5 真人语音测试（用户参与，2026-10-22）
+
+| 模型 | 用户说 | ASR 文本 | 任务结果 |
+|---|---|---|---|
+| base | 查看上次数据 | 查看上次数据 | 首次因 `ESP32_BASE_URL` 未注入而 pipeline_failed；修复后 completed，seq #1070 |
+| base | 重新采集一次 | 同心踩击一次 | clarify（未执行设备命令） |
+| small | 重新采集一次（第一遍） | 未识别对 | 未通过 |
+| small | 重新采集一次（第二遍，较标准发音） | 重新采集一次 | completed，真实采集 seq #61 / `req-63048-0002` |
+
+> 用户反馈：small 也需要较标准发音；以上是单句测试，不构成 CER/准确率结论。TTS 未实现，不能测试“停止播报”。

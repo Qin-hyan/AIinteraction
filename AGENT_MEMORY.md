@@ -69,6 +69,7 @@ AIinteraction/
 | 视觉反馈本地服务 | `service/vision_feedback_server.py` | ✅ Week 08 W8-3/W8-4 | 独立 `127.0.0.1:8090`（仅标准库）；W8-4 起 **API-only（无用户页面）** + 有边界 CORS/PNA，端点错误码统一；默认不自动启动、无认证 |
 | PC 服务启动器 | `service/service_launcher.py` | ✅ Week 08 收尾（2026-10-22） | 仅 `127.0.0.1:8079`；Dashboard 打开时幂等 ensure 语音 8080 / 视觉 8090；只允许回环绑定、JSON+PNA、固定命令；外部服务不误杀；`scripts/` 提供手动启动与当前用户 Startup 自启动 |
 | 视觉事件主动询问 | `service/vision_event.py` | ✅ Week 09（2026-10-22） | 明确规则/拒识证据才触发；高/中优先级；确认/忽略/稍后；按来源+原因冷却；`events.jsonl` 仅追加；不改模型/规则/反馈语义 |
+| 语音健康与命令映射 | `service/nl_to_task.py` + `voice_control_server.py` | ✅ Week 04–06 补强（2026-10-22） | `GET /api/voice/health`；ASR 文本→TaskContract JSON（确定性关键词，不是 LLM）；查询/采集真实设备验证；`--asr-model` 可切换；TTS 仍缺失 |
 
 ---
 
@@ -187,6 +188,19 @@ AIinteraction/
 - 自启动只写当前用户 Startup 文件夹的一个 `.cmd`，不建 Windows 服务/计划任务/注册表；`scripts/uninstall_autostart.ps1` 可撤销
 - Dashboard 模板有 3 个占位符（`__VOICE_PC_URL__` / `__VISION_API_URL__` / `__PC_LAUNCHER_URL__`），`root_handler` 的**计算与替换循环都必须是 3**，否则页面残留占位符、启动器不会调用
 - 导航顺序必须与卡片 DOM 顺序一致；底部无法把最后一张卡滚到顶部时，滚动高亮要显式选中最后一项
+
+---
+
+## Week 04–06 语音命令补强（2026-10-22，长期事实）
+
+- 浏览器语音面板使用 `CONFIG_VOICE_BROWSER_URL`（默认 `http://127.0.0.1:8080`）；ESP32 实体 PLAY 键使用 `CONFIG_VOICE_PC_URL`（LAN IP）。PC DHCP 变化不再影响浏览器面板
+- 语音服务 CORS：只回显回环/私网 Origin，支持 PNA；不再用 `*`
+- `GET /api/voice/health`：ASR 模型/语言/音频配置/NL→JSON/TTS 状态；面板「🩺 检查服务」
+- `nl_to_task.py`：确定性关键词映射，非大模型；查询/采集/澄清/拒绝，无法确定时 clarify，不猜测
+- 语音 `_process_task` 必须先把 ASR 文本转 TaskContract JSON，再调 `task_pipeline.run_task`；字符串结果按已分类 intent 恢复成功/澄清/拒绝
+- `trigger_collect`：设备完成后可能 `status=idle`，若 `linked=true` 且 observation.valid=true，应视为 completed，不得误报轮询超时
+- ASR 默认 Whisper `base/zh/cpu`；可用 `--asr-model small`，但 small 未下载/未做质量对比；TTS 仍未实现
+- 真实设备验证（注入 ASR 文本）：`查看上次数据` → 查询成功；`重新采集一次` → 采集成功；真人语音待人工测试
 
 ---
 

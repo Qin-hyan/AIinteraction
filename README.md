@@ -263,7 +263,7 @@ python -m service.service_launcher
 - Step 3E→3F：`btn_scan` 任务栈溢出（2048→4096）实机复核通过
 - Step 3F/G→3I：传输层超时与 Brownout 均未在最终验证中复现
 
-⚠️ **Week 05 未完成能力（如实标注，不得声称已完成）**：Step 4 语言模型 NL→JSON、Step 5 TTS 播报、Step 6 全链路串联、Step 7 状态显示与 LED 反馈、Step 8 异常处理与文字对照测试均**未开始**；语音仅实现「按钮开始/结束录音 → 音频 → 任务文本（ASR）」输入侧，输出侧语音播报（TTS）尚未实现。
+⚠️ **Week 05 未完成能力（如实标注）**：TTS 播报仍未实现；真实用户语音的 ASR 质量与「语音→任务执行」待人工核验。2026-10-22 已补 `service/nl_to_task.py`（确定性映射，不是大模型语义解析）与 `GET /api/voice/health`；语音面板新增「🩺 检查服务」，可查看 ASR 模型/语言/音频配置与 NL→JSON 接线状态。
 
 #### Week 06 — 让语音任务可以澄清与停止 🟢（核心开发完成 + 实机取消/反馈停止复测完成；ASR 内容验收待补）2026-10-17
 
@@ -275,6 +275,10 @@ python -m service.service_launcher
 | 迟到结果隔离 | ✅ generation 单调递增，旧代次结果记录 `result_stale_discarded` 不覆盖新状态 | Python 自动测试 |
 | 任务计时 `task.timing` | ✅ 首次反馈 / 完成 / 终止 / 取消→反馈停止四项指标 | Python 自动测试（14 项） |
 | 自动测试 | ✅ `test_voice_control_server.py` **99/99 PASS**；全量 `pytest service/` **250 passed + 6 subtests**（0 失败，2026-10-17） | pytest |
+| ASR 文本→任务契约（`service/nl_to_task.py`） | ✅ 确定性映射；查询/采集/澄清/拒绝，不猜造 URL；修复“原始文本直接送 JSON 校验必失败” | 单元 + 真实设备注入文本冒烟 |
+| 语音命令执行 | ✅ 真人语音：`查看上次数据`→真实查询（seq #1070）；`重新采集一次`（small）→真实采集（seq #61 / `req-63048-0002`） | 真实设备 + 用户语音 |
+| ASR 模型 | ⚠️ 默认 `base`；本地可切 `small`。单句对比：base 把“重新采集一次”误识别为“同心踩击一次”，small 正确但需较标准发音；**不代表整体质量** | 单句人工测试 |
+| 语音服务健康检查 | ✅ `GET /api/voice/health` + 面板「🩺 检查服务」 | 自动测试 + 页面 |
 | ESP32 仪表盘取消按钮 + 任务状态显示（`main/http_server.c`） | ✅ 固件已烧录，仪表盘 HTTP 200，取消按钮页面已验证 | 实机 |
 | **ESP32↔PC 实机取消联动**（2026-10-14） | ✅ `recording → cancel（cancelled_recording=true）→ cancelled`；generation **7→8**；request_id=`voice-09188851-0004` | 实机双端取证 |
 | **ESP32↔PC 实机取消复测**（2026-10-17） | ✅ PLAY 启动 → Web 取消 HTTP **200** → `recording → cancelling → cancelled`；generation **5→6**；`latency_cancel_to_feedback_stop_ms=79 ms`；服务端与浏览器显示一致 | 实机双端取证 |
@@ -349,8 +353,9 @@ python -m service.service_launcher
 |------|------|
 | ⚠️ **真实语言模型输出 → 管道输入接口对接** | 当前使用结构化 JSON 样例替代 LLM 输出 |
 | ⚠️ **真实 ESP32 HTTP 调用** | query_last、trigger_collect 工具仅通过 mock 测试，未在真实设备上运行 |
-| ⚠️ **Week 06 中文 ASR 准确率内容验收** | 用户当前不方便语音输入，实机中文语音识别质量**未完成验收**（非失败，属待补验收）；TTS 停止播报因项目无 TTS 不适用 |
-| ⚠️ **Week 06 完整 ASR→NL→JSON→任务链路** | `service/nl_to_task.py` 缺失，ASR 原始文本无法转为 TaskContract JSON；取消/澄清/计时链路已验收，但「真实语音 → 任务执行」未端到端验收 |
+| ⚠️ **Week 06 中文 ASR 准确率内容验收** | 2026-10-22 完成单句真人测试：`查看上次数据` 正确；`重新采集一次` 在 base 下误识别、small 下正确但需较标准发音。**尚未做系统化 CER/多句/嘈杂环境评估**，不得宣称整体准确率；TTS 停止播报因项目无 TTS 不适用 |
+| ⚠️ **Week 06 完整 ASR→NL→JSON→任务链路** | 2026-10-22 已补 `service/nl_to_task.py` 并修复 raw text 直接送 JSON 校验的问题；用注入 ASR 文本在真实设备验证查询/采集成功。**真实用户语音→ASR→命令执行仍未人工验收**；当前为确定性关键词映射，不是大模型语义解析 |
+| ⚠️ **Week 05 TTS 播报** | 项目无 TTS 实现；不存在可中断的语音播报，“停止播报”不适用；`/api/voice/health` 明确报告 `tts=false` |
 | ⚠️ **Week 03 ESP32→VPS HTTP 上行端到端验收** | **软件集成已完成**：help_uplink 异步任务已集成至 `main.c`（初始化调用 `help_uplink_start`，事件状态机调用 `help_uplink_is_configured` / `help_uplink_request_send` / `help_uplink_poll`，见 `29dd72d`）；**仍未完成**真实 VPS URL 配置与 ESP32→VPS 端到端实机验收（HTTP POST 成功/失败路径未验证） |
 | ⚠️ **Week 07 真实取帧失败 `failed` 样例** | 四态中的 `failed` 代码路径与日志已实现，但无故障注入手段，**未构造真实失败**；不得用 `unusable` 代替 `failed`，也不得视为已通过 |
 | ⚠️ **Week 08 DBCNN 阈值校准与样例对照** | 反馈闭环与中文化面板已实机验收；但质量分数阈值仍未校准（未配置时只返回 `needs_review`，低分/未知路径目前只有自动化证据）；错误/未知类别缺有质量真值的实拍对照 |
@@ -398,6 +403,7 @@ AIinteraction/
 │   ├── task_pipeline.py      # Week 04：任务处理入口（串联 dispatch → format）
 │   ├── audio_capture.py      # Week 05：PC 音频采集（sounddevice + stdlib wave）
 │   ├── voice_control_server.py # Week 05/06：PC 录音 HTTP 控制服务 + 后台自动 Whisper ASR + 任务上下文/取消/澄清/代次隔离
+│   ├── nl_to_task.py         # Week 04–06 补强：ASR 文本 → 确定性任务契约 JSON
 │   ├── asr_whisper.py        # Week 05：本地 Whisper ASR 模块（base/zh/transcribe）
 │   ├── image_quality.py      # Week 07：画面可用性/遮挡规则诊断
 │   ├── vision_result.py      # Week 08：结构化视觉结果契约与拒识语义
@@ -407,7 +413,7 @@ AIinteraction/
 │   ├── service_launcher.py   # Week 08 收尾：回环启动器，页面打开时幂等启动语音/视觉
 │   ├── launcher.config.example.json # 启动器本机配置模板（真实配置被 gitignore）
 │   ├── requirements-*.txt    # Week 05/07/08：PC 端音频/ASR/视觉依赖清单
-│   └── test_*.py             # 单元/集成测试（Week 04 共 102 项；Week 05 追加 ASR/录音/服务；Week 06 voice server 99/99；Week 08 相关测试 125 passed；Week 09 事件/服务/UI 44 项；2026-10-22 启动器 31 项 + 面板/导航 22 项）
+│   └── test_*.py             # 单元/集成测试（Week 04 共 102 项；Week 05 追加 ASR/录音/服务；Week 06 voice server 99/99；Week 08 相关测试 125 passed；Week 09 事件/服务/UI 44 项；2026-10-22 启动器 32 项 + 面板/导航 22 项）
 ├── scripts/                  # 启动器一键启动与 Startup 自启动安装/卸载
 ├── partitions.csv            # 8MB Flash 分区表
 ├── CMakeLists.txt            # 顶层 CMake 项目
@@ -421,7 +427,8 @@ AIinteraction/
 ├── docs/
 │   ├── vision-dbcnn.md       # Week 08：DBCNN 模型配置/来源/许可/限制
 │   ├── service-launcher.md   # Week 08 收尾：PC 服务启动器架构/API/安全边界
-│   └── vision-events.md      # Week 09：视觉事件/主动询问/冷却/API/边界
+│   ├── vision-events.md      # Week 09：视觉事件/主动询问/冷却/API/边界
+│   └── voice-command.md      # Week 04–06 补强：语音健康检查、NL→JSON、命令链路与边界
 └── weeks/                    # 每周详细状态
     ├── week01/STATE.md
     ├── week02/STATE.md
@@ -450,6 +457,7 @@ AIinteraction/
 | [docs/vision-dbcnn.md](docs/vision-dbcnn.md) | DBCNN 模型配置、来源、许可注意事项、真实推理证据与已知限制 |
 | [docs/service-launcher.md](docs/service-launcher.md) | PC 服务启动器：架构、API、状态、安全边界、配置、自启动与验证边界 |
 | [docs/vision-events.md](docs/vision-events.md) | Week 09 视觉事件触发、优先级、确认/忽略/稍后、冷却、API 与验证边界 |
+| [docs/voice-command.md](docs/voice-command.md) | 语音健康检查、ASR 模型配置、NL→JSON 映射、命令链路与已知缺口 |
 | [每周计划/](每周计划/) | 18 周课程计划 HTML |
 
 ### HTTP API 速查
@@ -474,6 +482,7 @@ AIinteraction/
 | `GET /api/vision/events/active` | PC 视觉服务：当前最高优先级待响应事件 |
 | `POST /api/vision/events/respond` | PC 视觉服务：确认/忽略/稍后（`confirm/ignore/snooze`） |
 | `POST /api/voice/start` | PC 语音服务：开始录音 |
+| `GET /api/voice/health` | PC 语音服务：健康检查（ASR 模型/语言/音频配置/NL→JSON/TTS 状态） |
 | `POST /api/voice/stop` | PC 语音服务：停止录音（返回紧凑回执 ≤120B；自动后台 Whisper ASR） |
 | `GET /api/voice/status` | PC 语音服务：查询录音状态、WAV 元数据、ASR 结果 + `task` 块（request_id/state/generation/result/context/log） |
 | `POST /api/voice/cancel` | PC 语音服务：取消活跃任务（停止录音；幂等，已完成/已取消/已失败返回 409） |

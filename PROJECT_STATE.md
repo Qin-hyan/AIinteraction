@@ -4,6 +4,31 @@
 
 ---
 
+## 最新：语音健康检查与命令链路补强（2026-10-22）
+
+**分支**: `feature/voice-health-command`（基于 `feature/week09-proactive-vision-event`；未合并 `main`）
+**阶段**: 🟡 查询/采集命令用注入 ASR 文本在真实设备验证；真人语音、ASR 质量对比、TTS、LLM 语义解析未完成
+
+**已完成**:
+- `GET /api/voice/health` + 面板「🩺 检查服务」：服务连接、ASR 模型/语言、音频配置、NL→JSON/TTS 状态
+- `CONFIG_VOICE_BROWSER_URL`（默认 `127.0.0.1:8080`）与 `CONFIG_VOICE_PC_URL`（ESP32 PLAY 用 LAN）分离，修复 PC DHCP 变化导致网页语音面板连不上
+- 语音服务 CORS 改为有边界回显私网/回环 Origin，支持 PNA，不再 `*`
+- `service/nl_to_task.py`：ASR 文本→TaskContract（query_last/trigger_collect/clarify/unsupported），确定性映射
+- 修复语音任务归一化：不再把成功的字符串结果一律判 `invalid_result`
+- 修复 `trigger_collect`：设备完成后 `status=idle`、`linked=true` 且有有效观测时按 completed 处理
+
+**验证证据**:
+- `test_nl_to_task.py` 19 passed；`test_voice_health.py` 4 passed；`test_trigger_collect.py` 回归通过；voice server 122 passed（week05 venv）；全量 579 passed, 2 skipped
+- 真实设备（注入 ASR 文本）：`查看上次数据` → 查询成功；`重新采集一次` → 采集成功
+- **真人语音（用户参与）**：`查看上次数据` → completed（seq #1070）；`重新采集一次`（Whisper small）→ completed（seq #61 / `req-63048-0002`）
+- 模型单句对比：base 把“重新采集一次”误识别为“同心踩击一次”；small 正确但需较标准发音；不构成准确率结论
+- Dashboard 语音面板检查服务显示 `small / zh / 16000 Hz · 1 ch`，NL→JSON 已接入、TTS 未实现
+- 固件构建/烧录（VOICE_BROWSER_URL、语音健康面板、collect/status 修复）
+
+**未完成/未人工核验**: 系统化 ASR 质量评测、嘈杂/远场、TTS、大模型语义解析、长期稳定性
+
+---
+
 ## 最新：Week 09 视觉事件触发主动询问（2026-10-22）
 
 **分支**: `feature/week09-proactive-vision-event`（基于 `feature/week08-service-autostart`；**未合并 `main`**）
@@ -39,7 +64,7 @@
 - 固件 Kconfig 新增 `PC_LAUNCHER_URL`（默认 `http://127.0.0.1:8079`）；修复模板替换只处理 2 个占位符导致 PC 启动器 URL 未注入的问题
 
 **验证证据**:
-- `service/test_service_launcher.py`：31 passed（幂等/外部服务/端口冲突/启动超时清理/停止后端口复核/监听地址一致性/功能受限识别/HTTP/CORS/PNA/来源分级与脱敏/配置）
+- `service/test_service_launcher.py`：32 passed（幂等/外部服务/端口冲突/启动超时清理/停止后端口复核/监听地址一致性/功能受限识别/HTTP/CORS/PNA/来源分级与脱敏/环境变量注入/配置）
 - `service/test_dashboard_launcher_ui.py` + `test_dashboard_vision_ui.py`：22 passed（导航顺序、自动 ensure、底部高亮、模板 3 占位符替换、JS `node --check`）
 - 全量 `pytest service/ --ignore=service/test_asr_whisper.py`：**509 passed, 2 skipped**；进程退出仍打印已知 Anaconda `torch` DLL `access violation`（预存环境问题，非本次改动）；`test_voice_control_server.py` 在 week05 venv 单独 **99 passed**
 - `idf.py build`：PASS；`idf.py -p COM10 app-flash`：Hash verified；启动版本正常
