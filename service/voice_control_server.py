@@ -87,6 +87,9 @@ GET /api/voice/status
 from __future__ import annotations
 
 import argparse
+import ipaddress
+import json
+import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import threading
@@ -672,6 +675,40 @@ class VoiceControlService:
                      "timing": timing if _iea is not None else None},
         }
 
+    def health(self) -> Dict[str, Any]:
+        """返回语音服务连接/模型/音频配置摘要（只读，不加载模型）。"""
+        asr = self._asr_runner.snapshot()
+        transcriber = self._asr_runner.transcriber
+        cfg = self.config()
+        return {
+            "ok": True,
+            "service": "voice_control",
+            "version": "week05_06_v1",
+            "state": "recording" if self._capture.is_recording else "idle",
+            "asr": {
+                "status": asr.get("status"),
+                "model": getattr(transcriber, "model_name", None),
+                "language": getattr(transcriber, "language", None),
+                "task": getattr(transcriber, "task", None),
+                "device": getattr(transcriber, "device", None),
+                "last_error": asr.get("error"),
+            },
+            "audio": {
+                "samplerate": cfg.get("samplerate"),
+                "channels": cfg.get("channels"),
+                "dtype": cfg.get("dtype"),
+                "device": cfg.get("device"),
+                "output_dir": cfg.get("output_dir"),
+            },
+            "pipeline": {
+                "nl_to_task": True,
+                "task_pipeline": True,
+                "device_url_configured": bool(os.environ.get("ESP32_BASE_URL")),
+                "tts": False,
+                "note": "ASR 文本经 nl_to_task 映射为任务契约；TTS 尚未实现",
+            },
+        }
+
     # ── 控制 ─────────────────────────────────
 
     def start(self) -> Dict[str, Any]:
@@ -833,6 +870,39 @@ class VoiceControlService:
             tid = self._task_id
         self._process_task(gen, tid, text, error)
 
+    @staticmethod
+    def _normalize_pipeline_result(result: Any, contract: Dict[str, Any]) -> Dict[str, Any]:
+        """把 run_task() 的字符串结果恢复为任务状态机可用的结构。
+
+        既有 ``task_pipeline.run_task()`` 契约返回用户可读字符串；这里用
+        ``nl_to_task`` 已分类的 intent 决定成功/澄清/拒绝，而不是把成功查询
+        误判为 ``invalid_result``。
+        """
+        if isinstance(result, dict):
+            return result
+        text = "" if result is None else str(result).strip()
+        intent = contract.get("intent", "unsupported")
+        if intent == "clarify":
+            return {
+                "ok": False,
+                "intent": "clarify",
+                "data": {"question": contract.get("question", "")},
+                "message": text,
+            }
+        if intent == "unsupported":
+            return {"ok": False, "intent": "unsupported", "message": text}
+        if any(
+            text.startswith(prefix)
+            for prefix in ("查询失败", "请求校验失败", "采集失败", "未收到", "暂不支持")
+        ):
+            return {
+                "ok": False,
+                "intent": intent,
+                "error": "pipeline_failed",
+                "message": text,
+            }
+        return {"ok": True, "intent": intent, "message": text}
+
     def _process_task(self, generation, task_id, text, error):
         if error is not None or text is None:
             with self._lock:
@@ -853,8 +923,12 @@ class VoiceControlService:
             self._task_context.setdefault("round", 0)
             self._task_context["round"] += 1
         try:
+            from . import nl_to_task
             from . import task_pipeline
-            result = task_pipeline.run_task(t)
+
+            task_contract = nl_to_task.classify_text(t)
+            task_json = json.dumps(task_contract, ensure_ascii=False)
+            result = task_pipeline.run_task(task_json)
         except Exception as ex:
             with self._lock:
                 if self._check_stale(generation): return
@@ -869,15 +943,9 @@ class VoiceControlService:
                     generation=generation,
                 )
                 return
-            # run_task() 契约返回 str（用户可读文本）；当前 NL→JSON 未接入时
-            # 生产返回必为 str。统一归一化为 dict 再决策：既杜绝 str.get() 的
-            # AttributeError（历史行为：worker 线程崩溃、状态卡在 PROCESSING），
-            # 又让状态机确定收敛到 FAILED（invalid_result），不污染新任务。
-            normalized = result if isinstance(result, dict) else {
-                "ok": False,
-                "error": "invalid_result",
-                "message": str(result),
-            }
+            # task_pipeline.run_task() 的既有契约返回用户可读字符串；
+            # 用已分类的 intent 恢复结构，避免把成功查询误判为 invalid_result。
+            normalized = self._normalize_pipeline_result(result, task_contract)
             self._task_result = normalized
             if not normalized.get("ok") and normalized.get("intent") == "clarify":
                 self._task_context["clarify_question"] = (
@@ -987,6 +1055,14 @@ def create_app(
             return _fail(exc)
         return jsonify(payload), 200
 
+    @app.get("/api/voice/health")
+    def voice_health():
+        try:
+            payload = service.health()
+        except Exception as exc:  # noqa: BLE001
+            return _fail(exc)
+        return jsonify(payload), 200
+
     @app.post("/api/voice/cancel")
     def voice_cancel():
         try:
@@ -1038,7 +1114,31 @@ def create_app(
 
     @app.after_request
     def _add_cors_headers(response):
-        response.headers["Access-Control-Allow-Origin"] = "*"
+        """只对回环/私网页面回显 Origin，并支持 Private Network Access。"""
+        from urllib.parse import urlsplit
+
+        origin = request.headers.get("Origin")
+        allowed = False
+        if origin:
+            try:
+                parsed = urlsplit(origin)
+                host = (parsed.hostname or "").lower()
+                if parsed.scheme in ("http", "https") and parsed.path in ("", "/"):
+                    if host == "localhost":
+                        allowed = True
+                    else:
+                        ip = ipaddress.ip_address(host)
+                        allowed = ip.is_loopback or ip.is_private or ip.is_link_local
+            except ValueError:
+                allowed = False
+        if allowed:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Vary"] = "Origin"
+            if (
+                request.headers.get("Access-Control-Request-Private-Network")
+                == "true"
+            ):
+                response.headers["Access-Control-Allow-Private-Network"] = "true"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type, Accept"
         return response
@@ -1088,6 +1188,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         # 注意：argparse 会对 help 文本做 % 格式化，字面量百分号必须写成 %%
         help="WAV 输出目录，默认 %%TEMP%%/voice_task/（不得指向仓库内）",
     )
+    parser.add_argument(
+        "--asr-model",
+        default=asr_whisper.DEFAULT_MODEL,
+        help=f"Whisper 模型名，默认 {asr_whisper.DEFAULT_MODEL}（base；可试 small 提升中文）",
+    )
+    parser.add_argument(
+        "--asr-language",
+        default=asr_whisper.DEFAULT_LANGUAGE,
+        help=f"识别语言，默认 {asr_whisper.DEFAULT_LANGUAGE}",
+    )
     args = parser.parse_args(argv)
 
     device: Optional[Any] = args.device
@@ -1101,7 +1211,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             ensure_output_outside_repo(args.output_dir) if args.output_dir else None
         ),
     )
-    app = create_app(capture=capture)
+    transcriber = asr_whisper.Transcriber(
+        model_name=args.asr_model, language=args.asr_language
+    )
+    app = create_app(capture=capture, asr=transcriber)
 
     if args.host not in LOOPBACK_HOSTS:
         print(

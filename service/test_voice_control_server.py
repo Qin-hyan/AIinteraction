@@ -22,6 +22,7 @@ test_voice_control_server.py — Week 05 Step 3B 语音录音 HTTP 控制 + 后�
 
 import contextlib
 import io
+import json
 import threading
 import time
 import unittest
@@ -1459,8 +1460,10 @@ class Week06SlowAndLateResultAcceptanceTest(unittest.TestCase):
         self.assertEqual(s1["state"], voice_control_server.TASK_STATE_COMPLETED)
         self.assertEqual(s1["result"]["sentence"], "R1")
         self.assertEqual(s1["context"]["round"], 1)
-        self.assertEqual(pip1.calls, ["查看最近的加速度数据"],
-                         "管线只应收到任务1的 ASR 文本")
+        self.assertEqual(len(pip1.calls), 1, "管线只应收到任务1的一次调用")
+        task1 = json.loads(pip1.calls[0])
+        self.assertEqual(task1["original"], "查看最近的加速度数据")
+        self.assertEqual(task1["intent"], "query_last")
 
         r2 = {"ok": True, "intent": "trigger_collect", "sentence": "R2", "done": True}
         rid2, pip2 = self._full_task_once(r2)
@@ -1471,7 +1474,10 @@ class Week06SlowAndLateResultAcceptanceTest(unittest.TestCase):
         self.assertEqual(s2["result"]["sentence"], "R2")
         self.assertNotEqual(s2["result"], s1["result"], "结果不得串台")
         self.assertEqual(s2["context"]["round"], 1, "新任务上下文应独立清零")
-        self.assertEqual(pip2.calls, ["查看最近的加速度数据"])
+        self.assertEqual(len(pip2.calls), 1)
+        task2 = json.loads(pip2.calls[0])
+        self.assertEqual(task2["original"], "查看最近的加速度数据")
+        self.assertEqual(task2["intent"], "query_last")
 
     # ── 验收 2 + 4：慢响应×取消交错，旧结果不得覆盖新任务 ────────
 

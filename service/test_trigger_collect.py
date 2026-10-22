@@ -133,6 +133,49 @@ class TestTriggerCollect(unittest.TestCase):
         self.assertEqual(result.observation["source"], "live")
         self.assertEqual(result.observation["seq"], 48)
 
+    @patch("service.trigger_collect.time.sleep")
+    @patch("service.trigger_collect.urllib.request.urlopen")
+    def test_idle_with_linked_observation_is_completed(self, mock_urlopen, mock_sleep):
+        """设备完成后回到 idle，但 linked+valid 观测证明本次请求已完成。"""
+        post_response = self._make_mock_response({
+            "request_id": "req-12345-0002",
+            "status": "submitted",
+            "task_seq": 2,
+            "timeout_ms": 5000,
+            "message": "submitted",
+        })
+        poll_idle_done = self._make_mock_response({
+            "request_id": "req-12345-0002",
+            "task_seq": 2,
+            "timeout_ms": 5000,
+            "matches_current": True,
+            "from_history": False,
+            "status": "idle",
+            "linked": True,
+            "observation": {
+                "valid": True,
+                "record_id": "obs-00049",
+                "request_id": "req-12345-0002",
+                "source": "live",
+                "seq": 49,
+                "accel_x": 1,
+                "accel_y": 2,
+                "accel_z": 3,
+                "button": "none",
+                "observed_ms": 2000.0,
+                "received_ms": 2001.0,
+                "data_age_ms": 1.0,
+                "time_quality": "relative",
+            },
+        })
+        mock_urlopen.side_effect = [post_response, poll_idle_done]
+
+        result = trigger_collect(timeout=3, poll_interval=0.1, max_attempts=3)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.observation["seq"], 49)
+
     # ============ 设备失败场景 ============
 
     @patch("service.trigger_collect.time.sleep")

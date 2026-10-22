@@ -343,6 +343,19 @@ def test_config_overrides_host_port_and_args(tmp_path: Path) -> None:
     assert specs["vision"].log_file == tmp_path / "v.log"
 
 
+def test_config_env_is_carried_to_spec(tmp_path: Path) -> None:
+    specs = sl.build_specs(
+        {
+            "services": {
+                "voice": {
+                    "env": {"ESP32_BASE_URL": "http://device"},
+                }
+            }
+        }
+    )
+    assert dict(specs["voice"].env) == {"ESP32_BASE_URL": "http://device"}
+
+
 def test_invalid_config_is_rejected(tmp_path: Path) -> None:
     bad = tmp_path / "bad.json"
     bad.write_text("{not json", encoding="utf-8")

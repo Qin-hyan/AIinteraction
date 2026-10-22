@@ -178,6 +178,7 @@ class ServiceSpec:
     python: str
     log_file: Path
     extra_args: tuple[str, ...] = ()
+    env: tuple[tuple[str, str], ...] = ()
     command_override: Optional[tuple[str, ...]] = None
     start_timeout: float = START_TIMEOUT
     check_host: str = "127.0.0.1"
@@ -271,6 +272,13 @@ def build_specs(config: dict[str, Any]) -> dict[str, ServiceSpec]:
         port = _coerce_port(raw.get("port", defaults["port"]), f"services.{name}")
         python = str(raw.get("python") or sys.executable)
         extra_args = list(_coerce_args(raw.get("args"), f"services.{name}"))
+        env_raw = raw.get("env", {})
+        if env_raw is None:
+            env_raw = {}
+        if not isinstance(env_raw, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in env_raw.items()
+        ):
+            raise ValueError(f"services.{name}.env 必须是字符串键值对象")
 
         if name == "vision":
             model_path = os.environ.get(ENV_MODEL_PATH, "") or ""
@@ -293,6 +301,7 @@ def build_specs(config: dict[str, Any]) -> dict[str, ServiceSpec]:
             python=python,
             log_file=log_file,
             extra_args=tuple(extra_args),
+            env=tuple(sorted(env_raw.items())),
             start_timeout=float(raw.get("start_timeout", START_TIMEOUT)),
         )
 
@@ -500,6 +509,7 @@ class Launcher:
             spec.log_file.parent.mkdir(parents=True, exist_ok=True)
             log_handle = open(spec.log_file, "ab", buffering=0)
             env = dict(os.environ)
+            env.update(dict(spec.env))
             env["PYTHONUNBUFFERED"] = "1"
             env["PYTHONIOENCODING"] = "utf-8"
             existing_path = env.get("PYTHONPATH", "")

@@ -147,12 +147,20 @@ def _poll_status(
         linked = data.get("linked", False)
         obs = data.get("observation")
 
-        if status == "completed":
+        # 设备完成当前任务后会回到 idle；若 linked=true 且观测有效，说明
+        # 本次请求已经完成（不要因为 status 回到 idle 而误判为轮询超时）。
+        terminal = status == "completed" or (
+            status == "idle"
+            and linked is True
+            and isinstance(obs, dict)
+            and obs.get("valid") is True
+        )
+        if terminal:
             if linked and isinstance(obs, dict) and obs.get("valid") is True:
                 return CollectResult(
                     success=True,
                     request_id=request_id,
-                    status=status,
+                    status="completed" if status == "idle" else status,
                     observation=obs,
                 )
             elif not linked:
